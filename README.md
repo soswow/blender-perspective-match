@@ -1,6 +1,6 @@
 # Perspective Match
 
-Perspective Match is a Blender 5.1 extension for matching perspective cameras to stills without leaving Blender. Keep several matches in one `.blend`, draw colored vanishing-point line bundles in camera view, solve each camera independently, place floor/wall reference surfaces, and set a world origin and known scale.
+Perspective Match is a Blender 5.1 extension for matching perspective cameras to stills without leaving Blender. Keep several matches in one `.blend`, draw colored vanishing-point line bundles in camera view, solve each camera independently, and pick a world origin on the ground plane.
 
 The extension is a native port of the manual workflow from Perspective Match Studio. It does not require Electron, Node.js, a Python sidecar, PyTorch, GeoCalib, OpenCV, or network access.
 
@@ -16,13 +16,10 @@ The extension is a native port of the manual workflow from Perspective Match Stu
 - Lock and edit horizontal FOV manually, including underconstrained 1-point shots.
 - Solve an off-center principal point from three finite orthogonal VPs.
 - Show per-plane FOV estimates and angular consistency diagnostics.
-- Draw perspective-correct floor and wall surfaces with equal-world-spacing grids.
-- Create live axis-aligned Blender meshes from those surfaces.
-- Pick a ground origin and two points with a known real-world distance.
+- Pick a ground origin so the matched camera sits relative to world origin.
 - Estimate Fitzgibbon one-parameter radial distortion from three or more concurrent segments.
 - Generate a transparent, expanded undistorted PNG using Blender's NumPy—no OpenCV required.
-- Save state in the `.blend` and import/export desktop-compatible `.pmproj` files.
-- Export generic camera intrinsics and pose JSON.
+- Save match state in the `.blend` and import desktop-compatible `.pmproj` files.
 
 ## Requirements
 
@@ -61,13 +58,12 @@ The extension lives in the 3D View sidebar under the **Perspective Match** tab.
 
 ### Match cameras
 
-Each match is a collection with a root Empty that owns the session data, plus a child camera (and any surfaces):
+Each match is a collection with a root Empty that owns the session data, plus a child camera:
 
 ```text
 PM_<image>
   PM_<image>_Origin      # session lives here (Object.pm_session)
     PM_<image>_Camera
-    PM_<image>_Surface_*
 ```
 
 1. Click **New Match Camera** to create an empty match and activate it.
@@ -79,7 +75,7 @@ Selecting objects in the viewport does **not** change the active match—only Ne
 
 ### 1. Load a reference
 
-With a match active, choose **Open Image** or open an existing `.pmproj`. The still binds to the **active** match only; other matches stay untouched. If no match is active, Open Image / Open Project creates one first.
+With a match active, choose **Open Image** or **Import Project** (`.pmproj`). The still binds to the **active** match only; other matches stay untouched. If no match is active, Open Image / Import Project creates one first.
 
 After bind, the hierarchy is renamed from `PM_Match_###` to `PM_<image stem>` when that name is free. The camera becomes the scene camera, the still is attached with **Stretch** frame mapping, and render dimensions match the image.
 
@@ -99,34 +95,22 @@ Axis mapping is fixed:
 
 1. Choose the colored axis.
 2. Click **Draw / Edit Lines**.
-3. Drag over straight edges that belong to that axis.
+3. Drag over straight edges that belong to that axis (clicks must land inside the camera frame).
 4. Click a line to select it; drag either endpoint handle to edit.
-5. Press **Delete/Backspace** to remove the selected item.
-6. Press **Esc** to leave the tool.
+5. Press **Delete/Backspace** to remove the selected line.
+6. Press **Esc** (or right-click) to leave the tool.
+
+While the tool is active, left-clicks in the 3D View belong to Perspective Match (object selection is blocked). Clicking **Draw / Edit Lines** or **Pick Origin** again refreshes the active tool instead of getting stuck. If you orbit out of camera view, the next line/origin click switches back to the match camera.
 
 The camera refines whenever enough required lines exist. **Auto from VPs** allows orthogonal VP pairs to solve FOV. Enable **Manual FOV**, set the horizontal angle, and apply it to lock focal length while continuing to solve orientation.
 
-Middle mouse and the wheel retain normal Blender camera-view navigation while a match tool is active.
+Middle mouse and the wheel retain normal Blender navigation while a match tool is active.
 
-### 4. Add surfaces, origin, and scale
+### 4. Set origin
 
-Choose a surface plane:
+Use **Pick Origin** to choose a ground point that should become world origin. **Apply Origin** recomputes camera position from the current solve; clear removes the pick.
 
-- **Floor — XY:** red × yellow, mesh on Z=0.
-- **Wall — YZ:** blue × yellow, mesh on X=0.
-- **Wall — ZX:** blue × red, mesh on Y=0.
-
-Run **Draw / Edit Surfaces** and drag opposite corners. Select a surface to adjust its overlay grid count. The grid is perspective-correct; the generated Blender mesh remains a four-corner rectangle.
-
-Use **Pick Origin** to choose a ground point that should become world origin. Use **Measure Scale** to click two ground points, enter their known distance, and apply placement. Both scale points and measured length participate in every solve.
-
-### 5. Save or export
-
-Session data for each match is stored on its root Empty in the `.blend`. A `.pmproj` remains useful for exchanging editable matches with the standalone desktop app and loads into the active match.
-
-- **Save Project** writes version-1 `.pmproj` for the active match.
-- **Export Camera JSON** writes `K`, `R`, camera center, FOV, distortion, and image metadata.
-- No Blender Python export is needed: the cameras and surfaces already exist in the current scene.
+Build your own floor/wall geometry in Blender once the camera is matched—the extension no longer creates surface meshes or measures known lengths.
 
 ## Lens distortion
 
@@ -143,7 +127,7 @@ Extreme or weakly constrained estimates that hit the λ search boundary are reje
 
 ## Project compatibility
 
-The extension reads and writes version-1 Perspective Match Studio projects:
+The extension imports version-1 Perspective Match Studio projects:
 
 ```json
 {
@@ -154,7 +138,7 @@ The extension reads and writes version-1 Perspective Match Studio projects:
 }
 ```
 
-The referenced image remains external. Relative image paths are resolved from the `.pmproj` directory.
+The referenced image remains external. Relative image paths are resolved from the `.pmproj` directory. Surfaces and scale fields in imported projects are ignored; origin is still applied when present. Session data for each match is stored on its root Empty in the `.blend`.
 
 ## Limitations
 
@@ -163,9 +147,9 @@ The referenced image remains external. Relative image paths are resolved from th
 - The workflow assumes square pixels and zero skew.
 - 1-point perspective cannot determine focal length from VP geometry alone.
 - Distortion uses one radial division parameter, not Blender's full tracking-camera lens models.
-- Surface reconstruction assumes Manhattan-world floor/wall planes.
 - Cropped, anamorphic, curved, or CGI plates can require manual FOV and principal-point judgment.
 - Display-only exposure and contrast controls from the desktop app are not reproduced; use Blender's image/color-management tools.
+- Projects are import-only; there is no Save Project or camera JSON export.
 
 ## Project layout
 
@@ -175,12 +159,12 @@ match_perspective/
   __init__.py             # Registration
   properties.py           # Object sessions + scene workspace controller
   core.py                 # VP, focal, distortion, placement, and surface math
-  scene.py                # Camera/background/mesh integration and coordinate mapping
+  scene.py                # Camera/background integration and coordinate mapping
   overlay.py              # Camera-view GPU drawing
   operators.py            # File, solve, and modal interaction operators
   panel.py                # 3D View sidebar workflow
   distortion.py           # NumPy image remapping
-  project_io.py           # .pmproj and camera JSON I/O
+  project_io.py           # .pmproj import
   validate_addon.py       # Headless Blender smoke test
   tests/test_core.py      # Pure geometry regressions
   build-extension.sh      # Validate and build installable zip
@@ -209,7 +193,7 @@ Validate and build:
 ./build-extension.sh
 ```
 
-The smoke test covers registration, multi-match create/switch/unload/prune, VP solve, camera projection, surface creation, origin/scale, project save/load, and cleanup.
+The smoke test covers registration, multi-match create/switch/unload/prune, VP solve, camera projection, origin placement, project import, undistorted plates, and cleanup.
 
 ## License
 

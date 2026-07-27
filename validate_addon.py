@@ -55,6 +55,48 @@ def _write_png(temporary_path: Path, name: str, width: int, height: int, color) 
     return image_path
 
 
+def _write_minimal_pmproj(path: Path, image_path: Path, *, include_origin: bool = True) -> None:
+    """Write a minimal importable .pmproj for smoke testing."""
+    session = {
+        "imagePath": str(image_path),
+        "vpMode": 2,
+        "activeAxis": "x",
+        "lockFocal": False,
+        "overlayOpacity": 0.9,
+        "controlsOpacity": 1.0,
+        "showVpOverlay": True,
+        "lines": {
+            "x": [
+                {"id": "lx1", "x1": 50.0, "y1": 180.0, "x2": 120.0, "y2": 220.0},
+                {"id": "lx2", "x1": 60.0, "y1": 420.0, "x2": 140.0, "y2": 380.0},
+            ],
+            "y": [],
+            "z": [
+                {"id": "lz1", "x1": 680.0, "y1": 160.0, "x2": 620.0, "y2": 210.0},
+                {"id": "lz2", "x1": 670.0, "y1": 450.0, "x2": 610.0, "y2": 400.0},
+            ],
+        },
+        # Surfaces/scale must be ignored by the importer.
+        "surfaces": [
+            {"id": "ignored", "plane": "xz", "x1": 1, "y1": 1, "x2": 2, "y2": 2, "divisions": 4},
+        ],
+        "scalePointA": [100.0, 100.0],
+        "scalePointB": [200.0, 100.0],
+        "measuredLength": 2.0,
+        "scale": 0.5,
+    }
+    if include_origin:
+        session["originImage"] = [400.0, 420.0]
+    path.write_text(
+        json.dumps({
+            "kind": "perspective-match-project",
+            "version": 1,
+            "session": session,
+        }),
+        encoding="utf-8",
+    )
+
+
 def main() -> None:
     """Exercise core math and native scene application."""
     extension = load_extension_module()
@@ -129,23 +171,10 @@ def main() -> None:
             assert bpy.context.scene.camera == settings.camera_object
             assert abs(settings.camera_object.data.shift_x) < 1.0e-5
 
-            surface = settings.surfaces.add()
-            surface.plane = "xz"
-            surface.x1, surface.y1 = (260.0, 340.0)
-            surface.x2, surface.y2 = (560.0, 510.0)
-            surface.divisions = 4
-            scene.rebuild_surface_meshes(bpy.context, calibration)
-            assert surface.mesh_object is not None
-            assert len(surface.mesh_object.data.vertices) == 4
-
             settings.origin_image = (400.0, 420.0)
             settings.origin_is_set = True
-            settings.scale_point_a = (330.0, 430.0)
-            settings.scale_point_b = (520.0, 430.0)
-            settings.scale_point_count = 2
-            settings.measured_length = 2.0
             scene.refine_match(bpy.context)
-            assert settings.solved_scale > 0.0
+            assert settings.origin_is_set
 
             # Second match must keep the first intact.
             image_b_path = _write_png(
@@ -195,19 +224,16 @@ def main() -> None:
             settings = properties.active_session(bpy.context)
             assert settings is not None
 
-            project_path = temporary_path / "roundtrip.pmproj"
-            project_io.save_project(settings, str(project_path))
-            payload = json.loads(project_path.read_text())
-            assert payload["kind"] == "perspective-match-project"
-            assert len(payload["session"]["lines"]["x"]) == 2
-            assert len(payload["session"]["surfaces"]) == 1
-
+            project_path = temporary_path / "import.pmproj"
+            _write_minimal_pmproj(project_path, image_path)
             project_io.load_project(bpy.context, str(project_path))
             reloaded = properties.active_session(bpy.context)
             assert reloaded is not None
             assert len(reloaded.lines) == 4
-            assert len(reloaded.surfaces) == 1
+            assert reloaded.origin_is_set
             assert reloaded.camera_object is not None
+            # Surfaces from the project must not be created.
+            assert not hasattr(reloaded, "surfaces") or len(getattr(reloaded, "surfaces", [])) == 0
 
             reloaded.division_lambda = 0.12
             reloaded.lock_focal = True
@@ -248,14 +274,6 @@ def main() -> None:
             assert float(saved_pixels[0::4].max()) > 0.05
             assert float(saved_pixels[3::4].mean()) > 0.2
 
-            plate_project = temporary_path / "with-plate.pmproj"
-            project_io.save_project(reloaded, str(plate_project))
-            project_io.load_project(bpy.context, str(plate_project))
-            reloaded = properties.active_session(bpy.context)
-            assert reloaded is not None
-            assert reloaded.view_undistorted
-            assert reloaded.undistorted_image is not None
-
             reloaded.lock_focal = True
             reloaded.hfov_degrees += 1.0
             scene.apply_manual_fov(bpy.context)
@@ -279,13 +297,6 @@ def main() -> None:
             else:
                 raise AssertionError("Malformed project should be rejected")
             assert reloaded.camera_object == camera_before_invalid_load
-
-            camera_json_path = temporary_path / "camera.json"
-            project_io.save_camera_json(reloaded, str(camera_json_path))
-            camera_payload = json.loads(camera_json_path.read_text())
-            rotation = np.asarray(camera_payload["R"])
-            center = np.asarray(camera_payload["cameraCenter"])
-            assert np.allclose(camera_payload["t"], -rotation @ center)
 
             print("Perspective Match smoke test passed")
         finally:

@@ -72,20 +72,6 @@ def store_calibration(settings: properties.PMSession, calibration: core.Calibrat
     settings.lambda_saturated = calibration.lambda_saturated
 
 
-def _remove_managed_object(obj: bpy.types.Object) -> None:
-    """Remove an owned object and its now-unused data/material datablocks."""
-    data = obj.data
-    materials = list(data.materials) if isinstance(data, bpy.types.Mesh) else []
-    bpy.data.objects.remove(obj, do_unlink=True)
-    if isinstance(data, bpy.types.Mesh) and data.users == 0:
-        bpy.data.meshes.remove(data)
-    elif isinstance(data, bpy.types.Camera) and data.users == 0:
-        bpy.data.cameras.remove(data)
-    for material in materials:
-        if material.users == 0:
-            bpy.data.materials.remove(material)
-
-
 def _parent_keep_world(child: bpy.types.Object, parent: bpy.types.Object) -> None:
     matrix_world = child.matrix_world.copy()
     child.parent = parent
@@ -163,12 +149,8 @@ def create_match_camera(context: bpy.types.Context) -> bpy.types.Object:
     session.image_height = 1080
     session.source_image_width = 1920
     session.lines.clear()
-    session.surfaces.clear()
     session.selected_line_index = -1
-    session.selected_surface_index = -1
     session.origin_is_set = False
-    session.scale_point_count = 0
-    session.solved_scale = 1.0
     session.project_path = ""
     session.source_session_json = ""
     session.undistorted_path = ""
@@ -194,6 +176,10 @@ def set_active_match(context: bpy.types.Context, root: bpy.types.Object) -> None
     """Activate a match root and switch the viewport to its camera."""
     if not properties.is_match_root(root):
         raise ValueError("Not a Perspective Match root")
+    # Drop any live interact handler ownership; the modal exits on its next event.
+    from . import operators as operators_module
+
+    operators_module._active_interact = None
     space = properties.workspace(context)
     space.active_root = root
     # Keep the dropdown in sync without re-entering its update callback.
@@ -224,6 +210,9 @@ def set_active_match(context: bpy.types.Context, root: bpy.types.Object) -> None
 
 def unload_match(context: bpy.types.Context) -> None:
     """Clear the active editing session without deleting match objects."""
+    from . import operators as operators_module
+
+    operators_module._active_interact = None
     space = properties.workspace(context)
     space.active_root = None
     properties.sync_active_match_enum(space, "NONE")
@@ -262,12 +251,8 @@ def _rename_match_hierarchy(root: bpy.types.Object, prefix: str) -> None:
 
 def _reset_session_edit_state(session: properties.PMSession) -> None:
     session.lines.clear()
-    session.surfaces.clear()
     session.selected_line_index = -1
-    session.selected_surface_index = -1
     session.origin_is_set = False
-    session.scale_point_count = 0
-    session.solved_scale = 1.0
     session.project_path = ""
     session.source_session_json = ""
     invalidate_undistorted_cache(session)
@@ -290,9 +275,6 @@ def bind_reference_image(context: bpy.types.Context, image_path: str) -> bpy.typ
     if width <= 0 or height <= 0:
         raise ValueError("The selected image has no readable pixel dimensions")
 
-    # Remove previous surface meshes owned by this match only.
-    for surface in list(session.surfaces):
-        remove_surface_mesh(surface)
     _reset_session_edit_state(session)
 
     camera_data = camera_object.data
@@ -424,22 +406,9 @@ def refine_match(context: bpy.types.Context) -> core.Calibration:
 
     if settings.origin_is_set:
         origin = tuple(float(value) for value in settings.origin_image)
-        point_a = (
-            tuple(float(value) for value in settings.scale_point_a)
-            if settings.scale_point_count >= 1
-            else None
-        )
-        point_b = (
-            tuple(float(value) for value in settings.scale_point_b)
-            if settings.scale_point_count >= 2
-            else None
-        )
-        calibration.camera_center, settings.solved_scale = core.apply_origin_and_scale(
+        calibration.camera_center, _scale = core.apply_origin_and_scale(
             calibration,
             origin,
-            point_a,
-            point_b,
-            settings.measured_length,
         )
     else:
         calibration.camera_center = core.default_camera_center(calibration.rotation_w2c)
@@ -448,7 +417,6 @@ def refine_match(context: bpy.types.Context) -> core.Calibration:
         invalidate_undistorted_cache(settings)
     apply_camera(context.scene, settings, calibration)
     _update_diagnostics(settings, line_bundles, calibration)
-    rebuild_surface_meshes(context, calibration)
     settings.status = (
         f"Camera matched · HFOV {calibration.hfov_degrees:.2f}°"
         + (
@@ -522,8 +490,6 @@ def apply_manual_fov(context: bpy.types.Context) -> None:
     apply_camera(context.scene, settings, calibration)
     if settings.origin_is_set:
         reapply_placement(context)
-    else:
-        rebuild_surface_meshes(context, calibration)
     settings.status = f"Manual HFOV {settings.hfov_degrees:.2f}°"
     properties.tag_viewport_redraw(context)
 
@@ -564,34 +530,22 @@ def invalidate_undistorted_cache(settings: properties.PMSession) -> None:
         bpy.data.images.remove(cached_image)
 
 
-def set_origin_or_scale(
+def set_origin(
     context: bpy.types.Context,
     image_point: tuple[float, float],
-    mode: str,
 ) -> None:
-    """Store an origin or scale point and reapply camera placement."""
+    """Store the ground origin and reapply camera placement."""
     settings = properties.active_session(context)
     if settings is None:
         raise ValueError("Create or activate a match camera first")
-    if mode == "ORIGIN":
-        settings.origin_image = image_point
-        settings.origin_is_set = True
-        settings.status = "Origin set on the ground plane"
-    elif settings.scale_point_count == 0:
-        settings.scale_point_a = image_point
-        settings.scale_point_count = 1
-        settings.status = "Scale point 1 set · pick point 2"
-        properties.tag_viewport_redraw(context)
-        return
-    else:
-        settings.scale_point_b = image_point
-        settings.scale_point_count = 2
-        settings.status = "Scale reference set"
+    settings.origin_image = image_point
+    settings.origin_is_set = True
+    settings.status = "Origin set on the ground plane"
     reapply_placement(context)
 
 
 def reapply_placement(context: bpy.types.Context) -> None:
-    """Apply placement to the current solved camera without requiring a new VP solve."""
+    """Apply origin placement to the current solved camera without a new VP solve."""
     settings = properties.active_session(context)
     if settings is None:
         return
@@ -599,149 +553,12 @@ def reapply_placement(context: bpy.types.Context) -> None:
     if not settings.origin_is_set:
         return
     calibration.camera_center = core.default_camera_center(calibration.rotation_w2c)
-    point_a = (
-        tuple(float(value) for value in settings.scale_point_a)
-        if settings.scale_point_count >= 1
-        else None
-    )
-    point_b = (
-        tuple(float(value) for value in settings.scale_point_b)
-        if settings.scale_point_count >= 2
-        else None
-    )
-    calibration.camera_center, settings.solved_scale = core.apply_origin_and_scale(
+    calibration.camera_center, _scale = core.apply_origin_and_scale(
         calibration,
         tuple(float(value) for value in settings.origin_image),
-        point_a,
-        point_b,
-        settings.measured_length,
     )
     apply_camera(context.scene, settings, calibration)
-    rebuild_surface_meshes(context, calibration)
     properties.tag_viewport_redraw(context)
-
-
-def surface_ideal_geometry(
-    settings: properties.PMSession,
-    surface: properties.PMSurface,
-) -> tuple[
-    list[tuple[float, float]],
-    list[tuple[tuple[float, float], tuple[float, float]]],
-] | None:
-    """Build a surface in ideal pinhole coordinates from distorted stored data."""
-    calibration = calibration_from_settings(settings)
-    ideal_lines = core.undistort_line_bundles(
-        line_bundles_from_settings(settings),
-        calibration.intrinsics,
-        calibration.division_lambda,
-    )
-    vanishing_points = core.collect_vanishing_points(ideal_lines)
-    resolved = core.surface_vanishing_points(surface.plane, vanishing_points)
-    if resolved is None:
-        return None
-    diagonal = core.undistort_points(
-        np.array([[surface.x1, surface.y1], [surface.x2, surface.y2]]),
-        calibration.intrinsics.fx,
-        calibration.intrinsics.fy,
-        calibration.intrinsics.cx,
-        calibration.intrinsics.cy,
-        calibration.division_lambda,
-    )
-    corners = core.perspective_rectangle_corners(
-        (float(diagonal[0, 0]), float(diagonal[0, 1])),
-        (float(diagonal[1, 0]), float(diagonal[1, 1])),
-        resolved[0],
-        resolved[1],
-    )
-    if corners is None:
-        return None
-    return corners, core.surface_grid(corners, surface.divisions)
-
-
-def surface_image_geometry(
-    settings: properties.PMSession,
-    surface: properties.PMSurface,
-) -> tuple[
-    list[tuple[float, float]],
-    list[tuple[tuple[float, float], tuple[float, float]]],
-] | None:
-    """Return perspective surface corners and its equal-world-spacing grid."""
-    ideal_geometry = surface_ideal_geometry(settings, surface)
-    if ideal_geometry is None:
-        return None
-    ideal_corners, ideal_grid = ideal_geometry
-    calibration = calibration_from_settings(settings)
-
-    def to_storage(points: list[tuple[float, float]]) -> list[tuple[float, float]]:
-        mapped = core.distort_points(
-            np.asarray(points, dtype=np.float64),
-            calibration.intrinsics.fx,
-            calibration.intrinsics.fy,
-            calibration.intrinsics.cx,
-            calibration.intrinsics.cy,
-            calibration.division_lambda,
-        )
-        return [(float(point[0]), float(point[1])) for point in mapped]
-
-    storage_corners = to_storage(ideal_corners)
-    storage_grid = []
-    for point_a, point_b in ideal_grid:
-        mapped = to_storage([point_a, point_b])
-        storage_grid.append((mapped[0], mapped[1]))
-    return storage_corners, storage_grid
-
-
-def rebuild_surface_meshes(
-    context: bpy.types.Context,
-    calibration: core.Calibration | None = None,
-) -> None:
-    """Create or update all managed surface mesh objects for the active match."""
-    settings = properties.active_session(context)
-    root = properties.active_root(context)
-    if settings is None or settings.match_collection is None or root is None:
-        return
-    solved = calibration or calibration_from_settings(settings)
-    prefix = settings.match_collection.name
-    plane_colors = {
-        "xz": (0.77, 0.94, 0.30, 0.35),
-        "yz": (0.94, 0.76, 0.30, 0.35),
-        "yx": (1.0, 0.42, 0.29, 0.35),
-    }
-    for index, surface in enumerate(settings.surfaces):
-        ideal_geometry = surface_ideal_geometry(settings, surface)
-        if ideal_geometry is None:
-            remove_surface_mesh(surface)
-            continue
-        world_corners = core.reconstruct_surface_world(
-            surface.plane,
-            ideal_geometry[0],
-            solved,
-        )
-        if world_corners is None:
-            remove_surface_mesh(surface)
-            continue
-        obj = surface.mesh_object
-        if obj is None or obj.name not in bpy.data.objects:
-            mesh = bpy.data.meshes.new(f"{prefix}_Surface_{index:02d}")
-            obj = bpy.data.objects.new(f"{prefix}_Surface_{index:02d}", mesh)
-            settings.match_collection.objects.link(obj)
-            _parent_keep_world(obj, root)
-            material = bpy.data.materials.new(f"{prefix}_SurfaceMat_{index:02d}")
-            material.diffuse_color = plane_colors[surface.plane]
-            mesh.materials.append(material)
-            surface.mesh_object = obj
-        mesh = obj.data
-        mesh.clear_geometry()
-        mesh.from_pydata(world_corners, [], [(0, 1, 2, 3)])
-        mesh.update()
-
-
-def remove_surface_mesh(surface: properties.PMSurface) -> None:
-    """Delete the mesh object managed by one surface item."""
-    if surface.mesh_object is not None:
-        obj = surface.mesh_object
-        surface.mesh_object = None
-        _remove_managed_object(obj)
 
 
 def enter_camera_view(context: bpy.types.Context) -> None:

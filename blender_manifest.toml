@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "match_perspective"
-version = "0.2.3"
+version = "0.3.1"
 name = "Perspective Match"
 tagline = "Match a Blender camera to a reference image"
 maintainer = "Aleksandr 'Sasha' Motsjonov"
@@ -13,10 +13,10 @@ license = [
   "SPDX:GPL-3.0-or-later",
 ]
 
-tags = ["3D View", "Camera", "Import-Export"]
+tags = ["3D View", "Camera"]
 
 [permissions]
-files = "Import images/projects and export projects, JSON, and PNG"
+files = "Import images/projects and write undistorted PNG plates"
 
 [build]
 paths_exclude_pattern = [

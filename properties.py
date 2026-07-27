@@ -10,12 +10,6 @@ AXIS_ITEMS = (
     ("y", "Blue — Z Up", "Vertical edges parallel to Blender Z"),
 )
 
-SURFACE_PLANE_ITEMS = (
-    ("xz", "Floor — XY", "Red and yellow axes on Blender Z = 0"),
-    ("yz", "Wall — YZ", "Blue and yellow axes on Blender X = 0"),
-    ("yx", "Wall — ZX", "Blue and red axes on Blender Y = 0"),
-)
-
 
 def tag_viewport_redraw(context: bpy.types.Context | None = None) -> None:
     """Request redraw in every 3D View."""
@@ -144,26 +138,6 @@ class PMLineSegment(bpy.types.PropertyGroup):
     y2: bpy.props.FloatProperty(default=0.0)
 
 
-class PMSurface(bpy.types.PropertyGroup):
-    """Perspective rectangle stored by its opposite image-space corners."""
-
-    item_id: bpy.props.StringProperty(default="", options={"HIDDEN"})
-    plane: bpy.props.EnumProperty(items=SURFACE_PLANE_ITEMS, default="xz")
-    x1: bpy.props.FloatProperty(default=0.0)
-    y1: bpy.props.FloatProperty(default=0.0)
-    x2: bpy.props.FloatProperty(default=0.0)
-    y2: bpy.props.FloatProperty(default=0.0)
-    divisions: bpy.props.IntProperty(
-        name="Grid",
-        description="Equal world-space divisions shown in the overlay",
-        default=4,
-        min=1,
-        max=64,
-        update=_redraw,
-    )
-    mesh_object: bpy.props.PointerProperty(type=bpy.types.Object)
-
-
 class PMSession(bpy.types.PropertyGroup):
     """Durable per-match calibration state stored on the root Empty."""
 
@@ -196,17 +170,9 @@ class PMSession(bpy.types.PropertyGroup):
         default="x",
         update=_redraw,
     )
-    active_surface_plane: bpy.props.EnumProperty(
-        name="Plane",
-        items=SURFACE_PLANE_ITEMS,
-        default="xz",
-        update=_redraw,
-    )
 
     lines: bpy.props.CollectionProperty(type=PMLineSegment)
     selected_line_index: bpy.props.IntProperty(default=-1, options={"HIDDEN"})
-    surfaces: bpy.props.CollectionProperty(type=PMSurface)
-    selected_surface_index: bpy.props.IntProperty(default=-1, options={"HIDDEN"})
 
     lock_focal: bpy.props.BoolProperty(
         name="Manual FOV",
@@ -251,26 +217,9 @@ class PMSession(bpy.types.PropertyGroup):
 
     origin_is_set: bpy.props.BoolProperty(default=False, options={"HIDDEN"})
     origin_image: bpy.props.FloatVectorProperty(size=2, default=(0.0, 0.0))
-    scale_point_count: bpy.props.IntProperty(default=0, min=0, max=2, options={"HIDDEN"})
-    scale_point_a: bpy.props.FloatVectorProperty(size=2, default=(0.0, 0.0))
-    scale_point_b: bpy.props.FloatVectorProperty(size=2, default=(0.0, 0.0))
-    measured_length: bpy.props.FloatProperty(
-        name="Known Length",
-        description="World-space distance between the two scale points",
-        default=1.0,
-        min=1.0e-6,
-        unit="LENGTH",
-        precision=4,
-    )
-    solved_scale: bpy.props.FloatProperty(default=1.0, options={"HIDDEN"})
 
     show_vp_overlay: bpy.props.BoolProperty(
         name="VP Guides",
-        default=True,
-        update=_redraw,
-    )
-    show_surface_overlay: bpy.props.BoolProperty(
-        name="Surfaces",
         default=True,
         update=_redraw,
     )
@@ -326,9 +275,7 @@ class PMWorkspace(bpy.types.PropertyGroup):
         items=(
             ("NONE", "Navigate", "Use normal viewport navigation"),
             ("LINE", "VP Lines", "Draw or edit vanishing-point lines"),
-            ("SURFACE", "Surfaces", "Draw or edit perspective surfaces"),
             ("ORIGIN", "Origin", "Pick the world origin on the ground plane"),
-            ("SCALE", "Scale", "Pick two ground points with a known distance"),
         ),
         default="NONE",
         options={"SKIP_SAVE"},
@@ -342,7 +289,6 @@ PMSettings = PMSession
 
 CLASSES = (
     PMLineSegment,
-    PMSurface,
     PMSession,
     PMWorkspace,
 )

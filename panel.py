@@ -47,7 +47,7 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
         image_box.label(text="1. Reference Image", icon="IMAGE_DATA")
         row = image_box.row(align=True)
         row.operator("perspective_match.load_image", text="Open Image", icon="FILE_IMAGE")
-        row.operator("perspective_match.open_project", text="Open Project", icon="FILE_FOLDER")
+        row.operator("perspective_match.import_project", text="Import Project", icon="FILE_FOLDER")
         if settings.image is None:
             image_box.label(text="Load a still or .pmproj into this match", icon="INFO")
             return
@@ -135,56 +135,21 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
                 icon="PIVOT_CURSOR",
             )
 
-        surface_box = layout.box()
-        surface_header = surface_box.row()
-        surface_header.label(text="4. Surfaces / Origin", icon="MESH_PLANE")
-        surface_header.prop(
-            settings,
-            "show_surface_overlay",
-            text="",
-            icon="HIDE_OFF" if settings.show_surface_overlay else "HIDE_ON",
-            emboss=False,
-        )
-        surface_box.prop(settings, "active_surface_plane", expand=True)
-        row = surface_box.row(align=True)
-        draw_row = row.row(align=True)
-        draw_row.operator_context = "INVOKE_REGION_WIN"
-        operator = draw_row.operator(
-            "perspective_match.interact",
-            text="Draw / Edit Surfaces",
-            icon="MESH_GRID",
-        )
-        operator.mode = "SURFACE"
-        row.operator("perspective_match.delete_selected", text="", icon="TRASH")
-        row.operator("perspective_match.clear_surfaces", text="", icon="X")
-        surface_box.label(text=f"Surfaces: {len(settings.surfaces)}")
-        if 0 <= settings.selected_surface_index < len(settings.surfaces):
-            surface_box.prop(
-                settings.surfaces[settings.selected_surface_index],
-                "divisions",
-            )
-
-        placement = surface_box.column(align=True)
-        row = placement.row(align=True)
+        origin_box = layout.box()
+        origin_box.label(text="4. Origin", icon="PIVOT_CURSOR")
+        row = origin_box.row(align=True)
         pick_row = row.row(align=True)
         pick_row.operator_context = "INVOKE_REGION_WIN"
         operator = pick_row.operator("perspective_match.interact", text="Pick Origin", icon="PIVOT_CURSOR")
         operator.mode = "ORIGIN"
-        operator = pick_row.operator(
-            "perspective_match.interact",
-            text="Measure Scale",
-            icon="DRIVER_DISTANCE",
-        )
-        operator.mode = "SCALE"
-        placement.prop(settings, "measured_length")
-        apply_row = placement.row(align=True)
+        apply_row = origin_box.row(align=True)
         apply_row.enabled = settings.origin_is_set
         apply_row.operator("perspective_match.apply_placement", icon="CHECKMARK")
         apply_row.operator("perspective_match.clear_placement", text="", icon="X")
         if settings.origin_is_set:
-            placement.label(text=f"Origin set · scale {settings.solved_scale:.4f}", icon="CHECKMARK")
-        elif settings.scale_point_count == 1:
-            placement.label(text="Pick the second scale point", icon="INFO")
+            origin_box.label(text="Origin set", icon="CHECKMARK")
+        if workspace.is_modal and workspace.work_mode == "ORIGIN":
+            origin_box.label(text="Origin tool active — click ground point", icon="MOUSE_LMB")
 
         distortion_box = layout.box()
         distortion_box.label(text="Lens Distortion", icon="MOD_SIMPLEDEFORM")
@@ -204,14 +169,6 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
                 text="Original" if settings.view_undistorted else "Undistorted",
                 icon="UV_SYNC_SELECT",
             )
-
-        output_box = layout.box()
-        output_box.label(text="5. Project / Output", icon="BLENDER")
-        output_box.label(text="Camera and surfaces are live in this scene", icon="CHECKMARK")
-        row = output_box.row(align=True)
-        row.operator("perspective_match.quick_save_project", icon="FILE_TICK")
-        row.operator("perspective_match.save_project", text="Save As", icon="FILE_BLANK")
-        output_box.operator("perspective_match.export_camera_json", icon="EXPORT")
 
         view_box = layout.box()
         view_box.label(text="Overlay", icon="OVERLAY")
