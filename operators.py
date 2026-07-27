@@ -376,6 +376,58 @@ class PM_OT_toggle_undistorted(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class PM_OT_apply_view_lighting(bpy.types.Operator):
+    """Bake display-only exposure/contrast into a sibling view plate."""
+
+    bl_idname = "perspective_match.apply_view_lighting"
+    bl_label = "Apply Lighting"
+    bl_description = (
+        "Bake exposure and contrast into <stem>-pm-view.png and use it as the camera background"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        settings = _session(context)
+        return settings is not None and settings.image is not None and bool(settings.image_path)
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        try:
+            image = distortion.apply_view_lighting(context)
+        except Exception as error:
+            self.report({"ERROR"}, str(error))
+            return {"CANCELLED"}
+        self.report({"INFO"}, f"View plate {Path(image.filepath_raw).name}")
+        return {"FINISHED"}
+
+
+class PM_OT_reset_view_lighting(bpy.types.Operator):
+    """Restore the original still and clear baked view lighting."""
+
+    bl_idname = "perspective_match.reset_view_lighting"
+    bl_label = "Reset Lighting"
+    bl_description = "Discard the view plate and restore the original camera background"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        settings = _session(context)
+        return settings is not None and (
+            settings.view_lighting_applied
+            or abs(settings.view_exposure) > 1.0e-6
+            or abs(settings.view_contrast - 1.0) > 1.0e-6
+        )
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        try:
+            distortion.reset_view_lighting(context)
+        except Exception as error:
+            self.report({"ERROR"}, str(error))
+            return {"CANCELLED"}
+        self.report({"INFO"}, "View lighting reset")
+        return {"FINISHED"}
+
+
 def _distance_to_segment(
     point: Vector,
     start: Vector,
@@ -476,8 +528,12 @@ class PM_OT_interact(bpy.types.Operator):
         if context.window is not None:
             context.window.cursor_set("DEFAULT")
         overlay.clear_preview(context)
+        # Leaving the line tool clears selection so handles don't linger.
+        if settings is not None and self.mode == "LINE":
+            settings.selected_line_index = -1
         if not cancelled and settings is not None:
             settings.status = "Perspective Match tool finished"
+        properties.tag_viewport_redraw(context)
         return {"CANCELLED" if cancelled else "FINISHED"}
 
     def _event_image_point(self, context, event, region) -> tuple[float, float] | None:
@@ -700,5 +756,7 @@ CLASSES = (
     PM_OT_clear_placement,
     PM_OT_generate_undistorted,
     PM_OT_toggle_undistorted,
+    PM_OT_apply_view_lighting,
+    PM_OT_reset_view_lighting,
     PM_OT_interact,
 )

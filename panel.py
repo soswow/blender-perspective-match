@@ -80,7 +80,7 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
         line_box.prop(settings, "active_axis", expand=True)
         counts = _axis_counts(settings)
         required = (
-            f"R {counts['x']} · B {counts['y']} · Y {counts['z']}"
+            f"X {counts['x']} · Y {counts['z']} · Z {counts['y']}"
         )
         line_box.label(text=required, icon="DRIVER_DISTANCE")
         row = line_box.row(align=True)
@@ -171,7 +171,15 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             )
 
         view_box = layout.box()
-        view_box.label(text="Overlay", icon="OVERLAY")
+        view_box.label(text="View", icon="IMAGE_RGB")
+        view_box.label(text="Display only — does not affect the solve", icon="INFO")
+        view_box.prop(settings, "view_exposure")
+        view_box.prop(settings, "view_contrast")
+        row = view_box.row(align=True)
+        row.operator("perspective_match.apply_view_lighting", icon="CHECKMARK")
+        row.operator("perspective_match.reset_view_lighting", text="", icon="LOOP_BACK")
+        if settings.view_lighting_applied:
+            view_box.label(text=Path(settings.view_path).name or "View plate active", icon="CHECKMARK")
         view_box.prop(settings, "overlay_opacity")
         view_box.prop(settings, "controls_opacity")
 

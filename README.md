@@ -19,6 +19,7 @@ The extension is a native port of the manual workflow from Perspective Match Stu
 - Pick a ground origin so the matched camera sits relative to world origin.
 - Estimate Fitzgibbon one-parameter radial distortion from three or more concurrent segments.
 - Generate a transparent, expanded undistorted PNG using Blender's NumPy—no OpenCV required.
+- Apply display-only exposure/contrast to a sibling ``*-pm-view.png`` plate (undistorted uses the same lit image).
 - Save match state in the `.blend` and import desktop-compatible `.pmproj` files.
 
 ## Requirements
@@ -48,9 +49,27 @@ The extension uses the NumPy bundled with Blender. It has no third-party runtime
 3. Use **Install from Disk** and select the generated `.zip`.
 4. Enable **Perspective Match**.
 
-### Development install
+### Development install (edit → reload)
 
-Build and reinstall the archive after source changes, or use **Refresh Local** in Blender's Extensions preferences.
+Point Blender's installed extension at this git checkout with a symlink (no ZIP copy):
+
+```sh
+./link-dev.sh
+```
+
+That replaces `~/Library/Application Support/Blender/5.1/extensions/user_default/match_perspective` with a link to this repo. Enable **Perspective Match** once if it is not already on.
+
+Daily loop:
+
+1. Edit and save in the editor.
+2. In Blender: **F3 → Reload Scripts** (`bpy.ops.script.reload()`).
+3. Test.
+
+If a modal line/origin tool was running, exit it before reloading. If you get duplicate panels or `already registered` errors, disable/re-enable the extension, or restart Blender—draw handlers and modal state sometimes survive a soft reload.
+
+Re-run `./link-dev.sh` if you later **Install from Disk** and Blender overwrites the symlink with a ZIP extract.
+
+ZIP builds (`./build-extension.sh`) are only needed for packaging or a clean install test.
 
 ## Workflow
 
@@ -88,7 +107,7 @@ After bind, the hierarchy is renamed from `PM_Match_###` to `PM_<image stem>` wh
 Axis mapping is fixed:
 
 - Red → Blender X
-- Yellow → Blender Y
+- Green → Blender Y
 - Blue → Blender Z (up)
 
 ### 3. Draw VP lines
@@ -167,12 +186,15 @@ match_perspective/
   project_io.py           # .pmproj import
   validate_addon.py       # Headless Blender smoke test
   tests/test_core.py      # Pure geometry regressions
+  link-dev.sh             # Symlink checkout into Blender 5.1 for live reload
   build-extension.sh      # Validate and build installable zip
 ```
 
 Python modules use snake_case because they are importable packages; user-facing files and generated assets use dash-separated names where practical.
 
 ## Development
+
+Live coding uses the symlink from `./link-dev.sh` (see **Development install** above). Prefer that over rebuild/reinstall while iterating.
 
 Compile-check Python:
 
@@ -187,7 +209,7 @@ Run the Blender smoke test:
   --factory-startup -b --python validate_addon.py
 ```
 
-Validate and build:
+Validate and build a distributable ZIP when needed:
 
 ```sh
 ./build-extension.sh

@@ -13,9 +13,10 @@ from mathutils import Vector
 from . import core, properties, scene
 
 AXIS_COLORS = {
-    "x": (0.91, 0.36, 0.36, 1.0),
-    "y": (0.36, 0.56, 0.91, 1.0),
-    "z": (0.91, 0.78, 0.36, 1.0),
+    # Match Blender's default axis gizmo colors (X red, Y green, Z blue).
+    "x": (0.96, 0.26, 0.26, 1.0),
+    "y": (0.26, 0.50, 0.96, 1.0),
+    "z": (0.26, 0.80, 0.30, 1.0),
 }
 
 _draw_handle = None

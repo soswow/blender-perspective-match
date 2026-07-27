@@ -1,5 +1,5 @@
 TODOs to be done:
-- When exiting line editing, if one of them is selected - delect it.
+- Opacity slider and handle opacity should become one. Also it doesn't affect green orgin indicator seems like.
 
 
 Done TODOs:
@@ -7,4 +7,5 @@ Done TODOs:
 - Remove Measure scale and known length and all that as well. Just keep setting origin.
 - VP Lines don't have any antialiasing and look very bad. IS there anything can be done about it?
 - There is no need for project / output section. Leave opening of project fail as import only. No need to save back to it or export json. Rename opening project as import project.
-
+- When exiting line editing, if one of them is selected - delect it.
+- Make lines to be aligned with blender colors

@@ -160,6 +160,11 @@ def create_match_camera(context: bpy.types.Context) -> bpy.types.Object:
     session.undistorted_offset_x = 0.0
     session.undistorted_offset_y = 0.0
     session.view_undistorted = False
+    session.view_lighting_applied = False
+    session.view_image = None
+    session.view_path = ""
+    session.view_exposure = 0.0
+    session.view_contrast = 1.0
     session.error = ""
     session.status = "Load a reference image or project"
 
@@ -256,6 +261,14 @@ def _reset_session_edit_state(session: properties.PMSession) -> None:
     session.project_path = ""
     session.source_session_json = ""
     invalidate_undistorted_cache(session)
+    cached_view = session.view_image
+    session.view_lighting_applied = False
+    session.view_image = None
+    session.view_path = ""
+    session.view_exposure = 0.0
+    session.view_contrast = 1.0
+    if cached_view is not None and cached_view.users == 0:
+        bpy.data.images.remove(cached_view)
     session.error = ""
 
 
@@ -362,9 +375,15 @@ def apply_camera(
     camera_data.shift_x = (plate_width * 0.5 - plate_cx) / plate_width
     camera_data.shift_y = (plate_cy - plate_height * 0.5) / plate_width
     if len(camera_data.background_images) > 0 and settings.image is not None:
-        camera_data.background_images[0].image = (
-            settings.undistorted_image if use_undistorted else settings.image
-        )
+        if use_undistorted:
+            camera_data.background_images[0].image = settings.undistorted_image
+        elif (
+            settings.view_lighting_applied
+            and settings.view_image is not None
+        ):
+            camera_data.background_images[0].image = settings.view_image
+        else:
+            camera_data.background_images[0].image = settings.image
 
     camera_to_world_blender = calibration.rotation_w2c.T @ CV_CAMERA_TO_BLENDER_CAMERA
     matrix_world = Matrix(camera_to_world_blender.tolist()).to_4x4()
@@ -511,7 +530,7 @@ def _intrinsics_or_distortion_changed(
 
 
 def invalidate_undistorted_cache(settings: properties.PMSession) -> None:
-    """Switch to source plate and discard a remap made with stale intrinsics."""
+    """Discard a remap made with stale intrinsics; restore lit or original plate."""
     cached_image = settings.undistorted_image
     settings.view_undistorted = False
     if (
@@ -519,7 +538,10 @@ def invalidate_undistorted_cache(settings: properties.PMSession) -> None:
         and len(settings.camera_object.data.background_images) > 0
         and settings.image is not None
     ):
-        settings.camera_object.data.background_images[0].image = settings.image
+        if settings.view_lighting_applied and settings.view_image is not None:
+            settings.camera_object.data.background_images[0].image = settings.view_image
+        else:
+            settings.camera_object.data.background_images[0].image = settings.image
     settings.undistorted_image = None
     settings.undistorted_path = ""
     settings.undistorted_width = 0

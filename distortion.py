@@ -151,10 +151,144 @@ def remap_rgba(
     return output
 
 
+def default_view_path(source_path: str) -> str:
+    """Return the sibling display plate path: ``<stem>-pm-view.png``."""
+    path = Path(source_path)
+    return str(path.with_name(f"{path.stem}-pm-view.png"))
+
+
 def default_output_path(source_path: str) -> str:
     """Return the conventional cached PNG path beside the source image."""
     path = Path(source_path)
     return str(path.with_name(f"{path.stem}.undistorted.png"))
+
+
+def apply_exposure_contrast(
+    rgba: np.ndarray,
+    exposure_ev: float,
+    contrast: float,
+) -> np.ndarray:
+    """Apply desktop-compatible display-only brightness then contrast."""
+    # CSS filter order used by Perspective Match Studio: brightness(2^EV) then contrast.
+    gain = float(2.0 ** exposure_ev)
+    lit = np.array(rgba, dtype=np.float32, copy=True, order="C")
+    lit[:, :, :3] = np.clip(lit[:, :, :3] * gain, 0.0, 1.0)
+    contrast_value = float(contrast)
+    lit[:, :, :3] = np.clip((lit[:, :, :3] - 0.5) * contrast_value + 0.5, 0.0, 1.0)
+    lit[:, :, 3] = 1.0
+    return lit
+
+
+def display_source_image(settings: properties.PMSession) -> bpy.types.Image:
+    """Return the plate undistortion/background should sample (lit or original)."""
+    if (
+        settings.view_lighting_applied
+        and settings.view_image is not None
+        and settings.view_image.name in bpy.data.images
+    ):
+        return settings.view_image
+    if settings.image is None:
+        raise ValueError("Load a reference image first")
+    return settings.image
+
+
+def apply_view_lighting(context: bpy.types.Context) -> bpy.types.Image:
+    """Bake EV/contrast from the original still into ``*-pm-view.png`` and activate it."""
+    settings = properties.active_session(context)
+    if settings is None:
+        raise ValueError("Create or activate a match camera first")
+    if settings.image is None:
+        raise ValueError("Load a reference image first")
+    if not settings.image_path:
+        raise ValueError("Reference image has no file path to write a view plate beside")
+
+    source = _image_pixels_top_left(settings.image)
+    lit = apply_exposure_contrast(source, settings.view_exposure, settings.view_contrast)
+    height, width = lit.shape[:2]
+
+    resolved_path = str(Path(default_view_path(settings.image_path)).expanduser().resolve())
+    image_name = f"{settings.image.name}.pm-view"
+    existing = bpy.data.images.get(image_name)
+    if existing is not None and tuple(existing.size) != (width, height):
+        bpy.data.images.remove(existing)
+        existing = None
+    created_new = existing is None
+    output_image = existing or bpy.data.images.new(
+        image_name,
+        width=width,
+        height=height,
+        alpha=True,
+        float_buffer=False,
+    )
+    output_image.alpha_mode = "STRAIGHT"
+    try:
+        output_image.colorspace_settings.name = "sRGB"
+    except TypeError:
+        pass
+    _write_image_pixels(output_image, lit)
+    output_image.filepath_raw = resolved_path
+    output_image.file_format = "PNG"
+    try:
+        output_image.save()
+    except Exception:
+        if created_new and output_image.users == 0:
+            bpy.data.images.remove(output_image)
+        raise
+    try:
+        output_image.pack()
+    except RuntimeError:
+        pass
+
+    settings.view_image = output_image
+    settings.view_path = resolved_path
+    settings.view_lighting_applied = True
+
+    # Undistorted cache must follow the same re-lit plate when active.
+    if settings.view_undistorted and abs(settings.division_lambda) > 1.0e-8:
+        generate_undistorted_plate(context)
+    else:
+        # Drop a stale undistorted cache so the next generate uses the lit plate.
+        if settings.undistorted_image is not None:
+            cached_undistorted = settings.undistorted_image
+            settings.undistorted_image = None
+            settings.undistorted_path = ""
+            settings.undistorted_width = 0
+            settings.undistorted_height = 0
+            settings.undistorted_offset_x = 0.0
+            settings.undistorted_offset_y = 0.0
+            if cached_undistorted.users == 0:
+                bpy.data.images.remove(cached_undistorted)
+        scene.refresh_background_projection(context)
+
+    settings.status = (
+        f"View lighting applied ({settings.view_exposure:+.2f} EV, "
+        f"contrast {settings.view_contrast:.2f})"
+    )
+    return output_image
+
+
+def reset_view_lighting(context: bpy.types.Context) -> None:
+    """Stop using the view plate and restore the original still (and undistorted)."""
+    settings = properties.active_session(context)
+    if settings is None:
+        raise ValueError("Create or activate a match camera first")
+
+    cached = settings.view_image
+    settings.view_lighting_applied = False
+    settings.view_image = None
+    settings.view_path = ""
+    settings.view_exposure = 0.0
+    settings.view_contrast = 1.0
+    if cached is not None and cached.users == 0:
+        bpy.data.images.remove(cached)
+
+    if settings.view_undistorted and abs(settings.division_lambda) > 1.0e-8:
+        generate_undistorted_plate(context)
+    else:
+        if settings.undistorted_image is not None:
+            scene.invalidate_undistorted_cache(settings)
+        scene.refresh_background_projection(context)
+    settings.status = "View lighting reset to original"
 
 
 def _write_image_pixels(image: bpy.types.Image, top_left_rgba: np.ndarray) -> None:
@@ -177,15 +311,16 @@ def generate_undistorted_plate(
     if abs(settings.division_lambda) < 1.0e-8:
         raise ValueError("No lens distortion is currently estimated")
 
-    source_image = settings.image
+    source_image = display_source_image(settings)
     width = int(source_image.size[0])
     height = int(source_image.size[1])
     if width <= 0 or height <= 0:
         raise ValueError("Reference image has no readable pixel dimensions")
 
-    # Keep RNA sizes aligned with the buffer we actually remap.
-    settings.image_width = width
-    settings.image_height = height
+    # Keep RNA sizes aligned with the original still (solver / overlay space).
+    if settings.image is not None:
+        settings.image_width = int(settings.image.size[0])
+        settings.image_height = int(settings.image.size[1])
 
     calibration = scene.calibration_from_settings(settings)
     calibration.intrinsics.image_width = width
@@ -261,7 +396,7 @@ def generate_undistorted_plate(
 
 
 def set_undistorted_view(context: bpy.types.Context, enabled: bool) -> None:
-    """Switch camera background between source and cached undistorted plate."""
+    """Switch camera background between source/view plate and cached undistorted plate."""
     settings = properties.active_session(context)
     if settings is None:
         raise ValueError("Create or activate a match camera first")
@@ -270,4 +405,9 @@ def set_undistorted_view(context: bpy.types.Context, enabled: bool) -> None:
         return
     settings.view_undistorted = enabled
     scene.refresh_background_projection(context)
-    settings.status = "Viewing undistorted plate" if enabled else "Viewing original image"
+    if enabled:
+        settings.status = "Viewing undistorted plate"
+    elif settings.view_lighting_applied:
+        settings.status = "Viewing lit plate"
+    else:
+        settings.status = "Viewing original image"

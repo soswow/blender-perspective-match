@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "match_perspective"
-version = "0.3.1"
+version = "0.3.2"
 name = "Perspective Match"
 tagline = "Match a Blender camera to a reference image"
 maintainer = "Aleksandr 'Sasha' Motsjonov"
@@ -16,7 +16,7 @@ license = [
 tags = ["3D View", "Camera"]
 
 [permissions]
-files = "Import images/projects and write undistorted PNG plates"
+files = "Import images/projects and write view / undistorted PNG plates"
 
 [build]
 paths_exclude_pattern = [
@@ -25,5 +25,7 @@ paths_exclude_pattern = [
   "/*.zip",
   "/validate_addon.py",
   "/build-extension.sh",
+  "/link-dev.sh",
   "/tests/",
+  "/TODOs.md",
 ]

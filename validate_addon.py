@@ -256,6 +256,14 @@ def main() -> None:
             reloaded.image.pixels.foreach_set(source_buffer)
             reloaded.image.update()
 
+            reloaded.view_exposure = 1.0
+            reloaded.view_contrast = 1.25
+            view_image = distortion.apply_view_lighting(bpy.context)
+            view_path = Path(distortion.default_view_path(reloaded.image_path))
+            assert view_path.exists()
+            assert reloaded.view_lighting_applied
+            assert reloaded.camera_object.data.background_images[0].image == view_image
+
             undistorted_path = temporary_path / "reference-undistorted.png"
             undistorted = distortion.generate_undistorted_plate(
                 bpy.context,
@@ -273,6 +281,18 @@ def main() -> None:
             saved.pixels.foreach_get(saved_pixels)
             assert float(saved_pixels[0::4].max()) > 0.05
             assert float(saved_pixels[3::4].mean()) > 0.2
+
+            # Re-apply lighting while undistorted is active must keep lit→undistorted chain.
+            reloaded.view_exposure = 0.5
+            distortion.apply_view_lighting(bpy.context)
+            assert reloaded.view_undistorted
+            assert reloaded.camera_object.data.background_images[0].image == reloaded.undistorted_image
+
+            distortion.reset_view_lighting(bpy.context)
+            assert not reloaded.view_lighting_applied
+            assert abs(reloaded.view_exposure) < 1.0e-6
+            assert reloaded.view_undistorted
+            assert reloaded.camera_object.data.background_images[0].image == reloaded.undistorted_image
 
             reloaded.lock_focal = True
             reloaded.hfov_degrees += 1.0

@@ -5,9 +5,9 @@ from __future__ import annotations
 import bpy
 
 AXIS_ITEMS = (
-    ("x", "Red — X", "Edges parallel to Blender X"),
-    ("z", "Yellow — Y", "Edges parallel to Blender Y"),
-    ("y", "Blue — Z Up", "Vertical edges parallel to Blender Z"),
+    ("x", "X (Red)", "Edges parallel to Blender X"),
+    ("z", "Y (Green)", "Edges parallel to Blender Y"),
+    ("y", "Z (Blue)", "Vertical edges parallel to Blender Z"),
 )
 
 
@@ -239,6 +239,33 @@ class PMSession(bpy.types.PropertyGroup):
         subtype="FACTOR",
         update=_redraw,
     )
+
+    # Display-only lighting; baked into a sibling *-pm-view.png, never feeds the solver.
+    view_exposure: bpy.props.FloatProperty(
+        name="Exposure",
+        description="Display-only exposure in stops (−2…+2). Apply to bake into the view plate",
+        default=0.0,
+        min=-2.0,
+        max=2.0,
+        soft_min=-2.0,
+        soft_max=2.0,
+        precision=2,
+        step=10,
+    )
+    view_contrast: bpy.props.FloatProperty(
+        name="Contrast",
+        description="Display-only contrast multiplier. Apply to bake into the view plate",
+        default=1.0,
+        min=0.5,
+        max=2.0,
+        soft_min=0.5,
+        soft_max=2.0,
+        precision=2,
+        step=10,
+    )
+    view_lighting_applied: bpy.props.BoolProperty(default=False, options={"HIDDEN"})
+    view_image: bpy.props.PointerProperty(type=bpy.types.Image)
+    view_path: bpy.props.StringProperty(subtype="FILE_PATH")
 
     view_undistorted: bpy.props.BoolProperty(default=False, options={"HIDDEN"})
     undistorted_image: bpy.props.PointerProperty(type=bpy.types.Image)
