@@ -1,0 +1,29 @@
+schema_version = "1.0.0"
+
+id = "match_perspective"
+version = "0.1.2"
+name = "Perspective Match"
+tagline = "Match a Blender camera to a reference image"
+maintainer = "Aleksandr 'Sasha' Motsjonov"
+type = "add-on"
+
+blender_version_min = "5.1.0"
+
+license = [
+  "SPDX:GPL-3.0-or-later",
+]
+
+tags = ["3D View", "Camera", "Import-Export"]
+
+[permissions]
+files = "Import images/projects and export projects, JSON, and PNG"
+
+[build]
+paths_exclude_pattern = [
+  "__pycache__/",
+  "/.git/",
+  "/*.zip",
+  "/validate_addon.py",
+  "/build-extension.sh",
+  "/tests/",
+]
