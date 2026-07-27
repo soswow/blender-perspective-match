@@ -111,7 +111,9 @@ def _draw_ideal_segment(
     """Draw an ideal-space line, curving it on the original distorted plate."""
     first = np.asarray(point_a, dtype=np.float64)
     second = np.asarray(point_b, dtype=np.float64)
-    settings = context.scene.match_perspective
+    settings = properties.active_session(context)
+    if settings is None:
+        return
     bounds = scene.camera_frame_bounds(context)
     if bounds is None:
         return
@@ -141,7 +143,9 @@ def _draw_ideal_infinite_line(
     if direction_length < 1.0e-12:
         return
     direction /= direction_length
-    settings = context.scene.match_perspective
+    settings = properties.active_session(context)
+    if settings is None:
+        return
     image_center = np.array((settings.image_width * 0.5, settings.image_height * 0.5))
     point = np.asarray(ideal_point, dtype=np.float64)
     anchor = point + direction * float(np.dot(image_center - point, direction))
@@ -490,8 +494,8 @@ def _draw_callback() -> None:
         or not hasattr(context.scene, "match_perspective")
     ):
         return
-    settings = context.scene.match_perspective
-    if not settings.is_enabled or settings.image is None or not scene.is_camera_view(context):
+    settings = properties.active_session(context)
+    if settings is None or settings.image is None or not scene.is_camera_view(context):
         return
     shader = _shader()
     gpu.state.blend_set("ALPHA")

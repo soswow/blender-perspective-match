@@ -1,12 +1,14 @@
 # Perspective Match
 
-Perspective Match is a Blender 5.1 extension for matching a perspective camera to a single still without leaving Blender. Draw colored vanishing-point line bundles in camera view, solve the camera, place floor/wall reference surfaces, and set a world origin and known scale.
+Perspective Match is a Blender 5.1 extension for matching perspective cameras to stills without leaving Blender. Keep several matches in one `.blend`, draw colored vanishing-point line bundles in camera view, solve each camera independently, place floor/wall reference surfaces, and set a world origin and known scale.
 
 The extension is a native port of the manual workflow from Perspective Match Studio. It does not require Electron, Node.js, a Python sidecar, PyTorch, GeoCalib, OpenCV, or network access.
 
 ## Features
 
-- Load a still directly as a Blender camera background.
+- Create multiple match cameras in one scene; each still keeps its own calibration session.
+- Switch the active match from a dropdown to edit that session and view through its camera.
+- Load a still directly as a Blender camera background on the active match only.
 - Choose 1-, 2-, or 3-point perspective.
 - Draw, select, edit, and delete axis-colored VP segments in camera view.
 - Robust length-weighted VP fitting with Huber outlier reduction.
@@ -57,18 +59,29 @@ Build and reinstall the archive after source changes, or use **Refresh Local** i
 
 The extension lives in the 3D View sidebar under the **Perspective Match** tab.
 
-### 1. Load a reference
+### Match cameras
 
-Choose **Open Image** or open an existing `.pmproj`. The extension creates:
+Each match is a collection with a root Empty that owns the session data, plus a child camera (and any surfaces):
 
 ```text
 PM_<image>
-  PM_<image>_Origin
+  PM_<image>_Origin      # session lives here (Object.pm_session)
     PM_<image>_Camera
     PM_<image>_Surface_*
 ```
 
-The camera becomes the scene camera, the still is attached with **Stretch** frame mapping, and render dimensions match the image.
+1. Click **New Match Camera** to create an empty match and activate it.
+2. Use **Active Match** to switch which session the sidebar edits. Switching also sets the scene camera and enters that camera view.
+3. Click **Unload** to detach the sidebar from editing without deleting objects.
+4. Delete a match by removing its Empty/camera in the Outliner; the dropdown prunes dead entries automatically.
+
+Selecting objects in the viewport does **not** change the active match—only New, Unload, and the dropdown do.
+
+### 1. Load a reference
+
+With a match active, choose **Open Image** or open an existing `.pmproj`. The still binds to the **active** match only; other matches stay untouched. If no match is active, Open Image / Open Project creates one first.
+
+After bind, the hierarchy is renamed from `PM_Match_###` to `PM_<image stem>` when that name is free. The camera becomes the scene camera, the still is attached with **Stretch** frame mapping, and render dimensions match the image.
 
 ### 2. Choose perspective
 
@@ -109,11 +122,11 @@ Use **Pick Origin** to choose a ground point that should become world origin. Us
 
 ### 5. Save or export
 
-All RNA properties are stored in the `.blend`. A `.pmproj` remains useful for exchanging editable matches with the standalone desktop app.
+Session data for each match is stored on its root Empty in the `.blend`. A `.pmproj` remains useful for exchanging editable matches with the standalone desktop app and loads into the active match.
 
-- **Save Project** writes version-1 `.pmproj`.
+- **Save Project** writes version-1 `.pmproj` for the active match.
 - **Export Camera JSON** writes `K`, `R`, camera center, FOV, distortion, and image metadata.
-- No Blender Python export is needed: the camera and surfaces already exist in the current scene.
+- No Blender Python export is needed: the cameras and surfaces already exist in the current scene.
 
 ## Lens distortion
 
@@ -160,7 +173,7 @@ The referenced image remains external. Relative image paths are resolved from th
 match_perspective/
   blender_manifest.toml  # Blender extension metadata
   __init__.py             # Registration
-  properties.py           # Persistent scene/session state
+  properties.py           # Object sessions + scene workspace controller
   core.py                 # VP, focal, distortion, placement, and surface math
   scene.py                # Camera/background/mesh integration and coordinate mapping
   overlay.py              # Camera-view GPU drawing
@@ -196,7 +209,7 @@ Validate and build:
 ./build-extension.sh
 ```
 
-The smoke test covers registration, VP solve, camera projection, scene hierarchy, surface creation, origin/scale, project save/load, and cleanup.
+The smoke test covers registration, multi-match create/switch/unload/prune, VP solve, camera projection, surface creation, origin/scale, project save/load, and cleanup.
 
 ## License
 

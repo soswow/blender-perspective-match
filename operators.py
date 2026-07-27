@@ -13,8 +13,16 @@ from mathutils import Vector
 from . import core, distortion, overlay, project_io, properties, scene
 
 
+def _session(context: bpy.types.Context):
+    return properties.active_session(context)
+
+
+def _workspace(context: bpy.types.Context):
+    return properties.workspace(context)
+
+
 def _report_exception(operator: bpy.types.Operator, error: Exception) -> set[str]:
-    settings = operator._context_scene.match_perspective if hasattr(operator, "_context_scene") else None
+    settings = properties.active_session(bpy.context)
     if settings is not None:
         settings.error = str(error)
     operator.report({"ERROR"}, str(error))
@@ -33,7 +41,9 @@ def _required_lines_ready(settings) -> bool:
 
 
 def _refine_if_ready(context: bpy.types.Context) -> None:
-    settings = context.scene.match_perspective
+    settings = _session(context)
+    if settings is None:
+        return
     if _required_lines_ready(settings):
         scene.refine_match(context)
     else:
@@ -42,12 +52,51 @@ def _refine_if_ready(context: bpy.types.Context) -> None:
         properties.tag_viewport_redraw(context)
 
 
+def _event_in_view3d_window(context: bpy.types.Context, event) -> bool:
+    """Return whether the event mouse is over a 3D View window region."""
+    screen = context.screen
+    if screen is None:
+        return False
+    for area in screen.areas:
+        if area.type != "VIEW_3D":
+            continue
+        for region in area.regions:
+            if region.type != "WINDOW":
+                continue
+            if (
+                region.x <= event.mouse_x < region.x + region.width
+                and region.y <= event.mouse_y < region.y + region.height
+            ):
+                return True
+    return False
+
+
+def _delete_selected_item(context: bpy.types.Context) -> bool:
+    """Delete the selected VP line or surface. Return whether something was removed."""
+    settings = _session(context)
+    if settings is None:
+        return False
+    if 0 <= settings.selected_line_index < len(settings.lines):
+        settings.lines.remove(settings.selected_line_index)
+        settings.selected_line_index = -1
+        _refine_if_ready(context)
+        return True
+    if 0 <= settings.selected_surface_index < len(settings.surfaces):
+        surface = settings.surfaces[settings.selected_surface_index]
+        scene.remove_surface_mesh(surface)
+        settings.surfaces.remove(settings.selected_surface_index)
+        settings.selected_surface_index = -1
+        properties.tag_viewport_redraw(context)
+        return True
+    return False
+
+
 class PM_OT_load_image(bpy.types.Operator, ImportHelper):
-    """Load a still and create its managed match camera."""
+    """Load a still into the active match camera."""
 
     bl_idname = "perspective_match.load_image"
     bl_label = "Open Reference Image"
-    bl_description = "Load a still and create a Perspective Match camera"
+    bl_description = "Load a still into the active Perspective Match camera"
     bl_options = {"REGISTER", "UNDO"}
 
     filename_ext = ""
@@ -59,7 +108,7 @@ class PM_OT_load_image(bpy.types.Operator, ImportHelper):
     def execute(self, context: bpy.types.Context) -> set[str]:
         self._context_scene = context.scene
         try:
-            scene.setup_reference_image(context, self.filepath)
+            scene.bind_reference_image(context, self.filepath)
         except Exception as error:
             return _report_exception(self, error)
         self.report({"INFO"}, f"Loaded {Path(self.filepath).name}")
@@ -98,17 +147,21 @@ class PM_OT_save_project(bpy.types.Operator, ExportHelper):
     filter_glob: bpy.props.StringProperty(default="*.pmproj", options={"HIDDEN"})
 
     def invoke(self, context: bpy.types.Context, event) -> set[str]:
-        settings = context.scene.match_perspective
-        if settings.project_path:
-            self.filepath = settings.project_path
-        elif settings.image_path:
-            self.filepath = str(Path(settings.image_path).with_suffix(".pmproj"))
+        settings = _session(context)
+        if settings is not None:
+            if settings.project_path:
+                self.filepath = settings.project_path
+            elif settings.image_path:
+                self.filepath = str(Path(settings.image_path).with_suffix(".pmproj"))
         return ExportHelper.invoke(self, context, event)
 
     def execute(self, context: bpy.types.Context) -> set[str]:
-        self._context_scene = context.scene
+        settings = _session(context)
+        if settings is None:
+            self.report({"ERROR"}, "Create or activate a match camera first")
+            return {"CANCELLED"}
         try:
-            output = project_io.save_project(context.scene.match_perspective, self.filepath)
+            output = project_io.save_project(settings, self.filepath)
         except Exception as error:
             return _report_exception(self, error)
         self.report({"INFO"}, f"Saved {output.name}")
@@ -122,8 +175,14 @@ class PM_OT_quick_save_project(bpy.types.Operator):
     bl_label = "Save Project"
     bl_description = "Save to the current .pmproj path"
 
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        return _session(context) is not None
+
     def execute(self, context: bpy.types.Context) -> set[str]:
-        settings = context.scene.match_perspective
+        settings = _session(context)
+        if settings is None:
+            return {"CANCELLED"}
         if not settings.project_path:
             bpy.ops.perspective_match.save_project("INVOKE_DEFAULT")
             return {"FINISHED"}
@@ -147,17 +206,20 @@ class PM_OT_export_camera_json(bpy.types.Operator, ExportHelper):
     filter_glob: bpy.props.StringProperty(default="*.json", options={"HIDDEN"})
 
     def invoke(self, context: bpy.types.Context, event) -> set[str]:
-        settings = context.scene.match_perspective
-        if settings.image_path:
+        settings = _session(context)
+        if settings is not None and settings.image_path:
             self.filepath = str(Path(settings.image_path).with_name(
                 f"{Path(settings.image_path).stem}-camera.json"
             ))
         return ExportHelper.invoke(self, context, event)
 
     def execute(self, context: bpy.types.Context) -> set[str]:
-        self._context_scene = context.scene
+        settings = _session(context)
+        if settings is None:
+            self.report({"ERROR"}, "Create or activate a match camera first")
+            return {"CANCELLED"}
         try:
-            output = project_io.save_camera_json(context.scene.match_perspective, self.filepath)
+            output = project_io.save_camera_json(settings, self.filepath)
         except Exception as error:
             return _report_exception(self, error)
         self.report({"INFO"}, f"Saved {output.name}")
@@ -174,8 +236,12 @@ class PM_OT_refine(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
-        settings = context.scene.match_perspective
-        return settings.image is not None and _required_lines_ready(settings)
+        settings = _session(context)
+        return (
+            settings is not None
+            and settings.image is not None
+            and _required_lines_ready(settings)
+        )
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         self._context_scene = context.scene
@@ -196,10 +262,12 @@ class PM_OT_camera_view(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
+        settings = _session(context)
         return (
             context.area is not None
             and context.area.type == "VIEW_3D"
-            and context.scene.match_perspective.camera_object is not None
+            and settings is not None
+            and settings.camera_object is not None
         )
 
     def execute(self, context: bpy.types.Context) -> set[str]:
@@ -216,7 +284,10 @@ class PM_OT_apply_manual_fov(bpy.types.Operator):
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context: bpy.types.Context) -> set[str]:
-        settings = context.scene.match_perspective
+        settings = _session(context)
+        if settings is None:
+            self.report({"ERROR"}, "Create or activate a match camera first")
+            return {"CANCELLED"}
         settings.lock_focal = True
         try:
             if _required_lines_ready(settings):
@@ -238,7 +309,10 @@ class PM_OT_reset_camera(bpy.types.Operator):
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context: bpy.types.Context) -> set[str]:
-        settings = context.scene.match_perspective
+        settings = _session(context)
+        if settings is None:
+            self.report({"ERROR"}, "Create or activate a match camera first")
+            return {"CANCELLED"}
         settings.cx = settings.image_width * 0.5
         settings.cy = settings.image_height * 0.5
         settings.division_lambda = 0.0
@@ -266,7 +340,9 @@ class PM_OT_clear_axis(bpy.types.Operator):
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context: bpy.types.Context) -> set[str]:
-        settings = context.scene.match_perspective
+        settings = _session(context)
+        if settings is None:
+            return {"CANCELLED"}
         for index in reversed(range(len(settings.lines))):
             if settings.lines[index].axis == settings.active_axis:
                 settings.lines.remove(index)
@@ -283,24 +359,21 @@ class PM_OT_delete_selected(bpy.types.Operator):
     bl_description = "Delete the selected VP line or perspective surface"
     bl_options = {"REGISTER", "UNDO"}
 
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        settings = _session(context)
+        if settings is None:
+            return False
+        return (
+            0 <= settings.selected_line_index < len(settings.lines)
+            or 0 <= settings.selected_surface_index < len(settings.surfaces)
+        )
+
     def execute(self, context: bpy.types.Context) -> set[str]:
-        settings = context.scene.match_perspective
-        if settings.selected_line_index >= 0 and settings.selected_line_index < len(settings.lines):
-            settings.lines.remove(settings.selected_line_index)
-            settings.selected_line_index = -1
-            _refine_if_ready(context)
-            return {"FINISHED"}
-        if (
-            settings.selected_surface_index >= 0
-            and settings.selected_surface_index < len(settings.surfaces)
-        ):
-            surface = settings.surfaces[settings.selected_surface_index]
-            scene.remove_surface_mesh(surface)
-            settings.surfaces.remove(settings.selected_surface_index)
-            settings.selected_surface_index = -1
-            properties.tag_viewport_redraw(context)
-            return {"FINISHED"}
-        return {"CANCELLED"}
+        if not _delete_selected_item(context):
+            self.report({"WARNING"}, "Nothing selected to delete")
+            return {"CANCELLED"}
+        return {"FINISHED"}
 
 
 class PM_OT_clear_surfaces(bpy.types.Operator):
@@ -312,7 +385,9 @@ class PM_OT_clear_surfaces(bpy.types.Operator):
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context: bpy.types.Context) -> set[str]:
-        settings = context.scene.match_perspective
+        settings = _session(context)
+        if settings is None:
+            return {"CANCELLED"}
         for index in reversed(range(len(settings.surfaces))):
             if settings.surfaces[index].plane == settings.active_surface_plane:
                 scene.remove_surface_mesh(settings.surfaces[index])
@@ -332,7 +407,8 @@ class PM_OT_apply_placement(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
-        return context.scene.match_perspective.origin_is_set
+        settings = _session(context)
+        return settings is not None and settings.origin_is_set
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         try:
@@ -352,7 +428,9 @@ class PM_OT_clear_placement(bpy.types.Operator):
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context: bpy.types.Context) -> set[str]:
-        settings = context.scene.match_perspective
+        settings = _session(context)
+        if settings is None:
+            return {"CANCELLED"}
         settings.origin_is_set = False
         settings.scale_point_count = 0
         settings.solved_scale = 1.0
@@ -374,8 +452,12 @@ class PM_OT_generate_undistorted(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
-        settings = context.scene.match_perspective
-        return settings.image is not None and abs(settings.division_lambda) > 1.0e-8
+        settings = _session(context)
+        return (
+            settings is not None
+            and settings.image is not None
+            and abs(settings.division_lambda) > 1.0e-8
+        )
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         try:
@@ -396,7 +478,9 @@ class PM_OT_toggle_undistorted(bpy.types.Operator):
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context: bpy.types.Context) -> set[str]:
-        settings = context.scene.match_perspective
+        settings = _session(context)
+        if settings is None:
+            return {"CANCELLED"}
         try:
             distortion.set_undistorted_view(context, not settings.view_undistorted)
         except Exception as error:
@@ -463,9 +547,10 @@ class PM_OT_interact(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
-        settings = context.scene.match_perspective
+        settings = _session(context)
         return (
-            settings.image is not None
+            settings is not None
+            and settings.image is not None
             and context.area is not None
             and context.area.type == "VIEW_3D"
             and context.region is not None
@@ -473,13 +558,16 @@ class PM_OT_interact(bpy.types.Operator):
         )
 
     def invoke(self, context: bpy.types.Context, event) -> set[str]:
-        settings = context.scene.match_perspective
-        if settings.is_modal:
+        settings = _session(context)
+        workspace = _workspace(context)
+        if settings is None:
+            return {"CANCELLED"}
+        if workspace.is_modal:
             self.report({"WARNING"}, "A Perspective Match tool is already active; press Esc first")
             return {"CANCELLED"}
         scene.enter_camera_view(context)
-        settings.work_mode = self.mode
-        settings.is_modal = True
+        workspace.work_mode = self.mode
+        workspace.is_modal = True
         self._drag_kind = ""
         self._edit_index = -1
         context.window_manager.modal_handler_add(self)
@@ -498,12 +586,13 @@ class PM_OT_interact(bpy.types.Operator):
         return "Click two ground points with a known distance"
 
     def _finish(self, context: bpy.types.Context, *, cancelled: bool = False) -> set[str]:
-        settings = context.scene.match_perspective
-        settings.is_modal = False
-        settings.work_mode = "NONE"
+        workspace = _workspace(context)
+        settings = _session(context)
+        workspace.is_modal = False
+        workspace.work_mode = "NONE"
         context.window.cursor_set("DEFAULT")
         overlay.clear_preview(context)
-        if not cancelled:
+        if not cancelled and settings is not None:
             settings.status = "Perspective Match tool finished"
         return {"CANCELLED" if cancelled else "FINISHED"}
 
@@ -516,7 +605,7 @@ class PM_OT_interact(bpy.types.Operator):
         )
 
     def _hit_line(self, context, mouse: Vector) -> tuple[int, int]:
-        settings = context.scene.match_perspective
+        settings = _session(context)
         selected = settings.selected_line_index
         if 0 <= selected < len(settings.lines):
             line = settings.lines[selected]
@@ -538,7 +627,7 @@ class PM_OT_interact(bpy.types.Operator):
         return best_index, 0
 
     def _hit_surface(self, context, mouse: Vector) -> tuple[int, int]:
-        settings = context.scene.match_perspective
+        settings = _session(context)
         selected = settings.selected_surface_index
         if 0 <= selected < len(settings.surfaces):
             surface = settings.surfaces[selected]
@@ -567,7 +656,7 @@ class PM_OT_interact(bpy.types.Operator):
         return (-1, 0) if not candidates else (min(candidates)[1], 0)
 
     def _begin_drag(self, context, event, image_point: tuple[float, float]) -> None:
-        settings = context.scene.match_perspective
+        settings = _session(context)
         mouse = Vector((event.mouse_region_x, event.mouse_region_y))
         self._start = image_point
         if self.mode == "LINE":
@@ -611,7 +700,7 @@ class PM_OT_interact(bpy.types.Operator):
         overlay.set_preview(context, "SURFACE", image_point, image_point)
 
     def _update_drag(self, context, image_point: tuple[float, float]) -> None:
-        settings = context.scene.match_perspective
+        settings = _session(context)
         if self._drag_kind == "NEW_LINE":
             overlay.set_preview(context, "LINE", self._start, image_point)
         elif self._drag_kind == "NEW_SURFACE":
@@ -632,7 +721,7 @@ class PM_OT_interact(bpy.types.Operator):
             properties.tag_viewport_redraw(context)
 
     def _complete_drag(self, context, image_point: tuple[float, float]) -> None:
-        settings = context.scene.match_perspective
+        settings = _session(context)
         if self._drag_kind == "NEW_LINE" and self._start is not None:
             if math.hypot(image_point[0] - self._start[0], image_point[1] - self._start[1]) >= 8.0:
                 line = settings.lines.add()
@@ -667,7 +756,7 @@ class PM_OT_interact(bpy.types.Operator):
     def _cancel_drag(self, context) -> bool:
         if not self._drag_kind:
             return False
-        settings = context.scene.match_perspective
+        settings = _session(context)
         if self._original is not None and self._edit_index >= 0:
             if self._drag_kind == "LINE_ENDPOINT":
                 line = settings.lines[self._edit_index]
@@ -681,8 +770,9 @@ class PM_OT_interact(bpy.types.Operator):
         return True
 
     def modal(self, context: bpy.types.Context, event) -> set[str]:
-        settings = context.scene.match_perspective
-        if not settings.is_modal:
+        workspace = _workspace(context)
+        settings = _session(context)
+        if settings is None or not workspace.is_modal:
             return self._finish(context, cancelled=True)
         if event.type in {"ESC", "RIGHTMOUSE"} and event.value == "PRESS":
             if self._cancel_drag(context):
@@ -690,11 +780,14 @@ class PM_OT_interact(bpy.types.Operator):
             # Completed edits belong to this modal undo step; normal Esc exits cleanly.
             return self._finish(context)
         if event.type in {"DEL", "BACK_SPACE"} and event.value == "PRESS":
-            bpy.ops.perspective_match.delete_selected()
+            _delete_selected_item(context)
             return {"RUNNING_MODAL"}
         if event.type in {"MIDDLEMOUSE", "WHEELUPMOUSE", "WHEELDOWNMOUSE", "N"}:
             return {"PASS_THROUGH"}
         if not scene.is_camera_view(context):
+            return {"PASS_THROUGH"}
+        # Let sidebar / other UI regions receive clicks (trash, axis buttons, etc.).
+        if not self._drag_kind and not _event_in_view3d_window(context, event):
             return {"PASS_THROUGH"}
 
         image_point = self._event_image_point(context, event)
@@ -726,7 +819,46 @@ class PM_OT_interact(bpy.types.Operator):
         self._finish(context, cancelled=True)
 
 
+
+class PM_OT_new_match_camera(bpy.types.Operator):
+    """Create a new Empty + Camera match session and activate it."""
+
+    bl_idname = "perspective_match.new_match_camera"
+    bl_label = "New Match Camera"
+    bl_description = "Create a new Perspective Match camera session"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        try:
+            root = scene.create_match_camera(context)
+        except Exception as error:
+            self.report({"ERROR"}, str(error))
+            return {"CANCELLED"}
+        self.report({"INFO"}, f"Created {root.name}")
+        return {"FINISHED"}
+
+
+class PM_OT_unload_match(bpy.types.Operator):
+    """Unload the active match session from the UI without deleting objects."""
+
+    bl_idname = "perspective_match.unload_match"
+    bl_label = "Unload"
+    bl_description = "Unload the active Perspective Match session from the sidebar"
+    bl_options = {"REGISTER"}
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        return properties.active_root(context) is not None
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        scene.unload_match(context)
+        self.report({"INFO"}, "Perspective Match session unloaded")
+        return {"FINISHED"}
+
+
 CLASSES = (
+    PM_OT_new_match_camera,
+    PM_OT_unload_match,
     PM_OT_load_image,
     PM_OT_open_project,
     PM_OT_save_project,

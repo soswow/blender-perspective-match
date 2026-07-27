@@ -6,6 +6,8 @@ from pathlib import Path
 
 import bpy
 
+from . import properties
+
 
 def _axis_counts(settings) -> dict[str, int]:
     counts = {"x": 0, "y": 0, "z": 0}
@@ -25,12 +27,20 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
 
     def draw(self, context: bpy.types.Context) -> None:
         layout = self.layout
-        settings = context.scene.match_perspective
+        workspace = properties.workspace(context)
+        settings = properties.active_session(context)
         layout.use_property_split = True
         layout.use_property_decorate = False
 
-        layout.prop(settings, "is_enabled")
-        if not settings.is_enabled:
+        header = layout.box()
+        header.label(text="Match Cameras", icon="CAMERA_DATA")
+        row = header.row(align=True)
+        row.operator("perspective_match.new_match_camera", icon="ADD")
+        row.operator("perspective_match.unload_match", text="", icon="X")
+        header.prop(workspace, "active_match", text="")
+
+        if settings is None:
+            header.label(text="Create or select a match camera", icon="INFO")
             return
 
         image_box = layout.box()
@@ -39,7 +49,7 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
         row.operator("perspective_match.load_image", text="Open Image", icon="FILE_IMAGE")
         row.operator("perspective_match.open_project", text="Open Project", icon="FILE_FOLDER")
         if settings.image is None:
-            image_box.label(text="Load a still or .pmproj to begin", icon="INFO")
+            image_box.label(text="Load a still or .pmproj into this match", icon="INFO")
             return
         image_box.label(text=Path(settings.image_path).name, icon="CHECKMARK")
         image_box.label(text=f"{settings.image_width} × {settings.image_height} px")
@@ -58,9 +68,9 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
         )
 
         line_box = layout.box()
-        header = line_box.row()
-        header.label(text="3. VP Lines & Camera", icon="TRACKING")
-        header.prop(
+        line_header = line_box.row()
+        line_header.label(text="3. VP Lines & Camera", icon="TRACKING")
+        line_header.prop(
             settings,
             "show_vp_overlay",
             text="",
@@ -74,12 +84,17 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
         )
         line_box.label(text=required, icon="DRIVER_DISTANCE")
         row = line_box.row(align=True)
-        row.operator_context = "INVOKE_REGION_WIN"
-        operator = row.operator("perspective_match.interact", text="Draw / Edit Lines", icon="GREASEPENCIL")
+        draw_row = row.row(align=True)
+        draw_row.operator_context = "INVOKE_REGION_WIN"
+        operator = draw_row.operator(
+            "perspective_match.interact",
+            text="Draw / Edit Lines",
+            icon="GREASEPENCIL",
+        )
         operator.mode = "LINE"
         row.operator("perspective_match.delete_selected", text="", icon="TRASH")
         row.operator("perspective_match.clear_axis", text="", icon="X")
-        if settings.is_modal and settings.work_mode == "LINE":
+        if workspace.is_modal and workspace.work_mode == "LINE":
             line_box.label(text="Line tool active — Esc exits", icon="MOUSE_LMB")
 
         focal_row = line_box.row(align=True)
@@ -101,10 +116,14 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             if settings.fov_zx > 0.0:
                 diagnostics.label(text=f"ZX: {settings.fov_zx:.2f}°")
             diagnostics.label(text=f"Axis residual: {settings.residual_degrees:.2f}°")
-        line_box.label(
-            text=f"Lens: {settings.camera_object.data.lens:.2f} mm · HFOV {settings.hfov_degrees:.2f}°",
-            icon="CAMERA_DATA",
-        )
+        if settings.camera_object is not None and settings.camera_object.data is not None:
+            line_box.label(
+                text=(
+                    f"Lens: {settings.camera_object.data.lens:.2f} mm · "
+                    f"HFOV {settings.hfov_degrees:.2f}°"
+                ),
+                icon="CAMERA_DATA",
+            )
         if abs(settings.cx - settings.image_width * 0.5) > 0.5 or abs(
             settings.cy - settings.image_height * 0.5
         ) > 0.5:
@@ -117,9 +136,9 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             )
 
         surface_box = layout.box()
-        header = surface_box.row()
-        header.label(text="4. Surfaces / Origin", icon="MESH_PLANE")
-        header.prop(
+        surface_header = surface_box.row()
+        surface_header.label(text="4. Surfaces / Origin", icon="MESH_PLANE")
+        surface_header.prop(
             settings,
             "show_surface_overlay",
             text="",
@@ -128,8 +147,13 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
         )
         surface_box.prop(settings, "active_surface_plane", expand=True)
         row = surface_box.row(align=True)
-        row.operator_context = "INVOKE_REGION_WIN"
-        operator = row.operator("perspective_match.interact", text="Draw / Edit Surfaces", icon="MESH_GRID")
+        draw_row = row.row(align=True)
+        draw_row.operator_context = "INVOKE_REGION_WIN"
+        operator = draw_row.operator(
+            "perspective_match.interact",
+            text="Draw / Edit Surfaces",
+            icon="MESH_GRID",
+        )
         operator.mode = "SURFACE"
         row.operator("perspective_match.delete_selected", text="", icon="TRASH")
         row.operator("perspective_match.clear_surfaces", text="", icon="X")
@@ -142,10 +166,15 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
 
         placement = surface_box.column(align=True)
         row = placement.row(align=True)
-        row.operator_context = "INVOKE_REGION_WIN"
-        operator = row.operator("perspective_match.interact", text="Pick Origin", icon="PIVOT_CURSOR")
+        pick_row = row.row(align=True)
+        pick_row.operator_context = "INVOKE_REGION_WIN"
+        operator = pick_row.operator("perspective_match.interact", text="Pick Origin", icon="PIVOT_CURSOR")
         operator.mode = "ORIGIN"
-        operator = row.operator("perspective_match.interact", text="Measure Scale", icon="DRIVER_DISTANCE")
+        operator = pick_row.operator(
+            "perspective_match.interact",
+            text="Measure Scale",
+            icon="DRIVER_DISTANCE",
+        )
         operator.mode = "SCALE"
         placement.prop(settings, "measured_length")
         apply_row = placement.row(align=True)

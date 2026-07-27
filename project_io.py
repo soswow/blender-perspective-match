@@ -11,7 +11,7 @@ from typing import Any
 import bpy
 import numpy as np
 
-from . import core, scene
+from . import core, properties, scene
 
 PROJECT_KIND = "perspective-match-project"
 PROJECT_VERSION = 1
@@ -255,8 +255,10 @@ def load_project(context: bpy.types.Context, path: str) -> None:
     image_path = Path(str(image_path_value)).expanduser()
     if not image_path.is_absolute():
         image_path = project_path.parent / image_path
-    scene.setup_reference_image(context, str(image_path))
-    settings = context.scene.match_perspective
+    scene.bind_reference_image(context, str(image_path))
+    settings = properties.active_session(context)
+    if settings is None:
+        raise ValueError("Failed to create or activate a match session")
     settings.project_path = str(project_path)
     settings.source_session_json = json.dumps(session)
     settings.vp_mode = str(int(session.get("vpMode", 2)))

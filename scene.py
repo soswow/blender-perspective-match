@@ -1,4 +1,4 @@
-"""Blender scene integration and image/camera coordinate mapping."""
+"""Blender scene integration and multi-match camera lifecycle."""
 
 from __future__ import annotations
 
@@ -16,11 +16,16 @@ CV_CAMERA_TO_BLENDER_CAMERA = np.diag([1.0, -1.0, -1.0])
 
 def safe_identifier(name: str) -> str:
     """Return a compact Blender-friendly id derived from a file stem."""
-    cleaned = "".join(character if character.isalnum() or character in "-_" else "_" for character in name)
+    cleaned = "".join(
+        character if character.isalnum() or character in "-_" else "_"
+        for character in name
+    )
     return (cleaned.strip("_") or "image")[:60]
 
 
-def line_bundles_from_settings(settings: properties.PMSettings) -> dict[core.AxisId, list[core.LineSegment]]:
+def line_bundles_from_settings(
+    settings: properties.PMSession,
+) -> dict[core.AxisId, list[core.LineSegment]]:
     """Convert RNA line collection to solver dataclasses, filtered by VP mode."""
     output: dict[core.AxisId, list[core.LineSegment]] = {"x": [], "y": [], "z": []}
     for item in settings.lines:
@@ -32,8 +37,8 @@ def line_bundles_from_settings(settings: properties.PMSettings) -> dict[core.Axi
     return output
 
 
-def calibration_from_settings(settings: properties.PMSettings) -> core.Calibration:
-    """Build an immutable solver calibration from scene settings."""
+def calibration_from_settings(settings: properties.PMSession) -> core.Calibration:
+    """Build an immutable solver calibration from session settings."""
     intrinsics = core.CameraIntrinsics(
         fx=max(settings.fx, 1.0),
         fy=max(settings.fy, 1.0),
@@ -53,7 +58,7 @@ def calibration_from_settings(settings: properties.PMSettings) -> core.Calibrati
     )
 
 
-def store_calibration(settings: properties.PMSettings, calibration: core.Calibration) -> None:
+def store_calibration(settings: properties.PMSession, calibration: core.Calibration) -> None:
     """Copy a solver result into persistent RNA properties."""
     intrinsics = calibration.intrinsics
     settings.fx = intrinsics.fx
@@ -65,23 +70,6 @@ def store_calibration(settings: properties.PMSettings, calibration: core.Calibra
     settings.camera_center = tuple(float(value) for value in calibration.camera_center)
     settings.division_lambda = calibration.division_lambda
     settings.lambda_saturated = calibration.lambda_saturated
-
-
-def _remove_previous_match(settings: properties.PMSettings) -> None:
-    """Remove the previous managed collection and objects when loading a new still."""
-    cached_image = settings.undistorted_image
-    collection = settings.match_collection
-    if collection is None:
-        return
-    for obj in list(collection.objects):
-        _remove_managed_object(obj)
-    bpy.data.collections.remove(collection)
-    settings.match_collection = None
-    settings.root_object = None
-    settings.camera_object = None
-    settings.undistorted_image = None
-    if cached_image is not None and cached_image.users == 0:
-        bpy.data.images.remove(cached_image)
 
 
 def _remove_managed_object(obj: bpy.types.Object) -> None:
@@ -98,12 +86,6 @@ def _remove_managed_object(obj: bpy.types.Object) -> None:
             bpy.data.materials.remove(material)
 
 
-def _link_only(obj: bpy.types.Object, collection: bpy.types.Collection) -> None:
-    for existing in list(obj.users_collection):
-        existing.objects.unlink(obj)
-    collection.objects.link(obj)
-
-
 def _parent_keep_world(child: bpy.types.Object, parent: bpy.types.Object) -> None:
     matrix_world = child.matrix_world.copy()
     child.parent = parent
@@ -111,21 +93,47 @@ def _parent_keep_world(child: bpy.types.Object, parent: bpy.types.Object) -> Non
     child.matrix_world = matrix_world
 
 
-def setup_reference_image(
-    context: bpy.types.Context,
-    image_path: str,
-) -> bpy.types.Object:
-    """Create a managed camera/background hierarchy for a reference image."""
-    settings = context.scene.match_perspective
-    absolute_path = str(Path(bpy.path.abspath(image_path)).expanduser().resolve())
-    image = bpy.data.images.load(absolute_path, check_existing=True)
-    width, height = int(image.size[0]), int(image.size[1])
-    if width <= 0 or height <= 0:
-        raise ValueError("The selected image has no readable pixel dimensions")
+def _next_match_index() -> int:
+    used = set()
+    for root in properties.iter_match_roots():
+        name = root.name
+        if name.startswith("PM_Match_"):
+            suffix = name.rsplit("_", 1)[-1]
+            if suffix.isdigit():
+                used.add(int(suffix))
+    index = 1
+    while index in used:
+        index += 1
+    return index
 
-    _remove_previous_match(settings)
-    stem = safe_identifier(Path(absolute_path).stem)
-    prefix = f"PM_{stem}"
+
+def _default_calibration(hfov_degrees: float, width: int = 1920, height: int = 1080) -> core.Calibration:
+    focal = core.focal_from_hfov(hfov_degrees, width)
+    initial_center = np.array((0.0, -5.0, 1.7), dtype=np.float64)
+    forward_world = -initial_center
+    forward_world /= np.linalg.norm(forward_world)
+    right_world = np.cross(forward_world, np.array((0.0, 0.0, 1.0)))
+    right_world /= np.linalg.norm(right_world)
+    up_world = np.cross(right_world, forward_world)
+    initial_rotation = np.stack([right_world, -up_world, forward_world], axis=0)
+    return core.Calibration(
+        intrinsics=core.CameraIntrinsics(
+            fx=focal,
+            fy=focal,
+            cx=width * 0.5,
+            cy=height * 0.5,
+            image_width=width,
+            image_height=height,
+        ),
+        rotation_w2c=initial_rotation,
+        camera_center=initial_center,
+    )
+
+
+def create_match_camera(context: bpy.types.Context) -> bpy.types.Object:
+    """Create a new Empty + Camera match hierarchy and make it active."""
+    index = _next_match_index()
+    prefix = f"PM_Match_{index:03d}"
     collection = bpy.data.collections.new(prefix)
     context.scene.collection.children.link(collection)
 
@@ -144,89 +152,201 @@ def setup_reference_image(
     camera_data.sensor_fit = "HORIZONTAL"
     camera_data.show_background_images = True
     camera_data.background_images.clear()
+
+    session = root.pm_session
+    session.is_match_root = True
+    session.camera_object = camera_object
+    session.match_collection = collection
+    session.image = None
+    session.image_path = ""
+    session.image_width = 1920
+    session.image_height = 1080
+    session.source_image_width = 1920
+    session.lines.clear()
+    session.surfaces.clear()
+    session.selected_line_index = -1
+    session.selected_surface_index = -1
+    session.origin_is_set = False
+    session.scale_point_count = 0
+    session.solved_scale = 1.0
+    session.project_path = ""
+    session.source_session_json = ""
+    session.undistorted_path = ""
+    session.undistorted_image = None
+    session.undistorted_width = 0
+    session.undistorted_height = 0
+    session.undistorted_offset_x = 0.0
+    session.undistorted_offset_y = 0.0
+    session.view_undistorted = False
+    session.error = ""
+    session.status = "Load a reference image or project"
+
+    calibration = _default_calibration(session.hfov_degrees)
+    store_calibration(session, calibration)
+    apply_camera(context.scene, session, calibration)
+    set_active_match(context, root)
+    session.status = "Load a reference image or project"
+    properties.tag_viewport_redraw(context)
+    return root
+
+
+def set_active_match(context: bpy.types.Context, root: bpy.types.Object) -> None:
+    """Activate a match root and switch the viewport to its camera."""
+    if not properties.is_match_root(root):
+        raise ValueError("Not a Perspective Match root")
+    space = properties.workspace(context)
+    space.active_root = root
+    # Keep the dropdown in sync without re-entering its update callback.
+    properties.sync_active_match_enum(space, root.name)
+    space.is_modal = False
+    space.work_mode = "NONE"
+    session = root.pm_session
+    camera = session.camera_object
+    if camera is not None:
+        context.scene.camera = camera
+    # Keep scene render size aligned with the plate being edited.
+    if session.image_width > 0 and session.image_height > 0:
+        use_undistorted = (
+            session.view_undistorted
+            and session.undistorted_width > 0
+            and session.undistorted_height > 0
+        )
+        context.scene.render.resolution_x = (
+            session.undistorted_width if use_undistorted else session.image_width
+        )
+        context.scene.render.resolution_y = (
+            session.undistorted_height if use_undistorted else session.image_height
+        )
+        context.scene.render.resolution_percentage = 100
+    enter_camera_view(context)
+    properties.tag_viewport_redraw(context)
+
+
+def unload_match(context: bpy.types.Context) -> None:
+    """Clear the active editing session without deleting match objects."""
+    space = properties.workspace(context)
+    space.active_root = None
+    properties.sync_active_match_enum(space, "NONE")
+    space.is_modal = False
+    space.work_mode = "NONE"
+    properties.tag_viewport_redraw(context)
+
+
+def _unique_prefix(stem: str) -> str:
+    base = f"PM_{safe_identifier(stem)}"
+    if base not in bpy.data.collections and f"{base}_Origin" not in bpy.data.objects:
+        return base
+    index = 2
+    while True:
+        candidate = f"{base}_{index:02d}"
+        if (
+            candidate not in bpy.data.collections
+            and f"{candidate}_Origin" not in bpy.data.objects
+        ):
+            return candidate
+        index += 1
+
+
+def _rename_match_hierarchy(root: bpy.types.Object, prefix: str) -> None:
+    session = root.pm_session
+    collection = session.match_collection
+    camera = session.camera_object
+    if collection is not None:
+        collection.name = prefix
+    root.name = f"{prefix}_Origin"
+    if camera is not None:
+        camera.name = f"{prefix}_Camera"
+        if camera.data is not None:
+            camera.data.name = f"{prefix}_Camera"
+
+
+def _reset_session_edit_state(session: properties.PMSession) -> None:
+    session.lines.clear()
+    session.surfaces.clear()
+    session.selected_line_index = -1
+    session.selected_surface_index = -1
+    session.origin_is_set = False
+    session.scale_point_count = 0
+    session.solved_scale = 1.0
+    session.project_path = ""
+    session.source_session_json = ""
+    invalidate_undistorted_cache(session)
+    session.error = ""
+
+
+def bind_reference_image(context: bpy.types.Context, image_path: str) -> bpy.types.Object:
+    """Attach a still to the active match camera without affecting other matches."""
+    root = properties.active_root(context)
+    if root is None:
+        root = create_match_camera(context)
+    session = root.pm_session
+    camera_object = session.camera_object
+    if camera_object is None or camera_object.type != "CAMERA":
+        raise ValueError("Active match has no camera")
+
+    absolute_path = str(Path(bpy.path.abspath(image_path)).expanduser().resolve())
+    image = bpy.data.images.load(absolute_path, check_existing=True)
+    width, height = int(image.size[0]), int(image.size[1])
+    if width <= 0 or height <= 0:
+        raise ValueError("The selected image has no readable pixel dimensions")
+
+    # Remove previous surface meshes owned by this match only.
+    for surface in list(session.surfaces):
+        remove_surface_mesh(surface)
+    _reset_session_edit_state(session)
+
+    camera_data = camera_object.data
+    camera_data.show_background_images = True
+    camera_data.background_images.clear()
     background = camera_data.background_images.new()
     background.image = image
     background.show_background_image = True
     background.alpha = 1.0
-    # Keep the plate visible without covering modeled geometry.
     background.display_depth = "BACK"
     background.frame_method = "STRETCH"
     if hasattr(image, "use_view_as_render"):
         image.use_view_as_render = True
 
-    settings.image = image
-    settings.image_path = absolute_path
-    settings.image_width = width
-    settings.image_height = height
-    settings.source_image_width = width
-    settings.match_collection = collection
-    settings.root_object = root
-    settings.camera_object = camera_object
-    settings.lines.clear()
-    settings.surfaces.clear()
-    settings.selected_line_index = -1
-    settings.selected_surface_index = -1
-    settings.is_modal = False
-    settings.work_mode = "NONE"
-    settings.origin_is_set = False
-    settings.scale_point_count = 0
-    settings.solved_scale = 1.0
-    settings.project_path = ""
-    settings.source_session_json = ""
-    settings.undistorted_path = ""
-    settings.undistorted_image = None
-    settings.undistorted_width = 0
-    settings.undistorted_height = 0
-    settings.undistorted_offset_x = 0.0
-    settings.undistorted_offset_y = 0.0
-    settings.view_undistorted = False
-    settings.error = ""
+    session.image = image
+    session.image_path = absolute_path
+    session.image_width = width
+    session.image_height = height
+    session.source_image_width = width
 
-    focal = core.focal_from_hfov(settings.hfov_degrees, width)
-    initial_center = np.array((0.0, -5.0, 1.7), dtype=np.float64)
-    forward_world = -initial_center
-    forward_world /= np.linalg.norm(forward_world)
-    right_world = np.cross(forward_world, np.array((0.0, 0.0, 1.0)))
-    right_world /= np.linalg.norm(right_world)
-    up_world = np.cross(right_world, forward_world)
-    initial_rotation = np.stack([right_world, -up_world, forward_world], axis=0)
-    calibration = core.Calibration(
-        intrinsics=core.CameraIntrinsics(
-            fx=focal,
-            fy=focal,
-            cx=width * 0.5,
-            cy=height * 0.5,
-            image_width=width,
-            image_height=height,
-        ),
-        rotation_w2c=initial_rotation,
-        camera_center=initial_center,
-    )
-    store_calibration(settings, calibration)
-    apply_camera(context.scene, settings, calibration)
-    context.scene.camera = camera_object
+    prefix = _unique_prefix(Path(absolute_path).stem)
+    _rename_match_hierarchy(root, prefix)
+    space = properties.workspace(context)
+    if space.active_root == root:
+        properties.sync_active_match_enum(space, root.name)
+
+    calibration = _default_calibration(session.hfov_degrees, width, height)
+    store_calibration(session, calibration)
+    apply_camera(context.scene, session, calibration)
     context.scene.render.resolution_x = width
     context.scene.render.resolution_y = height
     context.scene.render.resolution_percentage = 100
     context.scene.render.pixel_aspect_x = 1.0
     context.scene.render.pixel_aspect_y = 1.0
-    settings.status = "Choose a perspective mode, then draw VP lines"
-    enter_camera_view(context)
-    properties.tag_viewport_redraw(context)
+    session.status = "Choose a perspective mode, then draw VP lines"
+    set_active_match(context, root)
     return camera_object
+
+
+# Compatibility alias for older call sites / smoke tests.
+setup_reference_image = bind_reference_image
 
 
 def apply_camera(
     blender_scene: bpy.types.Scene,
-    settings: properties.PMSettings,
+    settings: properties.PMSession,
     calibration: core.Calibration,
 ) -> None:
     """Apply solved intrinsics and OpenCV extrinsics to the managed Blender camera."""
     camera_object = settings.camera_object
     if camera_object is None or camera_object.type != "CAMERA":
-        raise ValueError("Load a reference image before refining the camera")
+        raise ValueError("Active match has no camera")
     intrinsics = calibration.intrinsics
-    source_width = max(float(settings.source_image_width), 1.0)
+    source_width = max(float(settings.source_image_width or intrinsics.image_width), 1.0)
     use_undistorted = (
         settings.view_undistorted
         and settings.undistorted_image is not None
@@ -259,7 +379,7 @@ def apply_camera(
     camera_data.lens = intrinsics.fx * 36.0 / source_width
     camera_data.shift_x = (plate_width * 0.5 - plate_cx) / plate_width
     camera_data.shift_y = (plate_cy - plate_height * 0.5) / plate_width
-    if len(camera_data.background_images) > 0:
+    if len(camera_data.background_images) > 0 and settings.image is not None:
         camera_data.background_images[0].image = (
             settings.undistorted_image if use_undistorted else settings.image
         )
@@ -277,7 +397,9 @@ def apply_camera(
 
 def refine_match(context: bpy.types.Context) -> core.Calibration:
     """Refine and apply camera state from all current VP lines."""
-    settings = context.scene.match_perspective
+    settings = properties.active_session(context)
+    if settings is None:
+        raise ValueError("Create or activate a match camera first")
     if settings.image is None:
         raise ValueError("Load a reference image first")
     line_bundles = line_bundles_from_settings(settings)
@@ -329,7 +451,11 @@ def refine_match(context: bpy.types.Context) -> core.Calibration:
     rebuild_surface_meshes(context, calibration)
     settings.status = (
         f"Camera matched · HFOV {calibration.hfov_degrees:.2f}°"
-        + (f" · λ {calibration.division_lambda:.4f}" if abs(calibration.division_lambda) > 1.0e-6 else "")
+        + (
+            f" · λ {calibration.division_lambda:.4f}"
+            if abs(calibration.division_lambda) > 1.0e-6
+            else ""
+        )
     )
     settings.error = ""
     properties.tag_viewport_redraw(context)
@@ -337,7 +463,7 @@ def refine_match(context: bpy.types.Context) -> core.Calibration:
 
 
 def _update_diagnostics(
-    settings: properties.PMSettings,
+    settings: properties.PMSession,
     line_bundles: dict[core.AxisId, list[core.LineSegment]],
     calibration: core.Calibration,
 ) -> None:
@@ -382,10 +508,13 @@ def _update_diagnostics(
 
 def apply_manual_fov(context: bpy.types.Context) -> None:
     """Apply the current manual HFOV before or without enough VP lines."""
-    settings = context.scene.match_perspective
+    settings = properties.active_session(context)
+    if settings is None:
+        raise ValueError("Create or activate a match camera first")
     calibration = calibration_from_settings(settings)
     previous_focal = calibration.intrinsics.fx
-    focal = core.focal_from_hfov(settings.hfov_degrees, settings.image_width)
+    width = max(settings.image_width, 1)
+    focal = core.focal_from_hfov(settings.hfov_degrees, width)
     calibration.intrinsics.fx = focal
     calibration.intrinsics.fy = focal
     if abs(previous_focal - focal) > 1.0e-6:
@@ -415,13 +544,14 @@ def _intrinsics_or_distortion_changed(
     )
 
 
-def invalidate_undistorted_cache(settings: properties.PMSettings) -> None:
+def invalidate_undistorted_cache(settings: properties.PMSession) -> None:
     """Switch to source plate and discard a remap made with stale intrinsics."""
     cached_image = settings.undistorted_image
     settings.view_undistorted = False
     if (
         settings.camera_object is not None
         and len(settings.camera_object.data.background_images) > 0
+        and settings.image is not None
     ):
         settings.camera_object.data.background_images[0].image = settings.image
     settings.undistorted_image = None
@@ -440,7 +570,9 @@ def set_origin_or_scale(
     mode: str,
 ) -> None:
     """Store an origin or scale point and reapply camera placement."""
-    settings = context.scene.match_perspective
+    settings = properties.active_session(context)
+    if settings is None:
+        raise ValueError("Create or activate a match camera first")
     if mode == "ORIGIN":
         settings.origin_image = image_point
         settings.origin_is_set = True
@@ -460,7 +592,9 @@ def set_origin_or_scale(
 
 def reapply_placement(context: bpy.types.Context) -> None:
     """Apply placement to the current solved camera without requiring a new VP solve."""
-    settings = context.scene.match_perspective
+    settings = properties.active_session(context)
+    if settings is None:
+        return
     calibration = calibration_from_settings(settings)
     if not settings.origin_is_set:
         return
@@ -488,7 +622,7 @@ def reapply_placement(context: bpy.types.Context) -> None:
 
 
 def surface_ideal_geometry(
-    settings: properties.PMSettings,
+    settings: properties.PMSession,
     surface: properties.PMSurface,
 ) -> tuple[
     list[tuple[float, float]],
@@ -525,7 +659,7 @@ def surface_ideal_geometry(
 
 
 def surface_image_geometry(
-    settings: properties.PMSettings,
+    settings: properties.PMSession,
     surface: properties.PMSurface,
 ) -> tuple[
     list[tuple[float, float]],
@@ -561,9 +695,10 @@ def rebuild_surface_meshes(
     context: bpy.types.Context,
     calibration: core.Calibration | None = None,
 ) -> None:
-    """Create or update all managed surface mesh objects."""
-    settings = context.scene.match_perspective
-    if settings.match_collection is None:
+    """Create or update all managed surface mesh objects for the active match."""
+    settings = properties.active_session(context)
+    root = properties.active_root(context)
+    if settings is None or settings.match_collection is None or root is None:
         return
     solved = calibration or calibration_from_settings(settings)
     prefix = settings.match_collection.name
@@ -590,8 +725,7 @@ def rebuild_surface_meshes(
             mesh = bpy.data.meshes.new(f"{prefix}_Surface_{index:02d}")
             obj = bpy.data.objects.new(f"{prefix}_Surface_{index:02d}", mesh)
             settings.match_collection.objects.link(obj)
-            if settings.root_object is not None:
-                _parent_keep_world(obj, settings.root_object)
+            _parent_keep_world(obj, root)
             material = bpy.data.materials.new(f"{prefix}_SurfaceMat_{index:02d}")
             material.diffuse_color = plane_colors[surface.plane]
             mesh.materials.append(material)
@@ -611,27 +745,33 @@ def remove_surface_mesh(surface: properties.PMSurface) -> None:
 
 
 def enter_camera_view(context: bpy.types.Context) -> None:
-    """Switch the current 3D View to the managed scene camera."""
+    """Switch the current 3D View to the active match camera."""
     if context.area is None or context.area.type != "VIEW_3D":
         return
-    context.space_data.camera = context.scene.match_perspective.camera_object
+    settings = properties.active_session(context)
+    if settings is None or settings.camera_object is None:
+        return
+    context.space_data.camera = settings.camera_object
     region_3d = getattr(context.space_data, "region_3d", None)
     if region_3d is not None:
         region_3d.view_perspective = "CAMERA"
 
 
 def is_camera_view(context: bpy.types.Context) -> bool:
-    """Return whether input occurs in the managed camera view."""
-    settings = context.scene.match_perspective
+    """Return whether input occurs in the active match camera view."""
+    settings = properties.active_session(context)
     region_3d = getattr(context.space_data, "region_3d", None)
+    space_camera = getattr(context.space_data, "camera", None)
     return (
-        context.area is not None
+        settings is not None
+        and context.area is not None
         and context.area.type == "VIEW_3D"
         and context.region is not None
         and context.region.type == "WINDOW"
         and region_3d is not None
         and region_3d.view_perspective == "CAMERA"
         and settings.camera_object is not None
+        and space_camera == settings.camera_object
     )
 
 
@@ -641,7 +781,8 @@ def camera_frame_bounds(
     """Project camera-frame corners to region pixels as left, right, bottom, top."""
     if not is_camera_view(context):
         return None
-    camera_object = context.scene.match_perspective.camera_object
+    settings = properties.active_session(context)
+    camera_object = settings.camera_object
     region_3d = context.space_data.region_3d
     frame_local = camera_object.data.view_frame(scene=context.scene)
     projected = []
@@ -667,8 +808,8 @@ def image_to_region(
 ) -> Vector | None:
     """Map top-left-origin image pixels into current camera-view region pixels."""
     bounds = camera_frame_bounds(context)
-    settings = context.scene.match_perspective
-    if bounds is None or settings.image_width <= 0 or settings.image_height <= 0:
+    settings = properties.active_session(context)
+    if bounds is None or settings is None or settings.image_width <= 0 or settings.image_height <= 0:
         return None
     left, right, bottom, top = bounds
     display_x, display_y, display_width, display_height = _storage_to_display(
@@ -690,7 +831,9 @@ def ideal_to_region(
     ideal_y: float,
 ) -> Vector | None:
     """Map ideal pinhole pixels to the active original or undistorted plate."""
-    settings = context.scene.match_perspective
+    settings = properties.active_session(context)
+    if settings is None:
+        return None
     if settings.view_undistorted:
         bounds = camera_frame_bounds(context)
         if bounds is None:
@@ -725,8 +868,8 @@ def region_to_image(
 ) -> tuple[float, float] | None:
     """Map camera-view region pixels into top-left-origin source image pixels."""
     bounds = camera_frame_bounds(context)
-    settings = context.scene.match_perspective
-    if bounds is None:
+    settings = properties.active_session(context)
+    if bounds is None or settings is None:
         return None
     left, right, bottom, top = bounds
     if right - left < 1.0e-6 or top - bottom < 1.0e-6:
@@ -743,7 +886,7 @@ def region_to_image(
     return _display_to_storage(settings, display_x, display_y)
 
 
-def _display_size(settings: properties.PMSettings) -> tuple[float, float]:
+def _display_size(settings: properties.PMSession) -> tuple[float, float]:
     """Return the currently displayed plate size."""
     if (
         settings.view_undistorted
@@ -756,7 +899,7 @@ def _display_size(settings: properties.PMSettings) -> tuple[float, float]:
 
 
 def _storage_to_display(
-    settings: properties.PMSettings,
+    settings: properties.PMSession,
     image_x: float,
     image_y: float,
 ) -> tuple[float, float, float, float]:
@@ -781,7 +924,7 @@ def _storage_to_display(
 
 
 def _display_to_storage(
-    settings: properties.PMSettings,
+    settings: properties.PMSession,
     display_x: float,
     display_y: float,
 ) -> tuple[float, float]:
@@ -808,6 +951,8 @@ def _display_to_storage(
 
 def refresh_background_projection(context: bpy.types.Context) -> None:
     """Reapply camera projection after switching original/undistorted plate."""
-    settings = context.scene.match_perspective
+    settings = properties.active_session(context)
+    if settings is None:
+        return
     apply_camera(context.scene, settings, calibration_from_settings(settings))
     properties.tag_viewport_redraw(context)

@@ -7,7 +7,7 @@ from pathlib import Path
 import bpy
 import numpy as np
 
-from . import core, scene
+from . import core, properties, scene
 
 
 def compute_canvas(
@@ -169,7 +169,9 @@ def generate_undistorted_plate(
     output_path: str | None = None,
 ) -> bpy.types.Image:
     """Generate, save, and activate the undistorted camera background."""
-    settings = context.scene.match_perspective
+    settings = properties.active_session(context)
+    if settings is None:
+        raise ValueError("Create or activate a match camera first")
     if settings.image is None:
         raise ValueError("Load a reference image first")
     if abs(settings.division_lambda) < 1.0e-8:
@@ -260,7 +262,9 @@ def generate_undistorted_plate(
 
 def set_undistorted_view(context: bpy.types.Context, enabled: bool) -> None:
     """Switch camera background between source and cached undistorted plate."""
-    settings = context.scene.match_perspective
+    settings = properties.active_session(context)
+    if settings is None:
+        raise ValueError("Create or activate a match camera first")
     if enabled and settings.undistorted_image is None:
         generate_undistorted_plate(context)
         return

@@ -44,6 +44,17 @@ def add_bundle(settings, axis: str, vanishing: np.ndarray, targets) -> None:
         line.x2, line.y2 = point_b
 
 
+def _write_png(temporary_path: Path, name: str, width: int, height: int, color) -> Path:
+    generated = bpy.data.images.new(name, width=width, height=height, alpha=True)
+    generated.generated_color = color
+    image_path = temporary_path / f"{name}.png"
+    generated.filepath_raw = str(image_path)
+    generated.file_format = "PNG"
+    generated.save()
+    bpy.data.images.remove(generated)
+    return image_path
+
+
 def main() -> None:
     """Exercise core math and native scene application."""
     extension = load_extension_module()
@@ -55,6 +66,7 @@ def main() -> None:
             registered = True
             core = sys.modules["match_perspective.core"]
             distortion = sys.modules["match_perspective.distortion"]
+            properties = sys.modules["match_perspective.properties"]
             scene = sys.modules["match_perspective.scene"]
             project_io = sys.modules["match_perspective.project_io"]
 
@@ -79,19 +91,21 @@ def main() -> None:
             observed = core.distort_points(ideal, 800.0, 800.0, 640.0, 360.0, 0.12)
             assert np.allclose(points, observed, atol=0.05)
 
-            generated = bpy.data.images.new("PM_Test_Source", width=800, height=600, alpha=True)
-            generated.generated_color = (0.15, 0.2, 0.25, 1.0)
-            image_path = temporary_path / "reference.png"
-            generated.filepath_raw = str(image_path)
-            generated.file_format = "PNG"
-            generated.save()
-            bpy.data.images.remove(generated)
+            image_path = _write_png(
+                temporary_path,
+                "reference",
+                800,
+                600,
+                (0.15, 0.2, 0.25, 1.0),
+            )
 
-            scene.setup_reference_image(bpy.context, str(image_path))
-            settings = bpy.context.scene.match_perspective
+            root_a = scene.create_match_camera(bpy.context)
+            assert properties.active_root(bpy.context) == root_a
+            scene.bind_reference_image(bpy.context, str(image_path))
+            settings = properties.active_session(bpy.context)
+            assert settings is not None
             assert settings.camera_object is not None
-            assert settings.root_object is not None
-            assert settings.camera_object.parent == settings.root_object
+            assert settings.camera_object.parent == properties.active_root(bpy.context)
             assert settings.image_width == 800 and settings.image_height == 600
 
             settings.vp_mode = "2"
@@ -133,6 +147,54 @@ def main() -> None:
             scene.refine_match(bpy.context)
             assert settings.solved_scale > 0.0
 
+            # Second match must keep the first intact.
+            image_b_path = _write_png(
+                temporary_path,
+                "reference_b",
+                640,
+                480,
+                (0.4, 0.1, 0.1, 1.0),
+            )
+            root_b = scene.create_match_camera(bpy.context)
+            assert properties.active_root(bpy.context) == root_b
+            scene.bind_reference_image(bpy.context, str(image_b_path))
+            settings_b = properties.active_session(bpy.context)
+            assert settings_b is not None
+            assert settings_b.image_width == 640
+            assert settings_b.image_path.endswith("reference_b.png")
+            # Original match A state survives on its own root.
+            settings_a = root_a.pm_session
+            assert len(settings_a.lines) == 4
+            assert settings_a.image_width == 800
+            assert settings_a.origin_is_set
+
+            scene.set_active_match(bpy.context, root_a)
+            assert properties.active_root(bpy.context) == root_a
+            assert bpy.context.scene.camera == settings_a.camera_object
+            assert bpy.context.scene.render.resolution_x == 800
+
+            scene.set_active_match(bpy.context, root_b)
+            assert bpy.context.scene.camera == settings_b.camera_object
+            assert bpy.context.scene.render.resolution_x == 640
+
+            scene.unload_match(bpy.context)
+            assert properties.active_root(bpy.context) is None
+            assert properties.active_session(bpy.context) is None
+            assert len(properties.iter_match_roots()) == 2
+
+            # Deleting a match root should prune it from discovery.
+            camera_b = settings_b.camera_object
+            bpy.data.objects.remove(root_b, do_unlink=True)
+            if camera_b is not None and camera_b.name in bpy.data.objects:
+                bpy.data.objects.remove(camera_b, do_unlink=True)
+            roots = properties.iter_match_roots()
+            assert len(roots) == 1
+            assert roots[0] == root_a
+
+            scene.set_active_match(bpy.context, root_a)
+            settings = properties.active_session(bpy.context)
+            assert settings is not None
+
             project_path = temporary_path / "roundtrip.pmproj"
             project_io.save_project(settings, str(project_path))
             payload = json.loads(project_path.read_text())
@@ -141,7 +203,8 @@ def main() -> None:
             assert len(payload["session"]["surfaces"]) == 1
 
             project_io.load_project(bpy.context, str(project_path))
-            reloaded = bpy.context.scene.match_perspective
+            reloaded = properties.active_session(bpy.context)
+            assert reloaded is not None
             assert len(reloaded.lines) == 4
             assert len(reloaded.surfaces) == 1
             assert reloaded.camera_object is not None
@@ -188,7 +251,8 @@ def main() -> None:
             plate_project = temporary_path / "with-plate.pmproj"
             project_io.save_project(reloaded, str(plate_project))
             project_io.load_project(bpy.context, str(plate_project))
-            reloaded = bpy.context.scene.match_perspective
+            reloaded = properties.active_session(bpy.context)
+            assert reloaded is not None
             assert reloaded.view_undistorted
             assert reloaded.undistorted_image is not None
 
