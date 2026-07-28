@@ -24,6 +24,12 @@ _MAX_VP_DIAGONALS = 8.0
 # When a VP is too far / at infinity, still draw a capped guide this many diagonals long.
 _PARALLEL_GUIDE_DIAGONALS = 4.0
 
+# Screen-space dash pattern for VP continuations and the horizon.
+_GUIDE_DASH_LENGTH = 9.0
+_GUIDE_GAP_LENGTH = 7.0
+_HORIZON_SLOT_LENGTH = 8.0
+_GUIDE_LINE_THICKNESS = 0.9
+
 _draw_handle = None
 _preview: dict[str, object] = {
     "kind": "",
@@ -95,6 +101,123 @@ def _draw_line(
     batch.draw(shader)
 
 
+def _draw_dashed_polyline(
+    points: list[Vector],
+    thickness: float,
+    pattern,
+    *,
+    slot_lengths: list[float] | None = None,
+) -> None:
+    """Stroke a screen-space polyline with a repeating color pattern (None = gap)."""
+    if len(points) < 2 or not pattern:
+        return
+    lengths = slot_lengths or [_GUIDE_DASH_LENGTH] * len(pattern)
+    if len(lengths) != len(pattern):
+        raise ValueError("dash pattern and slot_lengths must match")
+    period = float(sum(max(value, 0.0) for value in lengths))
+    if period < 1.0e-6:
+        color = next((entry for entry in pattern if entry is not None), None)
+        if color is None:
+            return
+        for index in range(len(points) - 1):
+            _draw_line(points[index], points[index + 1], color, thickness)
+        return
+
+    # Prefixed slot ends so we can map distance → pattern index quickly.
+    slot_ends = []
+    running = 0.0
+    for length in lengths:
+        running += max(float(length), 0.0)
+        slot_ends.append(running)
+
+    def color_at(distance: float):
+        position = distance % period
+        for index, end in enumerate(slot_ends):
+            if position < end or index == len(slot_ends) - 1:
+                remaining = end - position
+                return pattern[index], max(remaining, 1.0e-8)
+        return pattern[-1], 1.0e-8
+
+    distance_along = 0.0
+    for index in range(len(points) - 1):
+        start = points[index]
+        end = points[index + 1]
+        edge = end - start
+        edge_length = float(edge.length)
+        if edge_length < 1.0e-8:
+            continue
+        direction = edge / edge_length
+        traveled = 0.0
+        while traveled < edge_length - 1.0e-8:
+            color, remaining = color_at(distance_along)
+            step = min(remaining, edge_length - traveled)
+            if color is not None and step > 1.0e-8:
+                _draw_line(
+                    start + direction * traveled,
+                    start + direction * (traveled + step),
+                    color,
+                    thickness,
+                )
+            traveled += step
+            distance_along += step
+
+
+def _append_clipped_chain(
+    chains: list[list[Vector]],
+    current: list[Vector],
+    point_a: Vector,
+    point_b: Vector,
+) -> list[Vector]:
+    """Extend or restart a polyline chain from one clipped screen segment."""
+    if not current:
+        return [point_a, point_b]
+    if (current[-1] - point_a).length > 1.0e-3:
+        if len(current) >= 2:
+            chains.append(current)
+        return [point_a, point_b]
+    current.append(point_b)
+    return current
+
+
+def _ideal_screen_chains(
+    context: bpy.types.Context,
+    point_a: tuple[float, float] | np.ndarray,
+    point_b: tuple[float, float] | np.ndarray,
+    *,
+    samples: int,
+    clip_bounds: tuple[float, float, float, float],
+) -> list[list[Vector]]:
+    """Map an ideal segment to clipped screen-space polylines."""
+    settings = properties.active_session(context)
+    if settings is None:
+        return []
+    first = np.asarray(point_a, dtype=np.float64)
+    second = np.asarray(point_b, dtype=np.float64)
+    sample_count = 2 if abs(settings.division_lambda) < 1.0e-12 else max(3, samples)
+    chains: list[list[Vector]] = []
+    current: list[Vector] = []
+    previous = None
+    for ratio in np.linspace(0.0, 1.0, sample_count):
+        point = first * (1.0 - ratio) + second * ratio
+        screen = scene.ideal_to_region(context, float(point[0]), float(point[1]))
+        if previous is not None and screen is not None:
+            clipped = _clip_segment_to_bounds(previous, screen, clip_bounds)
+            if clipped is None:
+                if len(current) >= 2:
+                    chains.append(current)
+                current = []
+            else:
+                current = _append_clipped_chain(chains, current, clipped[0], clipped[1])
+        elif screen is None and current:
+            if len(current) >= 2:
+                chains.append(current)
+            current = []
+        previous = screen
+    if len(current) >= 2:
+        chains.append(current)
+    return chains
+
+
 def _region_bounds(context: bpy.types.Context) -> tuple[float, float, float, float] | None:
     """Return the 3D View region rectangle in POST_PIXEL coordinates."""
     region = context.region
@@ -137,26 +260,35 @@ def _draw_ideal_segment(
     *,
     samples: int = 20,
     clip_bounds: tuple[float, float, float, float] | None = None,
+    dash_pattern=None,
+    dash_slot_lengths: list[float] | None = None,
 ) -> None:
     """Draw an ideal-space line, curving it on the original distorted plate."""
-    first = np.asarray(point_a, dtype=np.float64)
-    second = np.asarray(point_b, dtype=np.float64)
     settings = properties.active_session(context)
     if settings is None:
         return
     bounds = clip_bounds if clip_bounds is not None else scene.camera_frame_bounds(context)
     if bounds is None:
         return
-    sample_count = 2 if abs(settings.division_lambda) < 1.0e-12 else max(3, samples)
-    previous = None
-    for ratio in np.linspace(0.0, 1.0, sample_count):
-        point = first * (1.0 - ratio) + second * ratio
-        screen = scene.ideal_to_region(context, float(point[0]), float(point[1]))
-        if previous is not None and screen is not None:
-            clipped = _clip_segment_to_bounds(previous, screen, bounds)
-            if clipped is not None:
-                _draw_line(clipped[0], clipped[1], color, thickness)
-        previous = screen
+    chains = _ideal_screen_chains(
+        context,
+        point_a,
+        point_b,
+        samples=samples,
+        clip_bounds=bounds,
+    )
+    if not dash_pattern:
+        for chain in chains:
+            for index in range(len(chain) - 1):
+                _draw_line(chain[index], chain[index + 1], color, thickness)
+        return
+    for chain in chains:
+        _draw_dashed_polyline(
+            chain,
+            thickness,
+            dash_pattern,
+            slot_lengths=dash_slot_lengths,
+        )
 
 
 def _draw_ideal_guide_line(
@@ -167,6 +299,8 @@ def _draw_ideal_guide_line(
     thickness: float,
     *,
     target_xy: np.ndarray | None = None,
+    dash_pattern=None,
+    dash_slot_lengths: list[float] | None = None,
 ) -> None:
     """Draw a VP guide; reach a finite VP when nearby, otherwise use a parallel cap."""
     direction = np.asarray(ideal_direction, dtype=np.float64)
@@ -200,6 +334,10 @@ def _draw_ideal_guide_line(
         start = anchor - direction * extent
         end = anchor + direction * extent
 
+    pattern = dash_pattern if dash_pattern is not None else (color, None)
+    slots = dash_slot_lengths
+    if slots is None and dash_pattern is None:
+        slots = [_GUIDE_DASH_LENGTH, _GUIDE_GAP_LENGTH]
     _draw_ideal_segment(
         context,
         start,
@@ -208,6 +346,8 @@ def _draw_ideal_guide_line(
         thickness,
         samples=96,
         clip_bounds=region_bounds,
+        dash_pattern=pattern,
+        dash_slot_lengths=slots,
     )
 
 
@@ -326,7 +466,7 @@ def _draw_vp_geometry(context: bpy.types.Context, fill_shader, settings) -> None
                 midpoint,
                 direction,
                 _with_alpha(color, 0.42),
-                0.9,
+                _GUIDE_LINE_THICKNESS,
                 target_xy=target_xy,
             )
 
@@ -363,15 +503,22 @@ def _draw_vp_geometry(context: bpy.types.Context, fill_shader, settings) -> None
     if "x" in overlay_vanishing_points and "z" in overlay_vanishing_points:
         first_xy = drawable_vps.get("x")
         second_xy = drawable_vps.get("z")
+        horizon_red = _with_alpha(AXIS_COLORS["x"], opacity)
+        horizon_green = _with_alpha(AXIS_COLORS["z"], opacity)
+        # red · empty · green · empty …
+        horizon_pattern = (horizon_red, None, horizon_green, None)
+        horizon_slots = [_HORIZON_SLOT_LENGTH] * 4
         if first_xy is not None and second_xy is not None:
             _draw_ideal_segment(
                 context,
                 first_xy,
                 second_xy,
-                _with_alpha(AXIS_COLORS["y"], opacity * 0.75),
-                1.4,
+                horizon_red,
+                _GUIDE_LINE_THICKNESS,
                 samples=96,
                 clip_bounds=region_bounds,
+                dash_pattern=horizon_pattern,
+                dash_slot_lengths=horizon_slots,
             )
         else:
             first = overlay_vanishing_points["x"]
@@ -383,8 +530,10 @@ def _draw_vp_geometry(context: bpy.types.Context, fill_shader, settings) -> None
                     context,
                     0.5 * (first_xy_raw + second_xy_raw),
                     second_xy_raw - first_xy_raw,
-                    _with_alpha(AXIS_COLORS["y"], opacity * 0.75),
-                    1.4,
+                    horizon_red,
+                    _GUIDE_LINE_THICKNESS,
+                    dash_pattern=horizon_pattern,
+                    dash_slot_lengths=horizon_slots,
                 )
 
 

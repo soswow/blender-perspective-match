@@ -13,6 +13,7 @@ The extension is a native port of the manual workflow from Perspective Match Stu
 - Draw, select, edit, and delete axis-colored VP segments in camera view.
 - Extend VP guides, horizon, and VP markers past the plate to finite vanishing points (capped when lines are nearly parallel).
 - Derive a missing horizontal VP from an orthogonal pair so the horizon still draws with only one explicit horizontal bundle.
+- Draw VP continuations as axis-colored dashes, and the horizon as red / empty / green / empty dashes.
 - Robust length-weighted VP fitting with Huber outlier reduction.
 - Solve camera orientation and, when constrained, focal length from orthogonal VPs.
 - Lock and edit horizontal FOV manually, including underconstrained 1-point shots.
