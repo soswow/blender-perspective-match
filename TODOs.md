@@ -1,5 +1,6 @@
 TODOs to be done:
 - Opacity slider and handle opacity should become one. Also it doesn't affect green orgin indicator seems like.
+- Green cross with circle that shows where origin is does not changes opacity when Opacity slider is used.
 
 
 Done TODOs:

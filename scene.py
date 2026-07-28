@@ -404,8 +404,9 @@ def refine_match(context: bpy.types.Context) -> core.Calibration:
     if settings.image is None:
         raise ValueError("Load a reference image first")
     line_bundles = line_bundles_from_settings(settings)
-    if not any(len(segments) >= 2 for segments in line_bundles.values()):
-        raise ValueError("Draw at least two lines for two required axes")
+    ready_axes = sum(1 for segments in line_bundles.values() if len(segments) >= 2)
+    if ready_axes < 2:
+        raise ValueError("Draw at least two lines on each of two axes")
 
     previous_calibration = calibration_from_settings(settings)
     intrinsics = previous_calibration.intrinsics

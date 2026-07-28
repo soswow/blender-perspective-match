@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import sys
 from pathlib import Path
 from uuid import uuid4
 
@@ -29,15 +30,34 @@ def _report_exception(operator: bpy.types.Operator, error: Exception) -> set[str
     return {"CANCELLED"}
 
 
-def _required_lines_ready(settings) -> bool:
+def _axis_line_counts(settings) -> dict[str, int]:
     counts = {"x": 0, "y": 0, "z": 0}
     for line in settings.lines:
         counts[line.axis] += 1
+    return counts
+
+
+def _required_lines_ready(settings) -> bool:
+    counts = _axis_line_counts(settings)
     if settings.vp_mode == "1":
+        # Depth (Blender Z / axis y) + horizontals on Y (axis z).
         return counts["y"] >= 2 and counts["z"] >= 2
     if settings.vp_mode == "2":
+        # Two horizontals (X × Y); uprights are parallel / not a finite VP.
         return counts["x"] >= 2 and counts["z"] >= 2
-    return counts["y"] >= 2 and counts["z"] >= 2
+    # 3-point: any two axes with ≥2 lines; the third world axis is derived.
+    return sum(1 for axis in ("x", "y", "z") if counts[axis] >= 2) >= 2
+
+
+def _lines_needed_message(settings) -> str:
+    """Human-readable reason Auto-from-VPs cannot run yet."""
+    counts = _axis_line_counts(settings)
+    summary = f"X {counts['x']} · Y {counts['z']} · Z {counts['y']}"
+    if settings.vp_mode == "1":
+        return f"1-point needs 2+ Y and 2+ Z lines ({summary})"
+    if settings.vp_mode == "2":
+        return f"2-point needs 2+ X and 2+ Y lines ({summary})"
+    return f"3-point needs 2+ lines on any two axes ({summary})"
 
 
 def _refine_if_ready(context: bpy.types.Context) -> None:
@@ -47,7 +67,7 @@ def _refine_if_ready(context: bpy.types.Context) -> None:
     if _required_lines_ready(settings):
         scene.refine_match(context)
     else:
-        settings.status = "Draw at least two lines for each required axis"
+        settings.status = _lines_needed_message(settings)
         properties.tag_viewport_redraw(context)
 
 
@@ -145,20 +165,30 @@ class PM_OT_refine(bpy.types.Operator):
 
     bl_idname = "perspective_match.refine"
     bl_label = "Refine Camera"
-    bl_description = "Solve focal, principal point, and camera orientation from VP lines"
+    bl_description = (
+        "Unlock Manual FOV and solve focal / orientation from VP lines. "
+        "Needs two axes with at least two lines each in 3-point mode"
+    )
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
+        # Stay clickable with a still loaded so a disabled button is not a silent dead-end.
         settings = _session(context)
-        return (
-            settings is not None
-            and settings.image is not None
-            and _required_lines_ready(settings)
-        )
+        return settings is not None and settings.image is not None
 
     def execute(self, context: bpy.types.Context) -> set[str]:
-        self._context_scene = context.scene
+        settings = _session(context)
+        if settings is None or settings.image is None:
+            self.report({"ERROR"}, "Load a reference image first")
+            return {"CANCELLED"}
+        if not _required_lines_ready(settings):
+            message = _lines_needed_message(settings)
+            settings.status = message
+            self.report({"WARNING"}, message)
+            return {"CANCELLED"}
+        # "Auto from VPs" means FOV comes from geometry, not the manual lock.
+        settings.lock_focal = False
         try:
             calibration = scene.refine_match(context)
         except Exception as error:
@@ -741,9 +771,32 @@ class PM_OT_unload_match(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class PM_OT_reload(bpy.types.Operator):
+    """Dev helper: unregister, reload modules from disk, and register again."""
+
+    bl_idname = "perspective_match.reload"
+    bl_label = "Reload Perspective Match"
+    bl_description = (
+        "Reload this extension from disk (better than System → Reload Scripts for UI edits)"
+    )
+    bl_options = {"REGISTER"}
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        # Import the package entry so we call the current reload_addon implementation.
+        package = sys.modules[__package__]
+        try:
+            package.reload_addon()
+        except Exception as error:
+            self.report({"ERROR"}, f"Reload failed: {error}")
+            return {"CANCELLED"}
+        self.report({"INFO"}, "Perspective Match reloaded")
+        return {"FINISHED"}
+
+
 CLASSES = (
     PM_OT_new_match_camera,
     PM_OT_unload_match,
+    PM_OT_reload,
     PM_OT_load_image,
     PM_OT_import_project,
     PM_OT_refine,

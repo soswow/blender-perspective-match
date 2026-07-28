@@ -16,6 +16,25 @@ def _axis_counts(settings) -> dict[str, int]:
     return counts
 
 
+def _panel_lines_ready(settings) -> bool:
+    counts = _axis_counts(settings)
+    if settings.vp_mode == "1":
+        return counts["y"] >= 2 and counts["z"] >= 2
+    if settings.vp_mode == "2":
+        return counts["x"] >= 2 and counts["z"] >= 2
+    return sum(1 for axis in ("x", "y", "z") if counts[axis] >= 2) >= 2
+
+
+def _panel_lines_hint(settings) -> str:
+    counts = _axis_counts(settings)
+    summary = f"X {counts['x']} · Y {counts['z']} · Z {counts['y']}"
+    if settings.vp_mode == "1":
+        return f"Need 2+ Y and 2+ Z ({summary})"
+    if settings.vp_mode == "2":
+        return f"Need 2+ X and 2+ Y ({summary})"
+    return f"Need 2+ lines on two axes ({summary})"
+
+
 class VIEW3D_PT_perspective_match(bpy.types.Panel):
     """Perspective Match sidebar panel."""
 
@@ -58,14 +77,13 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
         perspective_box = layout.box()
         perspective_box.label(text="2. Perspective", icon="ORIENTATION_GLOBAL")
         perspective_box.prop(settings, "vp_mode", expand=True)
-        perspective_box.label(
-            text=(
-                "1-point keeps manual FOV"
-                if settings.vp_mode == "1"
-                else "Orthogonal VP pairs can solve FOV"
-            ),
-            icon="INFO",
-        )
+        if settings.vp_mode == "1":
+            tip = "1-point: Y + Z lines; FOV stays manual"
+        elif settings.vp_mode == "2":
+            tip = "2-point: X + Y horizontals; Z uprights not used"
+        else:
+            tip = "3-point: any two axes (2+ lines each); the third is derived"
+        perspective_box.label(text=tip, icon="INFO")
 
         line_box = layout.box()
         line_header = line_box.row()
@@ -100,6 +118,8 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
         focal_row = line_box.row(align=True)
         focal_row.prop(settings, "lock_focal", text="Manual FOV", toggle=True)
         focal_row.operator("perspective_match.refine", text="Auto from VPs", icon="FILE_REFRESH")
+        if not _panel_lines_ready(settings):
+            line_box.label(text=_panel_lines_hint(settings), icon="INFO")
         manual_column = line_box.column(align=True)
         manual_column.enabled = settings.lock_focal or settings.vp_mode == "1"
         manual_column.prop(settings, "hfov_degrees")
@@ -188,6 +208,8 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             error_box.alert = True
             error_box.label(text=settings.error, icon="ERROR")
         layout.label(text=settings.status, icon="INFO")
+        layout.separator()
+        layout.operator("perspective_match.reload", icon="FILE_REFRESH")
 
 
 CLASSES = (VIEW3D_PT_perspective_match,)

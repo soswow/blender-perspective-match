@@ -62,10 +62,10 @@ That replaces `~/Library/Application Support/Blender/5.1/extensions/user_default
 Daily loop:
 
 1. Edit and save in the editor.
-2. In Blender: **F3 → Reload Scripts** (`bpy.ops.script.reload()`).
+2. In Blender: click **Reload Perspective Match** at the bottom of the sidebar (or **F3 → Reload Perspective Match**). Prefer this over System → Reload Scripts—that often leaves panels and PropertyGroups on stale class objects.
 3. Test.
 
-If a modal line/origin tool was running, exit it before reloading. If you get duplicate panels or `already registered` errors, disable/re-enable the extension, or restart Blender—draw handlers and modal state sometimes survive a soft reload.
+Exit any running Draw / Pick Origin modal before reloading. After adding or renaming RNA properties on `PMSession` / `PMWorkspace`, restart Blender once so existing `.blend` data rebinds cleanly. If you still see duplicate panels or `already registered`, disable/re-enable the extension or restart.
 
 Re-run `./link-dev.sh` if you later **Install from Disk** and Blender overwrites the symlink with a ZIP extract.
 
@@ -100,11 +100,11 @@ After bind, the hierarchy is renamed from `PM_Match_###` to `PM_<image stem>` wh
 
 ### 2. Choose perspective
 
-- **1 Point:** draw yellow depth lines and blue verticals. The shot does not determine FOV by itself, so FOV stays manual.
-- **2 Point:** draw red and yellow line bundles. Their orthogonal VPs solve focal length and orientation.
-- **3 Point:** draw yellow and blue bundles; red is optional but improves the fit. Three finite VPs can also solve principal point.
+- **1 Point:** draw Z verticals and Y depth lines. FOV stays manual.
+- **2 Point:** draw X and Y horizontal bundles (finite VPs). Z uprights are not used as a vanishing point.
+- **3 Point:** draw any two axes with at least two lines each; the missing world axis is derived from orthogonality. All three axes also allow solving principal point.
 
-Axis mapping is fixed:
+Axis mapping matches Blender’s gizmos:
 
 - Red → Blender X
 - Green → Blender Y

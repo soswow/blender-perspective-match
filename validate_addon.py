@@ -171,6 +171,27 @@ def main() -> None:
             assert bpy.context.scene.camera == settings.camera_object
             assert abs(settings.camera_object.data.shift_x) < 1.0e-5
 
+            # 3-point with X + Z only: Blender Y must be derived (no green lines).
+            settings.vp_mode = "3"
+            settings.lines.clear()
+            add_bundle(
+                settings,
+                "x",
+                np.array((-600.0, 300.0)),
+                ((200.0, 120.0), (220.0, 500.0)),
+            )
+            add_bundle(
+                settings,
+                "y",
+                np.array((400.0, 1400.0)),
+                ((180.0, 80.0), (620.0, 90.0)),
+            )
+            derived = scene.refine_match(bpy.context)
+            assert derived.intrinsics.fx > 1.0
+            # Rotation column 1 is Blender Y — should be a real unit axis, not identity leftover.
+            y_column = derived.rotation_w2c[:, 1]
+            assert abs(float(np.linalg.norm(y_column)) - 1.0) < 1.0e-5
+
             settings.origin_image = (400.0, 420.0)
             settings.origin_is_set = True
             scene.refine_match(bpy.context)
