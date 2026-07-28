@@ -52,6 +52,45 @@ class CoreGeometryTests(unittest.TestCase):
         self.assertIsNotNone(principal)
         self.assertTrue(np.allclose(principal, (5.0, 5.0)))
 
+    def test_complete_vanishing_points_fills_missing_horizontal(self) -> None:
+        """X + upright (Z) should imply the second ground-plane VP for the horizon."""
+        intrinsics = core.CameraIntrinsics(
+            fx=800.0,
+            fy=800.0,
+            cx=640.0,
+            cy=360.0,
+            image_width=1280,
+            image_height=720,
+        )
+        # Orthogonal pair ZX around the principal point with known focal.
+        vanishing_x = np.array((640.0 + 800.0, 360.0, 1.0))
+        vanishing_y = np.array((640.0, 360.0 + 800.0, 1.0))
+        completed = core.complete_vanishing_points(
+            {"x": vanishing_x, "y": vanishing_y},
+            intrinsics,
+        )
+        self.assertIn("z", completed)
+        implied = completed["z"]
+        self.assertGreater(abs(float(implied[2])), 1.0e-10)
+        implied_xy = implied[:2] / implied[2]
+        # World-Y VP should be left of center for this right-handed completion.
+        self.assertLess(float(implied_xy[0]), 640.0)
+
+    def test_vanishing_direction_round_trip(self) -> None:
+        intrinsics = core.CameraIntrinsics(
+            fx=900.0,
+            fy=900.0,
+            cx=500.0,
+            cy=400.0,
+            image_width=1000,
+            image_height=800,
+        )
+        direction = np.array([0.3, -0.2, 1.0])
+        vanishing = core.vanishing_from_camera_direction(direction, intrinsics)
+        recovered = core._normalized_direction(vanishing, intrinsics)
+        expected = direction / np.linalg.norm(direction)
+        self.assertTrue(np.allclose(recovered, expected, atol=1.0e-9))
+
     def test_perspective_rectangle_rejects_degenerate_quad(self) -> None:
         corners = core.perspective_rectangle_corners(
             (10.0, 10.0),

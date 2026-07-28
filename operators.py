@@ -777,19 +777,19 @@ class PM_OT_reload(bpy.types.Operator):
     bl_idname = "perspective_match.reload"
     bl_label = "Reload Perspective Match"
     bl_description = (
-        "Reload this extension from disk (better than System → Reload Scripts for UI edits)"
+        "Reload this extension from disk after the current UI event finishes "
+        "(safer than System → Reload Scripts for panel/operator edits)"
     )
     bl_options = {"REGISTER"}
 
     def execute(self, context: bpy.types.Context) -> set[str]:
-        # Import the package entry so we call the current reload_addon implementation.
+        # Never unregister from inside this operator — that can SIGSEGV Blender.
+        # Schedule the tear-down on a timer so this execute can return first.
         package = sys.modules[__package__]
-        try:
-            package.reload_addon()
-        except Exception as error:
-            self.report({"ERROR"}, f"Reload failed: {error}")
+        if not package.schedule_reload():
+            self.report({"WARNING"}, "Perspective Match reload already queued")
             return {"CANCELLED"}
-        self.report({"INFO"}, "Perspective Match reloaded")
+        self.report({"INFO"}, "Perspective Match reload queued")
         return {"FINISHED"}
 
 

@@ -11,6 +11,8 @@ The extension is a native port of the manual workflow from Perspective Match Stu
 - Load a still directly as a Blender camera background on the active match only.
 - Choose 1-, 2-, or 3-point perspective.
 - Draw, select, edit, and delete axis-colored VP segments in camera view.
+- Extend VP guides, horizon, and VP markers past the plate to finite vanishing points (capped when lines are nearly parallel).
+- Derive a missing horizontal VP from an orthogonal pair so the horizon still draws with only one explicit horizontal bundle.
 - Robust length-weighted VP fitting with Huber outlier reduction.
 - Solve camera orientation and, when constrained, focal length from orthogonal VPs.
 - Lock and edit horizontal FOV manually, including underconstrained 1-point shots.
@@ -63,9 +65,9 @@ Daily loop:
 
 1. Edit and save in the editor.
 2. In Blender: click **Reload Perspective Match** at the bottom of the sidebar (or **F3 → Reload Perspective Match**). Prefer this over System → Reload Scripts—that often leaves panels and PropertyGroups on stale class objects.
-3. Test.
+3. Test. Watch the system console for `Perspective Match: reloaded from disk` (the button only queues the reload; the tear-down runs a moment later so Blender does not crash).
 
-Exit any running Draw / Pick Origin modal before reloading. After adding or renaming RNA properties on `PMSession` / `PMWorkspace`, restart Blender once so existing `.blend` data rebinds cleanly. If you still see duplicate panels or `already registered`, disable/re-enable the extension or restart.
+Exit any running Draw / Pick Origin modal before reloading. After adding, renaming, or removing RNA properties on `PMSession` / `PMWorkspace`, **restart Blender**—property schema changes are not reliably hot-reloadable and can crash even with a deferred reload. If you still see duplicate panels or `already registered`, disable/re-enable the extension or restart.
 
 Re-run `./link-dev.sh` if you later **Install from Disk** and Blender overwrites the symlink with a ZIP extract.
 

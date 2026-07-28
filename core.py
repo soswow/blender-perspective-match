@@ -676,6 +676,61 @@ def implied_vertical_vanishing(
     return np.array([direction[0], direction[1], 0.0])
 
 
+def vanishing_from_camera_direction(
+    direction: np.ndarray,
+    intrinsics: CameraIntrinsics,
+) -> np.ndarray:
+    """Project a camera-space direction to a homogeneous ideal vanishing point."""
+    vector = np.asarray(direction, dtype=np.float64)
+    length = float(np.linalg.norm(vector))
+    if length < 1.0e-12:
+        return np.array([0.0, 0.0, 0.0], dtype=np.float64)
+    vector = vector / length
+    if abs(float(vector[2])) < 1.0e-10:
+        return np.array(
+            [vector[0] * intrinsics.fx, vector[1] * intrinsics.fy, 0.0],
+            dtype=np.float64,
+        )
+    return np.array(
+        [
+            vector[0] / vector[2] * intrinsics.fx + intrinsics.cx,
+            vector[1] / vector[2] * intrinsics.fy + intrinsics.cy,
+            1.0,
+        ],
+        dtype=np.float64,
+    )
+
+
+def complete_vanishing_points(
+    vanishing_points: dict[AxisId, np.ndarray],
+    intrinsics: CameraIntrinsics,
+) -> dict[AxisId, np.ndarray]:
+    """Fill missing orthogonal VPs from measured ones (for horizon / overlay guides)."""
+    resolved = dict(vanishing_points)
+    if len(resolved) < 2:
+        return resolved
+    if all(axis in resolved for axis in ("x", "y", "z")):
+        return resolved
+
+    working = CameraIntrinsics(**intrinsics.__dict__)
+    estimates = focal_estimates_by_pair(resolved, working.cx, working.cy)
+    if estimates:
+        focal = float(np.sqrt(np.mean(np.square(list(estimates.values())))))
+        working.fx = focal
+        working.fy = focal
+
+    directions = {
+        axis: _normalized_direction(vanishing, working)
+        for axis, vanishing in resolved.items()
+    }
+    rotation = orthonormalize_axes(directions)
+    # Columns are world X/Y/Z in camera space; colored axes map x→X, z→Y, y→Z.
+    for axis, column in (("x", 0), ("z", 1), ("y", 2)):
+        if axis not in resolved:
+            resolved[axis] = vanishing_from_camera_direction(rotation[:, column], working)
+    return resolved
+
+
 def plane_axes(plane: SurfacePlane) -> tuple[AxisId, AxisId]:
     """Return the two colored VP axes defining a surface plane."""
     if plane == "xz":

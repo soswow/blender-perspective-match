@@ -201,7 +201,6 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
         if settings.view_lighting_applied:
             view_box.label(text=Path(settings.view_path).name or "View plate active", icon="CHECKMARK")
         view_box.prop(settings, "overlay_opacity")
-        view_box.prop(settings, "controls_opacity")
 
         if settings.error:
             error_box = layout.box()

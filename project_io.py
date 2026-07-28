@@ -107,7 +107,6 @@ def load_project(context: bpy.types.Context, path: str) -> None:
     settings.active_axis = session.get("activeAxis", "x")
     settings.lock_focal = bool(session.get("lockFocal", False))
     settings.overlay_opacity = float(session.get("overlayOpacity", 0.9))
-    settings.controls_opacity = float(session.get("controlsOpacity", 1.0))
     settings.show_vp_overlay = bool(session.get("showVpOverlay", True))
 
     settings.lines.clear()

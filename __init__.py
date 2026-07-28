@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import sys
+import traceback
 
 import bpy
 from bpy.app.handlers import persistent
@@ -28,6 +29,8 @@ _RELOAD_SUBMODULES = (
     "panel",
 )
 
+_reload_pending = False
+
 
 @persistent
 def _reset_modal_state(_dummy=None) -> None:
@@ -40,17 +43,8 @@ def _reset_modal_state(_dummy=None) -> None:
             workspace.work_mode = "NONE"
 
 
-def reload_addon() -> None:
-    """Unregister, reload package modules from disk, then register again.
-
-    ``bpy.ops.script.reload()`` often leaves Panel / PropertyGroup RNA on the
-    old class objects. This path tears registration down first so UI edits show up.
-    """
-    package_name = __package__
-    if not package_name:
-        raise RuntimeError("Perspective Match reload requires a package context")
-
-    # Drop modal ownership before classes disappear.
+def _clear_modal_flags() -> None:
+    """Stop treating any modal interact as active before tearing classes down."""
     operators._active_interact = None
     for blender_scene in bpy.data.scenes:
         workspace = getattr(blender_scene, "match_perspective", None)
@@ -58,6 +52,18 @@ def reload_addon() -> None:
             workspace.is_modal = False
             workspace.work_mode = "NONE"
 
+
+def reload_addon() -> None:
+    """Unregister, reload package modules from disk, then register again.
+
+    Must not run from inside an operator/panel stack belonging to this add-on —
+    call ``schedule_reload()`` instead so Blender can finish the current event.
+    """
+    package_name = __package__
+    if not package_name:
+        raise RuntimeError("Perspective Match reload requires a package context")
+
+    _clear_modal_flags()
     unregister()
 
     for submodule_name in _RELOAD_SUBMODULES:
@@ -69,9 +75,45 @@ def reload_addon() -> None:
     importlib.reload(sys.modules[package_name])
     sys.modules[package_name].register()
 
-    for window in bpy.context.window_manager.windows:
-        for area in window.screen.areas:
-            area.tag_redraw()
+    window_manager = bpy.context.window_manager
+    if window_manager is not None:
+        for window in window_manager.windows:
+            screen = window.screen
+            if screen is None:
+                continue
+            for area in screen.areas:
+                area.tag_redraw()
+
+
+def schedule_reload() -> bool:
+    """Queue a reload on a short timer after the current operator returns.
+
+    Returns False if a reload is already queued.
+    """
+    global _reload_pending
+    if _reload_pending:
+        return False
+    _reload_pending = True
+
+    package_name = __package__
+
+    def _run_reload() -> None:
+        global _reload_pending
+        _reload_pending = False
+        try:
+            package = sys.modules.get(package_name)
+            if package is None:
+                print(f"Perspective Match: reload skipped; missing module {package_name}")
+                return None
+            package.reload_addon()
+            print("Perspective Match: reloaded from disk")
+        except Exception:
+            print("Perspective Match: reload failed")
+            traceback.print_exc()
+        return None
+
+    bpy.app.timers.register(_run_reload, first_interval=0.1)
+    return True
 
 
 def register() -> None:
@@ -100,8 +142,12 @@ def unregister() -> None:
         del bpy.types.Object.pm_session
     if hasattr(bpy.types.Scene, "match_perspective"):
         del bpy.types.Scene.match_perspective
+    # Be tolerant during development reloads if a class is already gone.
     for cls in reversed(CLASSES):
-        bpy.utils.unregister_class(cls)
+        try:
+            bpy.utils.unregister_class(cls)
+        except RuntimeError:
+            pass
 
 
 if __name__ == "__main__":

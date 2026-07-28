@@ -19,6 +19,11 @@ AXIS_COLORS = {
     "z": (0.26, 0.80, 0.30, 1.0),
 }
 
+# Ideal-space VPs farther than this many image diagonals are treated as parallel.
+_MAX_VP_DIAGONALS = 8.0
+# When a VP is too far / at infinity, still draw a capped guide this many diagonals long.
+_PARALLEL_GUIDE_DIAGONALS = 4.0
+
 _draw_handle = None
 _preview: dict[str, object] = {
     "kind": "",
@@ -90,6 +95,39 @@ def _draw_line(
     batch.draw(shader)
 
 
+def _region_bounds(context: bpy.types.Context) -> tuple[float, float, float, float] | None:
+    """Return the 3D View region rectangle in POST_PIXEL coordinates."""
+    region = context.region
+    if region is None:
+        return None
+    return 0.0, float(region.width), 0.0, float(region.height)
+
+
+def _image_diagonal(settings) -> float:
+    return float(np.hypot(settings.image_width, settings.image_height))
+
+
+def _finite_vanishing_xy(vanishing: np.ndarray) -> np.ndarray | None:
+    """Return ideal-pixel VP coordinates, or None when the VP is at infinity."""
+    if abs(float(vanishing[2])) < 1.0e-10:
+        return None
+    return vanishing[:2] / vanishing[2]
+
+
+def _vanishing_within_draw_limit(settings, ideal_xy: np.ndarray) -> bool:
+    """Reject near-parallel VPs that would stretch guides across the whole viewport."""
+    center = np.array((settings.image_width * 0.5, settings.image_height * 0.5), dtype=np.float64)
+    return float(np.linalg.norm(ideal_xy - center)) <= _image_diagonal(settings) * _MAX_VP_DIAGONALS
+
+
+def _point_in_bounds(
+    point: Vector,
+    bounds: tuple[float, float, float, float],
+) -> bool:
+    left, right, bottom, top = bounds
+    return left <= point.x <= right and bottom <= point.y <= top
+
+
 def _draw_ideal_segment(
     context: bpy.types.Context,
     point_a: tuple[float, float] | np.ndarray,
@@ -98,6 +136,7 @@ def _draw_ideal_segment(
     thickness: float,
     *,
     samples: int = 20,
+    clip_bounds: tuple[float, float, float, float] | None = None,
 ) -> None:
     """Draw an ideal-space line, curving it on the original distorted plate."""
     first = np.asarray(point_a, dtype=np.float64)
@@ -105,7 +144,7 @@ def _draw_ideal_segment(
     settings = properties.active_session(context)
     if settings is None:
         return
-    bounds = scene.camera_frame_bounds(context)
+    bounds = clip_bounds if clip_bounds is not None else scene.camera_frame_bounds(context)
     if bounds is None:
         return
     sample_count = 2 if abs(settings.division_lambda) < 1.0e-12 else max(3, samples)
@@ -120,14 +159,16 @@ def _draw_ideal_segment(
         previous = screen
 
 
-def _draw_ideal_infinite_line(
+def _draw_ideal_guide_line(
     context: bpy.types.Context,
     ideal_point: np.ndarray,
     ideal_direction: np.ndarray,
     color,
     thickness: float,
+    *,
+    target_xy: np.ndarray | None = None,
 ) -> None:
-    """Draw a long ideal line as a clipped-looking curved polyline."""
+    """Draw a VP guide; reach a finite VP when nearby, otherwise use a parallel cap."""
     direction = np.asarray(ideal_direction, dtype=np.float64)
     direction_length = float(np.linalg.norm(direction))
     if direction_length < 1.0e-12:
@@ -136,17 +177,37 @@ def _draw_ideal_infinite_line(
     settings = properties.active_session(context)
     if settings is None:
         return
+    region_bounds = _region_bounds(context)
+    if region_bounds is None:
+        return
     image_center = np.array((settings.image_width * 0.5, settings.image_height * 0.5))
     point = np.asarray(ideal_point, dtype=np.float64)
     anchor = point + direction * float(np.dot(image_center - point, direction))
-    extent = float(np.hypot(settings.image_width, settings.image_height)) * 4.0
+    diagonal = _image_diagonal(settings)
+    plate_extent = diagonal * 2.0
+
+    if target_xy is not None and _vanishing_within_draw_limit(settings, target_xy):
+        # Cover the plate on the far side, then stop exactly at the VP.
+        to_target = float(np.dot(target_xy - anchor, direction))
+        far_extent = max(plate_extent, abs(to_target))
+        start = anchor - direction * far_extent
+        end = np.asarray(target_xy, dtype=np.float64)
+        # Keep winding stable so dense sampling stays evenly spaced.
+        if to_target < 0.0:
+            start, end = end, anchor + direction * far_extent
+    else:
+        extent = diagonal * _PARALLEL_GUIDE_DIAGONALS
+        start = anchor - direction * extent
+        end = anchor + direction * extent
+
     _draw_ideal_segment(
         context,
-        anchor - direction * extent,
-        anchor + direction * extent,
+        start,
+        end,
         color,
         thickness,
         samples=96,
+        clip_bounds=region_bounds,
     )
 
 
@@ -175,7 +236,7 @@ def _clip_segment_to_bounds(
     point_b: Vector,
     bounds: tuple[float, float, float, float],
 ) -> tuple[Vector, Vector] | None:
-    """Clip a finite 2D segment to a rectangular camera border."""
+    """Clip a finite 2D segment to a rectangular pixel border."""
     left, right, bottom, top = bounds
     delta = point_b - point_a
     entering = 0.0
@@ -215,6 +276,9 @@ def _draw_vp_geometry(context: bpy.types.Context, fill_shader, settings) -> None
     bounds = scene.camera_frame_bounds(context)
     if bounds is None:
         return
+    region_bounds = _region_bounds(context)
+    if region_bounds is None:
+        return
     line_bundles = scene.line_bundles_from_settings(settings)
     calibration = scene.calibration_from_settings(settings)
     ideal_line_bundles = core.undistort_line_bundles(
@@ -223,6 +287,11 @@ def _draw_vp_geometry(context: bpy.types.Context, fill_shader, settings) -> None
         calibration.division_lambda,
     )
     vanishing_points = core.collect_vanishing_points(ideal_line_bundles)
+    # Derive missing orthogonal VPs so the horizon still appears with only one horizontal.
+    overlay_vanishing_points = core.complete_vanishing_points(
+        vanishing_points,
+        calibration.intrinsics,
+    )
 
     for line_index, line in enumerate(settings.lines):
         color = _with_alpha(AXIS_COLORS[line.axis], opacity)
@@ -247,51 +316,76 @@ def _draw_vp_geometry(context: bpy.types.Context, fill_shader, settings) -> None
         vanishing = vanishing_points.get(line.axis)
         if vanishing is not None:
             midpoint = 0.5 * (ideal_endpoints[0] + ideal_endpoints[1])
-            if abs(float(vanishing[2])) < 1.0e-10:
+            target_xy = _finite_vanishing_xy(vanishing)
+            if target_xy is None:
                 direction = vanishing[:2]
             else:
-                direction = vanishing[:2] / vanishing[2] - midpoint
-            _draw_ideal_infinite_line(
+                direction = target_xy - midpoint
+            _draw_ideal_guide_line(
                 context,
                 midpoint,
                 direction,
                 _with_alpha(color, 0.42),
                 0.9,
+                target_xy=target_xy,
             )
 
         if line_index == settings.selected_line_index:
-            handle_color = _with_alpha(color, settings.controls_opacity)
+            handle_color = _with_alpha(color, opacity)
             _draw_circle(fill_shader, point_a, 7.0, _with_alpha(handle_color, 0.45), filled=True)
             _draw_circle(fill_shader, point_a, 7.0, handle_color, filled=False)
             _draw_circle(fill_shader, point_b, 7.0, _with_alpha(handle_color, 0.45), filled=True)
             _draw_circle(fill_shader, point_b, 7.0, handle_color, filled=False)
 
-    for axis, vanishing in vanishing_points.items():
-        if abs(float(vanishing[2])) < 1.0e-10:
+    drawable_vps: dict[str, np.ndarray] = {}
+    for axis, vanishing in overlay_vanishing_points.items():
+        ideal_xy = _finite_vanishing_xy(vanishing)
+        if ideal_xy is None or not _vanishing_within_draw_limit(settings, ideal_xy):
+            continue
+        drawable_vps[axis] = ideal_xy
+        # Measured VPs always; implied ones only when they complete the horizon.
+        if axis not in vanishing_points and axis not in ("x", "z"):
             continue
         marker = scene.ideal_to_region(
             context,
-            float(vanishing[0] / vanishing[2]),
-            float(vanishing[1] / vanishing[2]),
+            float(ideal_xy[0]),
+            float(ideal_xy[1]),
         )
-        if marker is not None:
-            left, right, bottom, top = bounds
-            if left <= marker.x <= right and bottom <= marker.y <= top:
-                _draw_crosshair(fill_shader, marker, _with_alpha(AXIS_COLORS[axis], opacity))
+        # Allow markers outside the plate, but still inside the 3D View region.
+        if marker is not None and _point_in_bounds(marker, region_bounds):
+            marker_opacity = opacity if axis in vanishing_points else opacity * 0.7
+            _draw_crosshair(
+                fill_shader,
+                marker,
+                _with_alpha(AXIS_COLORS[axis], marker_opacity),
+            )
 
-    if "x" in vanishing_points and "z" in vanishing_points:
-        first = vanishing_points["x"]
-        second = vanishing_points["z"]
-        if abs(float(first[2])) > 1.0e-10 and abs(float(second[2])) > 1.0e-10:
-            first_ideal = first[:2] / first[2]
-            second_ideal = second[:2] / second[2]
-            _draw_ideal_infinite_line(
+    if "x" in overlay_vanishing_points and "z" in overlay_vanishing_points:
+        first_xy = drawable_vps.get("x")
+        second_xy = drawable_vps.get("z")
+        if first_xy is not None and second_xy is not None:
+            _draw_ideal_segment(
                 context,
-                first_ideal,
-                second_ideal - first_ideal,
+                first_xy,
+                second_xy,
                 _with_alpha(AXIS_COLORS["y"], opacity * 0.75),
                 1.4,
+                samples=96,
+                clip_bounds=region_bounds,
             )
+        else:
+            first = overlay_vanishing_points["x"]
+            second = overlay_vanishing_points["z"]
+            first_xy_raw = _finite_vanishing_xy(first)
+            second_xy_raw = _finite_vanishing_xy(second)
+            if first_xy_raw is not None and second_xy_raw is not None:
+                _draw_ideal_guide_line(
+                    context,
+                    0.5 * (first_xy_raw + second_xy_raw),
+                    second_xy_raw - first_xy_raw,
+                    _with_alpha(AXIS_COLORS["y"], opacity * 0.75),
+                    1.4,
+                )
 
 
 def _draw_placement(context: bpy.types.Context, fill_shader, settings) -> None:
@@ -301,7 +395,12 @@ def _draw_placement(context: bpy.types.Context, fill_shader, settings) -> None:
             settings.origin_image[0],
             settings.origin_image[1],
         )
-        _draw_crosshair(fill_shader, origin, (0.35, 1.0, 0.45, settings.controls_opacity), 7.0)
+        _draw_crosshair(
+            fill_shader,
+            origin,
+            _with_alpha((0.35, 1.0, 0.45, 1.0), settings.overlay_opacity),
+            7.0,
+        )
 
 
 def _draw_preview(context: bpy.types.Context, settings) -> None:
