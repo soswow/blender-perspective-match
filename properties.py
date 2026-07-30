@@ -10,6 +10,18 @@ AXIS_ITEMS = (
     ("y", "Z (Blue)", "Vertical edges parallel to Blender Z"),
 )
 
+# Per-pick sync weights: High pulls harder; Low may drift in the solve.
+LANDMARK_CONFIDENCE_ITEMS = (
+    ("HIGH", "High", "Strong constraint — clear, precise pick"),
+    ("NORMAL", "Normal", "Default constraint weight"),
+    ("LOW", "Low", "Soft constraint — uncertain pick; landmark may drift"),
+)
+
+LANDMARK_KIND_ITEMS = (
+    ("POINT", "Point", "Correspond a single feature point across stills"),
+    ("LINE", "Line", "Correspond the same 3D edge as a 2D segment in each still"),
+)
+
 
 def tag_viewport_redraw(context: bpy.types.Context | None = None) -> None:
     """Request redraw in every 3D View."""
@@ -25,6 +37,42 @@ def tag_viewport_redraw(context: bpy.types.Context | None = None) -> None:
 
 def _redraw(_self, context: bpy.types.Context) -> None:
     tag_viewport_redraw(context)
+
+
+def _update_landmark_empties(_self, context: bpy.types.Context) -> None:
+    """Rebuild point Empties / line meshes when visibility or size changes."""
+    from . import scene
+
+    scene.sync_landmark_empties(context)
+    tag_viewport_redraw(context)
+
+
+def _update_landmark_kind(self, context: bpy.types.Context) -> None:
+    """Clear line-only links when switching away from Line."""
+    if self.kind != "LINE":
+        self.parallel_to = "NONE"
+    tag_viewport_redraw(context)
+
+
+def _parallel_to_items(self, context):
+    """Dropdown of other Line landmarks for the parallel constraint."""
+    items = [("NONE", "None", "Not marked parallel to another line landmark")]
+    if context is None:
+        return items
+    space = workspace(context)
+    for landmark in space.landmarks:
+        if landmark.kind != "LINE":
+            continue
+        if landmark.item_id == self.item_id or not landmark.item_id:
+            continue
+        items.append(
+            (
+                landmark.item_id,
+                landmark.name or landmark.item_id[:8],
+                "Same 3D direction as this line",
+            )
+        )
+    return items
 
 
 def is_match_root(obj: bpy.types.Object | None) -> bool:
@@ -59,6 +107,33 @@ def workspace(context: bpy.types.Context | None = None) -> PMWorkspace:
     """Return the scene-level Perspective Match workspace."""
     blender_context = context or bpy.context
     return blender_context.scene.match_perspective
+
+
+def ensure_landmark_creation_indices(space: PMWorkspace | None = None) -> None:
+    """Assign creation_index to landmarks that lack one (legacy / just-added).
+
+    Walks current collection order so existing projects keep their saved order
+    as the restored “original” order when Sort A–Z is off.
+
+    Must not be called from UI draw / UIList.filter_items (Scene ID is frozen).
+    Safe from operators, load_post, and register().
+    """
+    target = space
+    if target is None:
+        for scene in bpy.data.scenes:
+            if hasattr(scene, "match_perspective"):
+                ensure_landmark_creation_indices(scene.match_perspective)
+        return
+    max_index = -1
+    for landmark in target.landmarks:
+        if landmark.creation_index >= 0:
+            max_index = max(max_index, int(landmark.creation_index))
+    next_index = max(max_index + 1, int(target.next_landmark_creation_index))
+    for landmark in target.landmarks:
+        if landmark.creation_index < 0:
+            landmark.creation_index = next_index
+            next_index += 1
+    target.next_landmark_creation_index = next_index
 
 
 def active_root(context: bpy.types.Context | None = None) -> bpy.types.Object | None:
@@ -127,6 +202,62 @@ def _update_active_match(self, context) -> None:
     tag_viewport_redraw(context)
 
 
+# Suppress recursive EnumProperty updates while syncing the anchor dropdown.
+_syncing_anchor_match = False
+
+
+def sync_anchor_match_enum(space: PMWorkspace, identifier: str) -> None:
+    """Set the sync-anchor dropdown without re-entering its update callback."""
+    global _syncing_anchor_match
+    if space.anchor_match == identifier:
+        return
+    _syncing_anchor_match = True
+    try:
+        space.anchor_match = identifier
+    finally:
+        _syncing_anchor_match = False
+
+
+def _anchor_match_items(self, context):
+    """Dynamic enum entries for the sync anchor dropdown."""
+    items = [("NONE", "(None)", "No sync anchor selected")]
+    for root in iter_match_roots():
+        items.append((root.name, root.name, "Use this match as the shared-world anchor"))
+    return items
+
+
+def _update_anchor_match(self, context) -> None:
+    """Keep the anchor pointer aligned with the dropdown selection."""
+    if _syncing_anchor_match:
+        return
+    name = self.anchor_match
+    if name in {"", "NONE"}:
+        self.anchor_root = None
+        return
+    root = bpy.data.objects.get(name)
+    if is_match_root(root):
+        self.anchor_root = root
+    else:
+        self.anchor_root = None
+        sync_anchor_match_enum(self, "NONE")
+    tag_viewport_redraw(context)
+
+
+def anchor_root(context: bpy.types.Context | None = None) -> bpy.types.Object | None:
+    """Return the sync anchor root after pruning invalid pointers."""
+    space = workspace(context)
+    root = space.anchor_root
+    if not is_match_root(root):
+        if space.anchor_root is not None:
+            space.anchor_root = None
+            sync_anchor_match_enum(space, "NONE")
+        return None
+    # Keep the dropdown label aligned after renames.
+    if space.anchor_match != root.name:
+        sync_anchor_match_enum(space, root.name)
+    return root
+
+
 class PMLineSegment(bpy.types.PropertyGroup):
     """One stored VP segment in source-image coordinates."""
 
@@ -136,6 +267,101 @@ class PMLineSegment(bpy.types.PropertyGroup):
     y1: bpy.props.FloatProperty(default=0.0)
     x2: bpy.props.FloatProperty(default=0.0)
     y2: bpy.props.FloatProperty(default=0.0)
+
+
+class PMLandmarkObservation(bpy.types.PropertyGroup):
+    """One landmark pick inside a single match still."""
+
+    match_root: bpy.props.PointerProperty(
+        name="Match",
+        type=bpy.types.Object,
+    )
+    x: bpy.props.FloatProperty(default=0.0)
+    y: bpy.props.FloatProperty(default=0.0)
+    # Second endpoint for LINE landmarks (ignored for POINT).
+    x2: bpy.props.FloatProperty(default=0.0)
+    y2: bpy.props.FloatProperty(default=0.0)
+    is_set: bpy.props.BoolProperty(default=False)
+    confidence: bpy.props.EnumProperty(
+        name="Confidence",
+        description=(
+            "How strongly this pick constrains sync. Low lets the landmark Empty "
+            "drift relative to this still"
+        ),
+        items=LANDMARK_CONFIDENCE_ITEMS,
+        default="NORMAL",
+        update=_redraw,
+    )
+
+
+class PMLandmark(bpy.types.PropertyGroup):
+    """Named 3D landmark with per-match image observations."""
+
+    item_id: bpy.props.StringProperty(default="", options={"HIDDEN"})
+    # Stable insertion order for UI sort-off; assigned on add / file load migrate.
+    creation_index: bpy.props.IntProperty(default=-1, options={"HIDDEN"})
+    name: bpy.props.StringProperty(name="Name", default="Landmark")
+    kind: bpy.props.EnumProperty(
+        name="Kind",
+        description="Point feature or the same 3D edge drawn as a line in each still",
+        items=LANDMARK_KIND_ITEMS,
+        default="POINT",
+        update=_update_landmark_kind,
+    )
+    on_ground: bpy.props.BoolProperty(
+        name="On Ground",
+        description=(
+            "Optional: landmark lies on Z=0 in the anchor world. Used only to pin "
+            "absolute baseline scale after 2D↔2D relative pose is solved"
+        ),
+        default=False,
+        update=_redraw,
+    )
+    known_object: bpy.props.PointerProperty(
+        name="Known 3D",
+        description=(
+            "Optional Blender object (Empty, mesh origin, …) whose world location "
+            "is a fixed landmark in shared space. For Line landmarks this is one "
+            "endpoint of a known edge"
+        ),
+        type=bpy.types.Object,
+        update=_redraw,
+    )
+    known_object_b: bpy.props.PointerProperty(
+        name="Known 3D B",
+        description=(
+            "Second endpoint Empty/object for a Known 3D line landmark. "
+            "With both ends set, the edge is metric in the anchor world"
+        ),
+        type=bpy.types.Object,
+        update=_redraw,
+    )
+    parallel_to: bpy.props.EnumProperty(
+        name="Is Parallel To",
+        description=(
+            "Another Line landmark that shares the same 3D direction. "
+            "Constrains relative orientation during sync"
+        ),
+        items=_parallel_to_items,
+        update=_redraw,
+    )
+    observations: bpy.props.CollectionProperty(type=PMLandmarkObservation)
+    position: bpy.props.FloatVectorProperty(
+        name="Position",
+        size=3,
+        subtype="TRANSLATION",
+        default=(0.0, 0.0, 0.0),
+    )
+    # Second endpoint for LINE landmarks (mesh edge viz after sync).
+    position_b: bpy.props.FloatVectorProperty(
+        name="Position B",
+        size=3,
+        subtype="TRANSLATION",
+        default=(0.0, 0.0, 0.0),
+    )
+    has_position: bpy.props.BoolProperty(default=False, options={"HIDDEN"})
+    has_line_segment: bpy.props.BoolProperty(default=False, options={"HIDDEN"})
+    rmse_px: bpy.props.FloatProperty(default=0.0, options={"HIDDEN"})
 
 
 class PMSession(bpy.types.PropertyGroup):
@@ -225,7 +451,7 @@ class PMSession(bpy.types.PropertyGroup):
     )
     overlay_opacity: bpy.props.FloatProperty(
         name="Opacity",
-        description="Opacity for VP guides, handles, and the origin marker",
+        description="Opacity for VP guides, handles, origin marker, and landmark picks",
         default=0.9,
         min=0.05,
         max=1.0,
@@ -275,6 +501,22 @@ class PMSession(bpy.types.PropertyGroup):
     status: bpy.props.StringProperty(default="Load a reference image")
     error: bpy.props.StringProperty(default="")
 
+    # Sync Empty transform (private → shared); identity when not registered.
+    sync_is_applied: bpy.props.BoolProperty(default=False, options={"HIDDEN"})
+    sync_scale: bpy.props.FloatProperty(default=1.0, options={"HIDDEN"})
+    sync_rotation: bpy.props.FloatVectorProperty(
+        size=4,
+        default=(1.0, 0.0, 0.0, 0.0),
+        options={"HIDDEN"},
+    )
+    sync_translation: bpy.props.FloatVectorProperty(
+        size=3,
+        default=(0.0, 0.0, 0.0),
+        subtype="TRANSLATION",
+        options={"HIDDEN"},
+    )
+    sync_rmse_px: bpy.props.FloatProperty(default=0.0, options={"HIDDEN"})
+
 
 class PMWorkspace(bpy.types.PropertyGroup):
     """Scene-level UI controller for the active match session."""
@@ -290,12 +532,73 @@ class PMWorkspace(bpy.types.PropertyGroup):
         items=_active_match_items,
         update=_update_active_match,
     )
+    anchor_root: bpy.props.PointerProperty(
+        name="Sync Anchor Root",
+        type=bpy.types.Object,
+        options={"HIDDEN"},
+    )
+    anchor_match: bpy.props.EnumProperty(
+        name="Anchor Match",
+        description="Match whose private world defines shared scale and axes before sync rotation",
+        items=_anchor_match_items,
+        update=_update_anchor_match,
+    )
+    landmarks: bpy.props.CollectionProperty(type=PMLandmark)
+    active_landmark_index: bpy.props.IntProperty(default=-1, options={"HIDDEN"})
+    next_landmark_creation_index: bpy.props.IntProperty(
+        default=0,
+        min=0,
+        options={"HIDDEN"},
+    )
+    landmarks_sort_alphabetical: bpy.props.BoolProperty(
+        name="Sort A–Z",
+        description=(
+            "When enabled, list landmarks alphabetically by name. "
+            "When disabled, restore original add order"
+        ),
+        default=False,
+        options={"SKIP_SAVE"},
+    )
+    landmark_pick_confidence: bpy.props.EnumProperty(
+        name="Pick Confidence",
+        description="Confidence applied to the next landmark pick in the active match",
+        items=LANDMARK_CONFIDENCE_ITEMS,
+        default="NORMAL",
+        update=_redraw,
+    )
+    show_landmark_overlay: bpy.props.BoolProperty(
+        name="Landmark Guides",
+        description="Show landmark picks and line segments on the reference plate",
+        default=True,
+        update=_redraw,
+    )
+    show_landmark_empties: bpy.props.BoolProperty(
+        name="Landmark Empties",
+        description=(
+            "Show solved landmark helpers in the viewport after sync: "
+            "Empties for points, single-edge meshes for lines"
+        ),
+        default=True,
+        update=_update_landmark_empties,
+    )
+    landmark_empty_size: bpy.props.FloatProperty(
+        name="Size",
+        description="Display size of solved point landmark Empties",
+        default=0.25,
+        min=0.01,
+        soft_max=5.0,
+        step=1,
+        precision=2,
+        update=_update_landmark_empties,
+    )
+    sync_status: bpy.props.StringProperty(default="")
     work_mode: bpy.props.EnumProperty(
         name="Tool",
         items=(
             ("NONE", "Navigate", "Use normal viewport navigation"),
             ("LINE", "VP Lines", "Draw or edit vanishing-point lines"),
             ("ORIGIN", "Origin", "Pick the world origin on the ground plane"),
+            ("LANDMARK", "Landmark", "Pick the active landmark in the active match"),
         ),
         default="NONE",
         options={"SKIP_SAVE"},
@@ -309,6 +612,8 @@ PMSettings = PMSession
 
 CLASSES = (
     PMLineSegment,
+    PMLandmarkObservation,
+    PMLandmark,
     PMSession,
     PMWorkspace,
 )

@@ -23,10 +23,15 @@ def _workspace(context: bpy.types.Context):
 
 
 def _report_exception(operator: bpy.types.Operator, error: Exception) -> set[str]:
+    if isinstance(error, KeyError):
+        message = f"Sync internal error (missing {error})"
+    else:
+        message = str(error)
     settings = properties.active_session(bpy.context)
     if settings is not None:
-        settings.error = str(error)
-    operator.report({"ERROR"}, str(error))
+        settings.error = message
+    # Blender status reports truncate; keep the full text on the session/workspace.
+    operator.report({"ERROR"}, message[:255] if len(message) > 255 else message)
     return {"CANCELLED"}
 
 
@@ -484,6 +489,7 @@ class PM_OT_interact(bpy.types.Operator):
         items=(
             ("LINE", "VP Lines", "Draw and edit VP lines"),
             ("ORIGIN", "Origin", "Pick the ground origin"),
+            ("LANDMARK", "Landmark", "Pick the active landmark in this match"),
         ),
         default="LINE",
     )
@@ -545,6 +551,14 @@ class PM_OT_interact(bpy.types.Operator):
     def _status_prompt(self) -> str:
         if self.mode == "LINE":
             return "Drag VP segments · click one to select · Esc exits"
+        if self.mode == "LANDMARK":
+            landmark = scene.active_landmark(bpy.context)
+            name = landmark.name if landmark is not None else "(none)"
+            if landmark is not None and landmark.kind == "LINE":
+                return (
+                    f"Drag line '{name}' · pull endpoints to edit · Esc exits"
+                )
+            return f"Click landmark '{name}' in this match · Esc exits"
         return "Click the world origin on the ground plane"
 
     def _finish(self, context: bpy.types.Context, *, cancelled: bool = False) -> set[str]:
@@ -618,9 +632,76 @@ class PM_OT_interact(bpy.types.Operator):
         self._drag_kind = "NEW_LINE"
         overlay.set_preview(context, "LINE", image_point, image_point)
 
+    def _hit_landmark_line(
+        self,
+        context,
+        mouse: Vector,
+    ) -> int:
+        """Return 1/2 for an endpoint hit on the active LINE observation, else 0."""
+        landmark = scene.active_landmark(context)
+        root = properties.active_root(context)
+        if landmark is None or landmark.kind != "LINE" or root is None:
+            return 0
+        observation = scene.observation_for_match(landmark, root)
+        if observation is None or not observation.is_set:
+            return 0
+        for endpoint_index, image_point in enumerate(
+            ((observation.x, observation.y), (observation.x2, observation.y2))
+        ):
+            screen = scene.image_to_region(context, image_point[0], image_point[1])
+            if screen is not None and (screen - mouse).length <= 12.0:
+                return endpoint_index + 1
+        point_a = scene.image_to_region(context, observation.x, observation.y)
+        point_b = scene.image_to_region(context, observation.x2, observation.y2)
+        if point_a is None or point_b is None:
+            return 0
+        if _distance_to_segment(mouse, point_a, point_b) < 11.0:
+            # Segment body hit — treat as select / no new draw; user can grab ends.
+            return -1
+        return 0
+
+    def _begin_landmark_line_drag(
+        self,
+        context,
+        event,
+        image_point: tuple[float, float],
+        region,
+    ) -> None:
+        mouse = Vector((event.mouse_x - region.x, event.mouse_y - region.y))
+        endpoint = self._hit_landmark_line(context, mouse)
+        landmark = scene.active_landmark(context)
+        root = properties.active_root(context)
+        observation = (
+            scene.observation_for_match(landmark, root)
+            if landmark is not None and root is not None
+            else None
+        )
+        if endpoint > 0 and observation is not None:
+            self._drag_kind = "LANDMARK_LINE_ENDPOINT"
+            self._edit_endpoint = endpoint
+            self._original = (
+                observation.x,
+                observation.y,
+                observation.x2,
+                observation.y2,
+            )
+            properties.tag_viewport_redraw(context)
+            return
+        if endpoint < 0:
+            # Clicked the segment body — keep existing line; don't replace it.
+            settings = _session(context)
+            if settings is not None:
+                settings.status = self._status_prompt()
+            self._drag_kind = ""
+            properties.tag_viewport_redraw(context)
+            return
+        self._start = image_point
+        self._drag_kind = "LANDMARK_LINE"
+        overlay.set_preview(context, "LINE", image_point, image_point)
+
     def _update_drag(self, context, image_point: tuple[float, float]) -> None:
         settings = _session(context)
-        if self._drag_kind == "NEW_LINE":
+        if self._drag_kind in {"NEW_LINE", "LANDMARK_LINE"}:
             overlay.set_preview(context, "LINE", self._start, image_point)
         elif self._drag_kind == "LINE_ENDPOINT":
             line = settings.lines[self._edit_index]
@@ -629,6 +710,56 @@ class PM_OT_interact(bpy.types.Operator):
             else:
                 line.x2, line.y2 = image_point
             properties.tag_viewport_redraw(context)
+        elif self._drag_kind == "LANDMARK_LINE_ENDPOINT":
+            landmark = scene.active_landmark(context)
+            root = properties.active_root(context)
+            observation = (
+                scene.observation_for_match(landmark, root)
+                if landmark is not None and root is not None
+                else None
+            )
+            if observation is None:
+                return
+            if self._edit_endpoint == 1:
+                observation.x, observation.y = image_point
+            else:
+                observation.x2, observation.y2 = image_point
+            properties.tag_viewport_redraw(context)
+
+    def _complete_landmark_line_drag(
+        self,
+        context,
+        image_point: tuple[float, float],
+    ) -> None:
+        settings = _session(context)
+        if self._drag_kind == "LANDMARK_LINE_ENDPOINT":
+            # Endpoint already updated live; just finish the gesture.
+            self._drag_kind = ""
+            self._original = None
+            if settings is not None:
+                settings.status = self._status_prompt()
+            properties.tag_viewport_redraw(context)
+            return
+        if self._start is not None:
+            length = math.hypot(
+                image_point[0] - self._start[0],
+                image_point[1] - self._start[1],
+            )
+            if length >= 8.0:
+                try:
+                    scene.set_landmark_line_observation(
+                        context,
+                        self._start,
+                        image_point,
+                    )
+                except Exception as error:
+                    self.report({"ERROR"}, str(error))
+        self._drag_kind = ""
+        self._start = None
+        overlay.clear_preview(context)
+        if settings is not None:
+            settings.status = self._status_prompt()
+        properties.tag_viewport_redraw(context)
 
     def _complete_drag(self, context, image_point: tuple[float, float]) -> None:
         settings = _session(context)
@@ -652,12 +783,31 @@ class PM_OT_interact(bpy.types.Operator):
         if not self._drag_kind:
             return False
         settings = _session(context)
-        if self._original is not None and self._edit_index >= 0:
-            if self._drag_kind == "LINE_ENDPOINT":
+        if self._original is not None and self._drag_kind == "LINE_ENDPOINT":
+            if self._edit_index >= 0:
                 line = settings.lines[self._edit_index]
                 line.x1, line.y1, line.x2, line.y2 = self._original
+        if (
+            self._original is not None
+            and self._drag_kind == "LANDMARK_LINE_ENDPOINT"
+        ):
+            landmark = scene.active_landmark(context)
+            root = properties.active_root(context)
+            observation = (
+                scene.observation_for_match(landmark, root)
+                if landmark is not None and root is not None
+                else None
+            )
+            if observation is not None:
+                (
+                    observation.x,
+                    observation.y,
+                    observation.x2,
+                    observation.y2,
+                ) = self._original
         self._drag_kind = ""
         self._original = None
+        self._start = None
         overlay.clear_preview(context)
         return True
 
@@ -720,11 +870,34 @@ class PM_OT_interact(bpy.types.Operator):
                         self.report({"ERROR"}, str(error))
                         return {"RUNNING_MODAL"}
                     return self._finish(context)
+                if self.mode == "LANDMARK":
+                    landmark = scene.active_landmark(context)
+                    if landmark is not None and landmark.kind == "LINE":
+                        self._begin_landmark_line_drag(
+                            context, event, image_point, region
+                        )
+                        return {"RUNNING_MODAL"}
+                    try:
+                        scene.set_landmark_observation(context, image_point)
+                    except Exception as error:
+                        self.report({"ERROR"}, str(error))
+                        return {"RUNNING_MODAL"}
+                    # Stay in the tool so the same landmark can be picked in other matches
+                    # after switching Active Match from the sidebar.
+                    settings.status = self._status_prompt()
+                    properties.tag_viewport_redraw(context)
+                    return {"RUNNING_MODAL"}
                 self._begin_drag(context, event, image_point, region)
                 return {"RUNNING_MODAL"}
             if event.type == "LEFTMOUSE" and event.value == "RELEASE" and self._drag_kind:
                 if image_point is not None:
-                    self._complete_drag(context, image_point)
+                    if self._drag_kind in {
+                        "LANDMARK_LINE",
+                        "LANDMARK_LINE_ENDPOINT",
+                    }:
+                        self._complete_landmark_line_drag(context, image_point)
+                    else:
+                        self._complete_drag(context, image_point)
                 else:
                     self._cancel_drag(context)
                 return {"RUNNING_MODAL"}
@@ -793,6 +966,284 @@ class PM_OT_reload(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class PM_OT_add_landmark(bpy.types.Operator):
+    """Create a new named sync landmark."""
+
+    bl_idname = "perspective_match.add_landmark"
+    bl_label = "Add Landmark"
+    bl_description = "Add a point or line landmark that can be picked in multiple stills"
+    bl_options = {"REGISTER", "UNDO"}
+
+    kind: bpy.props.EnumProperty(
+        name="Kind",
+        items=properties.LANDMARK_KIND_ITEMS,
+        default="POINT",
+    )
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        space = _workspace(context)
+        landmark = space.landmarks.add()
+        landmark.item_id = f"landmark-{uuid4().hex}"
+        landmark.kind = self.kind
+        if self.kind == "LINE":
+            landmark.name = f"Line {len(space.landmarks)}"
+        else:
+            landmark.name = f"Landmark {len(space.landmarks)}"
+        properties.ensure_landmark_creation_indices(space)
+        space.active_landmark_index = len(space.landmarks) - 1
+        properties.tag_viewport_redraw(context)
+        return {"FINISHED"}
+
+
+class PM_OT_add_landmarks_from_selected(bpy.types.Operator):
+    """Create Known 3D landmarks from the current object selection."""
+
+    bl_idname = "perspective_match.add_landmarks_from_selected"
+    bl_label = "Landmarks from Selected"
+    bl_description = (
+        "Create one sync landmark per selected object as Known 3D and "
+        "auto-project into the anchor still"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        return bool(context.selected_objects)
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        space = _workspace(context)
+        created_landmarks = []
+        for obj in context.selected_objects:
+            if properties.is_match_root(obj):
+                continue
+            if obj.type == "CAMERA":
+                continue
+            landmark = space.landmarks.add()
+            landmark.item_id = f"landmark-{uuid4().hex}"
+            landmark.name = obj.name
+            landmark.known_object = obj
+            created_landmarks.append(landmark)
+        if not created_landmarks:
+            self.report({"ERROR"}, "Select Empties or meshes (not match cameras)")
+            return {"CANCELLED"}
+        properties.ensure_landmark_creation_indices(space)
+        space.active_landmark_index = len(space.landmarks) - 1
+        projected, target = scene.auto_project_known_landmarks(
+            context,
+            created_landmarks,
+        )
+        properties.tag_viewport_redraw(context)
+        if projected and target is not None:
+            self.report(
+                {"INFO"},
+                f"Added {len(created_landmarks)} Known 3D · "
+                f"projected {projected} into {target.name}",
+            )
+        elif projected == 0:
+            self.report(
+                {"WARNING"},
+                f"Added {len(created_landmarks)} Known 3D · "
+                "could not project into the anchor (set Anchor, solve camera, "
+                "check Empties are in front of the camera)",
+            )
+        else:
+            self.report({"INFO"}, f"Added {len(created_landmarks)} Known 3D landmark(s)")
+        return {"FINISHED"}
+
+
+class PM_OT_landmark_use_selected(bpy.types.Operator):
+    """Assign the active object as Known 3D for the active landmark."""
+
+    bl_idname = "perspective_match.landmark_use_selected"
+    bl_label = "Use Selected as Known 3D"
+    bl_description = (
+        "Link the active object’s world location to this landmark as fixed "
+        "shared 3D (then pick the feature in other stills in 2D)"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        landmark = scene.active_landmark(context)
+        obj = context.active_object
+        return (
+            landmark is not None
+            and obj is not None
+            and not properties.is_match_root(obj)
+            and obj.type != "CAMERA"
+        )
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        landmark = scene.active_landmark(context)
+        obj = context.active_object
+        if landmark is None or obj is None:
+            return {"CANCELLED"}
+        landmark.known_object = obj
+        if not landmark.name or landmark.name.startswith("Landmark "):
+            landmark.name = obj.name
+        projected, target = scene.auto_project_known_landmarks(context, [landmark])
+        properties.tag_viewport_redraw(context)
+        if projected and target is not None:
+            self.report(
+                {"INFO"},
+                f"Known 3D ← {obj.name} · projected into {target.name}",
+            )
+        else:
+            self.report({"INFO"}, f"Known 3D ← {obj.name}")
+        return {"FINISHED"}
+
+
+class PM_OT_landmark_clear_known(bpy.types.Operator):
+    """Clear the Known 3D object link on the active landmark."""
+
+    bl_idname = "perspective_match.landmark_clear_known"
+    bl_label = "Clear Known 3D"
+    bl_description = "Remove the Blender object link from the active landmark"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        landmark = scene.active_landmark(context)
+        return landmark is not None and (
+            landmark.known_object is not None or landmark.known_object_b is not None
+        )
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        landmark = scene.active_landmark(context)
+        if landmark is None:
+            return {"CANCELLED"}
+        landmark.known_object = None
+        landmark.known_object_b = None
+        properties.tag_viewport_redraw(context)
+        return {"FINISHED"}
+
+
+class PM_OT_remove_landmark(bpy.types.Operator):
+    """Delete the active sync landmark."""
+
+    bl_idname = "perspective_match.remove_landmark"
+    bl_label = "Remove Landmark"
+    bl_description = "Delete the active landmark and its picks"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        space = properties.workspace(context)
+        return 0 <= space.active_landmark_index < len(space.landmarks)
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        space = _workspace(context)
+        index = space.active_landmark_index
+        space.landmarks.remove(index)
+        space.active_landmark_index = min(index, len(space.landmarks) - 1)
+        scene.sync_landmark_empties(context)
+        properties.tag_viewport_redraw(context)
+        return {"FINISHED"}
+
+
+class PM_OT_clear_landmark_observation(bpy.types.Operator):
+    """Clear the active match's pick on the active landmark."""
+
+    bl_idname = "perspective_match.clear_landmark_observation"
+    bl_label = "Clear Pick"
+    bl_description = "Remove this match's observation from the active landmark"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        landmark = scene.active_landmark(context)
+        root = properties.active_root(context)
+        if landmark is None or root is None:
+            return False
+        return scene.observation_for_match(landmark, root) is not None
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        if not scene.clear_landmark_observation_for_active(context):
+            self.report({"WARNING"}, "No pick to clear")
+            return {"CANCELLED"}
+        return {"FINISHED"}
+
+
+class PM_OT_solve_sync(bpy.types.Operator):
+    """Register non-anchor matches to the anchor via the landmark graph."""
+
+    bl_idname = "perspective_match.solve_sync"
+    bl_label = "Solve Sync"
+    bl_description = (
+        "Register non-anchor match Empties from 2D landmarks and/or Known 3D "
+        "Blender objects. On Ground / Known 3D pin absolute scale vs the anchor"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        return (
+            properties.anchor_root(context) is not None
+            and len(properties.iter_match_roots()) >= 2
+            and len(properties.workspace(context).landmarks) >= 1
+        )
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        workspace = _workspace(context)
+        try:
+            result = scene.solve_and_apply_sync(context)
+        except Exception as error:
+            message = (
+                f"Sync internal error (missing {error})"
+                if isinstance(error, KeyError)
+                else str(error)
+            )
+            workspace.sync_status = message
+            return _report_exception(self, error)
+        # Clear a previous failure banner on success.
+        settings = properties.active_session(context)
+        if settings is not None:
+            settings.error = ""
+        self.report({"INFO"}, result.message)
+        return {"FINISHED"}
+
+
+class PM_OT_diagnose_sync(bpy.types.Operator):
+    """Report sync quality without moving match Empties."""
+
+    bl_idname = "perspective_match.diagnose_sync"
+    bl_label = "Diagnose"
+    bl_description = (
+        "Run the sync solver and list per-landmark RMSE plus Known 3D "
+        "consistency checks without applying a pose"
+    )
+    bl_options = {"REGISTER"}
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        return PM_OT_solve_sync.poll(context)
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        workspace = _workspace(context)
+        try:
+            result = scene.diagnose_sync(context)
+        except Exception as error:
+            workspace.sync_status = str(error)
+            return _report_exception(self, error)
+        level = {"INFO"} if result.success else {"WARNING"}
+        self.report(level, workspace.sync_status)
+        return {"FINISHED"}
+
+
+class PM_OT_clear_sync(bpy.types.Operator):
+    """Reset match Empty sync transforms and landmark Empties."""
+
+    bl_idname = "perspective_match.clear_sync"
+    bl_label = "Clear Sync"
+    bl_description = "Reset all match root Empties to identity and clear landmark Empties"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        scene.clear_sync_transforms(context)
+        self.report({"INFO"}, "Sync cleared")
+        return {"FINISHED"}
+
+
 CLASSES = (
     PM_OT_new_match_camera,
     PM_OT_unload_match,
@@ -811,5 +1262,14 @@ CLASSES = (
     PM_OT_toggle_undistorted,
     PM_OT_apply_view_lighting,
     PM_OT_reset_view_lighting,
+    PM_OT_add_landmark,
+    PM_OT_add_landmarks_from_selected,
+    PM_OT_landmark_use_selected,
+    PM_OT_landmark_clear_known,
+    PM_OT_remove_landmark,
+    PM_OT_clear_landmark_observation,
+    PM_OT_solve_sync,
+    PM_OT_diagnose_sync,
+    PM_OT_clear_sync,
     PM_OT_interact,
 )

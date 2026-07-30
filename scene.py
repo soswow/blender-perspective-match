@@ -260,6 +260,7 @@ def _reset_session_edit_state(session: properties.PMSession) -> None:
     session.origin_is_set = False
     session.project_path = ""
     session.source_session_json = ""
+    clear_similarity_on_session(session)
     invalidate_undistorted_cache(session)
     cached_view = session.view_image
     session.view_lighting_applied = False
@@ -289,6 +290,7 @@ def bind_reference_image(context: bpy.types.Context, image_path: str) -> bpy.typ
         raise ValueError("The selected image has no readable pixel dimensions")
 
     _reset_session_edit_state(session)
+    root.matrix_world = Matrix.Identity(4)
 
     camera_data = camera_object.data
     camera_data.show_background_images = True
@@ -336,7 +338,11 @@ def apply_camera(
     settings: properties.PMSession,
     calibration: core.Calibration,
 ) -> None:
-    """Apply solved intrinsics and OpenCV extrinsics to the managed Blender camera."""
+    """Apply solved intrinsics and OpenCV extrinsics to the managed Blender camera.
+
+    The private-world pose is written as the camera's *local* matrix so a sync
+    transform on the match root Empty can move the whole rig into shared space.
+    """
     camera_object = settings.camera_object
     if camera_object is None or camera_object.type != "CAMERA":
         raise ValueError("Active match has no camera")
@@ -385,15 +391,22 @@ def apply_camera(
         else:
             camera_data.background_images[0].image = settings.image
 
-    camera_to_world_blender = calibration.rotation_w2c.T @ CV_CAMERA_TO_BLENDER_CAMERA
-    matrix_world = Matrix(camera_to_world_blender.tolist()).to_4x4()
-    matrix_world.translation = Vector(calibration.camera_center.tolist())
-    camera_object.matrix_world = matrix_world
+    # Private pose as local; root Empty carries optional sync similarity.
+    camera_object.matrix_parent_inverse = Matrix.Identity(4)
+    camera_object.matrix_local = private_camera_matrix(calibration)
     blender_scene.camera = camera_object
     blender_scene.render.resolution_x = int(plate_width)
     blender_scene.render.resolution_y = plate_height
     blender_scene.render.resolution_percentage = 100
     store_calibration(settings, calibration)
+
+
+def private_camera_matrix(calibration: core.Calibration) -> Matrix:
+    """Blender local matrix for a private-world OpenCV calibration."""
+    camera_to_world_blender = calibration.rotation_w2c.T @ CV_CAMERA_TO_BLENDER_CAMERA
+    matrix_world = Matrix(camera_to_world_blender.tolist()).to_4x4()
+    matrix_world.translation = Vector(calibration.camera_center.tolist())
+    return matrix_world
 
 
 def refine_match(context: bpy.types.Context) -> core.Calibration:
@@ -795,4 +808,611 @@ def refresh_background_projection(context: bpy.types.Context) -> None:
     if settings is None:
         return
     apply_camera(context.scene, settings, calibration_from_settings(settings))
+    properties.tag_viewport_redraw(context)
+
+
+def _identity_root_matrix() -> Matrix:
+    return Matrix.Identity(4)
+
+
+def _similarity_to_matrix(similarity) -> Matrix:
+    """Convert a sync SimilarityTransform into a Blender matrix."""
+    return Matrix(similarity.matrix().tolist())
+
+
+def store_similarity_on_session(session: properties.PMSession, similarity) -> None:
+    """Persist a solved similarity onto the match session RNA."""
+    session.sync_is_applied = True
+    session.sync_scale = float(similarity.scale)
+    rotation = Matrix(similarity.rotation.tolist()).to_quaternion()
+    session.sync_rotation = (rotation.w, rotation.x, rotation.y, rotation.z)
+    session.sync_translation = tuple(float(value) for value in similarity.translation)
+
+
+def clear_similarity_on_session(session: properties.PMSession) -> None:
+    """Reset stored sync transform RNA to identity."""
+    session.sync_is_applied = False
+    session.sync_scale = 1.0
+    session.sync_rotation = (1.0, 0.0, 0.0, 0.0)
+    session.sync_translation = (0.0, 0.0, 0.0)
+    session.sync_rmse_px = 0.0
+
+
+def apply_similarity_to_root(root: bpy.types.Object, similarity) -> None:
+    """Write a similarity onto a match root Empty."""
+    root.matrix_world = _similarity_to_matrix(similarity)
+    store_similarity_on_session(root.pm_session, similarity)
+
+
+def reset_root_sync_transform(root: bpy.types.Object) -> None:
+    """Put a match root Empty back at the identity shared-frame pose."""
+    root.matrix_world = _identity_root_matrix()
+    clear_similarity_on_session(root.pm_session)
+
+
+def ensure_landmark_collection(context: bpy.types.Context) -> bpy.types.Collection:
+    """Return (creating if needed) the collection that holds landmark Empties."""
+    name = "PM_Sync_Landmarks"
+    collection = bpy.data.collections.get(name)
+    if collection is None:
+        collection = bpy.data.collections.new(name)
+        context.scene.collection.children.link(collection)
+    return collection
+
+
+def sync_landmark_empties(context: bpy.types.Context) -> None:
+    """Create/update/remove landmark Empties (points) and edge meshes (lines)."""
+    space = properties.workspace(context)
+    collection = ensure_landmark_collection(context)
+    keep_names: set[str] = set()
+
+    def _remove_object(obj: bpy.types.Object) -> None:
+        data = obj.data
+        bpy.data.objects.remove(obj, do_unlink=True)
+        if data is not None and getattr(data, "users", 1) == 0:
+            if isinstance(data, bpy.types.Mesh):
+                bpy.data.meshes.remove(data)
+
+    for landmark in space.landmarks:
+        if not landmark.has_position or not space.show_landmark_empties:
+            continue
+        base_name = safe_identifier(landmark.name) or landmark.item_id[:8]
+        object_name = f"PM_LM_{base_name}"
+        keep_names.add(object_name)
+
+        if landmark.kind == "LINE" and landmark.has_line_segment:
+            point_a = Vector(landmark.position)
+            point_b = Vector(landmark.position_b)
+            mesh = bpy.data.meshes.get(object_name)
+            if mesh is None:
+                mesh = bpy.data.meshes.new(object_name)
+            # Rebuild a single-edge segment so the solved line is obvious in 3D.
+            mesh.clear_geometry()
+            mesh.from_pydata(
+                [tuple(point_a), tuple(point_b)],
+                [(0, 1)],
+                [],
+            )
+            mesh.update()
+
+            obj = bpy.data.objects.get(object_name)
+            # Object type is fixed at creation — replace Empty with a Mesh object.
+            if obj is not None and obj.type != "MESH":
+                _remove_object(obj)
+                obj = None
+            if obj is None:
+                obj = bpy.data.objects.new(object_name, mesh)
+                collection.objects.link(obj)
+            else:
+                if obj.data != mesh:
+                    old_data = obj.data
+                    obj.data = mesh
+                    if (
+                        old_data is not None
+                        and old_data != mesh
+                        and getattr(old_data, "users", 1) == 0
+                    ):
+                        bpy.data.meshes.remove(old_data)
+                if obj.name not in collection.objects:
+                    collection.objects.link(obj)
+            obj.location = (0.0, 0.0, 0.0)
+            obj.rotation_euler = (0.0, 0.0, 0.0)
+            obj.scale = (1.0, 1.0, 1.0)
+            obj.hide_viewport = False
+            obj.hide_render = True
+            obj.display_type = "WIRE"
+            continue
+
+        empty = bpy.data.objects.get(object_name)
+        # Replace a leftover line mesh with an Empty for point landmarks.
+        if empty is not None and empty.type != "EMPTY":
+            _remove_object(empty)
+            empty = None
+        if empty is None:
+            empty = bpy.data.objects.new(object_name, None)
+            empty.empty_display_type = "PLAIN_AXES"
+            collection.objects.link(empty)
+        elif empty.name not in collection.objects:
+            collection.objects.link(empty)
+        empty.empty_display_size = float(space.landmark_empty_size)
+        empty.location = Vector(landmark.position)
+        empty.hide_viewport = False
+        empty.hide_render = True
+
+    # Remove stale landmark helpers that belong to this collection.
+    for obj in list(collection.objects):
+        if obj.name.startswith("PM_LM_") and obj.name not in keep_names:
+            _remove_object(obj)
+
+
+def clear_landmark_empties(context: bpy.types.Context) -> None:
+    """Delete all PM landmark Empties and line meshes."""
+    collection = bpy.data.collections.get("PM_Sync_Landmarks")
+    if collection is None:
+        return
+    for obj in list(collection.objects):
+        if obj.name.startswith("PM_LM_"):
+            data = obj.data
+            bpy.data.objects.remove(obj, do_unlink=True)
+            if data is not None and getattr(data, "users", 1) == 0:
+                if isinstance(data, bpy.types.Mesh):
+                    bpy.data.meshes.remove(data)
+
+
+def active_landmark(context: bpy.types.Context | None = None):
+    """Return the active landmark PropertyGroup, if any."""
+    space = properties.workspace(context)
+    index = space.active_landmark_index
+    if 0 <= index < len(space.landmarks):
+        return space.landmarks[index]
+    return None
+
+
+def observation_for_match(landmark, root: bpy.types.Object | None):
+    """Return the observation entry for a match root inside a landmark."""
+    if root is None:
+        return None
+    for observation in landmark.observations:
+        if observation.match_root == root:
+            return observation
+    return None
+
+
+def _private_point_from_world(
+    root: bpy.types.Object,
+    world_location,
+) -> np.ndarray:
+    """Map a Blender world point into the match's private frame via the root Empty."""
+    local = root.matrix_world.inverted() @ Vector(
+        (float(world_location[0]), float(world_location[1]), float(world_location[2]))
+    )
+    return np.array((local.x, local.y, local.z), dtype=np.float64)
+
+
+def project_known_object_into_match(landmark, root: bpy.types.Object) -> bool:
+    """Project Known 3D point or line endpoints into this match's still.
+
+    Known Empties live in Blender/shared world. The match root Empty carries the
+    sync transform, so world→private is ``root.matrix_world.inverted()``.
+    """
+    from . import sync as sync_module
+
+    known_object = landmark.known_object
+    if known_object is None or known_object.name not in bpy.data.objects:
+        return False
+    session = root.pm_session
+    if session.image is None or session.fx <= 0.0:
+        return False
+    calibration = calibration_from_settings(session)
+
+    def _project_world(world_location):
+        private_point = _private_point_from_world(root, world_location)
+        return sync_module.project_private_point(private_point, calibration)
+
+    world_a = known_object.matrix_world.to_translation()
+    projected_a = _project_world(world_a)
+    if projected_a is None:
+        return False
+
+    observation = observation_for_match(landmark, root)
+    if observation is None:
+        observation = landmark.observations.add()
+        observation.match_root = root
+    observation.x = float(projected_a[0])
+    observation.y = float(projected_a[1])
+    observation.confidence = "HIGH"
+
+    if landmark.kind == "LINE":
+        known_b = landmark.known_object_b
+        if known_b is None or known_b.name not in bpy.data.objects:
+            return False
+        projected_b = _project_world(known_b.matrix_world.to_translation())
+        if projected_b is None:
+            return False
+        observation.x2 = float(projected_b[0])
+        observation.y2 = float(projected_b[1])
+        observation.is_set = True
+        return True
+
+    observation.is_set = True
+    return True
+
+
+def auto_project_known_landmarks(
+    context: bpy.types.Context,
+    landmarks,
+) -> tuple[int, bpy.types.Object | None]:
+    """Project Known 3D landmarks into the anchor (else active) match image.
+
+    Returns ``(projected_count, target_root)``.
+    """
+    target = properties.anchor_root(context) or properties.active_root(context)
+    if target is None:
+        return 0, None
+    projected = 0
+    for landmark in landmarks:
+        if project_known_object_into_match(landmark, target):
+            projected += 1
+    if projected:
+        properties.tag_viewport_redraw(context)
+    return projected, target
+
+
+def set_landmark_observation(
+    context: bpy.types.Context,
+    image_point: tuple[float, float],
+) -> None:
+    """Store a point pick for the active landmark on the active match."""
+    landmark = active_landmark(context)
+    root = properties.active_root(context)
+    if landmark is None:
+        raise ValueError("Select a landmark first")
+    if landmark.kind == "LINE":
+        raise ValueError("Active landmark is a Line — drag a segment instead")
+    if root is None:
+        raise ValueError("Activate a match camera first")
+    observation = observation_for_match(landmark, root)
+    if observation is None:
+        observation = landmark.observations.add()
+        observation.match_root = root
+    observation.x, observation.y = float(image_point[0]), float(image_point[1])
+    observation.is_set = True
+    observation.confidence = properties.workspace(context).landmark_pick_confidence
+    settings = properties.active_session(context)
+    if settings is not None:
+        settings.status = f"Landmark '{landmark.name}' picked in {root.name}"
+    properties.tag_viewport_redraw(context)
+
+
+def set_landmark_line_observation(
+    context: bpy.types.Context,
+    point_a: tuple[float, float],
+    point_b: tuple[float, float],
+) -> None:
+    """Store a line-segment pick for the active LINE landmark."""
+    landmark = active_landmark(context)
+    root = properties.active_root(context)
+    if landmark is None:
+        raise ValueError("Select a landmark first")
+    if landmark.kind != "LINE":
+        raise ValueError("Active landmark is not a Line")
+    if root is None:
+        raise ValueError("Activate a match camera first")
+    observation = observation_for_match(landmark, root)
+    if observation is None:
+        observation = landmark.observations.add()
+        observation.match_root = root
+    observation.x, observation.y = float(point_a[0]), float(point_a[1])
+    observation.x2, observation.y2 = float(point_b[0]), float(point_b[1])
+    observation.is_set = True
+    observation.confidence = properties.workspace(context).landmark_pick_confidence
+    settings = properties.active_session(context)
+    if settings is not None:
+        settings.status = f"Line '{landmark.name}' drawn in {root.name}"
+    properties.tag_viewport_redraw(context)
+
+
+def clear_landmark_observation_for_active(context: bpy.types.Context) -> bool:
+    """Remove the active match's observation from the active landmark."""
+    landmark = active_landmark(context)
+    root = properties.active_root(context)
+    if landmark is None or root is None:
+        return False
+    for index, observation in enumerate(list(landmark.observations)):
+        if observation.match_root == root:
+            landmark.observations.remove(index)
+            properties.tag_viewport_redraw(context)
+            return True
+    return False
+
+
+def build_sync_problem(context: bpy.types.Context):
+    """Collect frozen match calibrations, landmark observations, and known 3D."""
+    from . import sync as sync_module
+
+    roots = properties.iter_match_roots()
+    matches = []
+    for root in roots:
+        session = root.pm_session
+        if session.image is None or session.fx <= 0.0:
+            continue
+        matches.append(
+            sync_module.SyncMatchInput(
+                match_id=root.name,
+                calibration=calibration_from_settings(session),
+            )
+        )
+    match_ids = {item.match_id for item in matches}
+
+    observations = []
+    line_observations = []
+    known_world: dict[str, object] = {}
+    known_lines: dict[str, tuple] = {}
+    parallel_pairs: list[tuple[str, str]] = []
+    seen_pairs: set[tuple[str, str]] = set()
+    space = properties.workspace(context)
+    for landmark in space.landmarks:
+        known_object = landmark.known_object
+        known_object_b = getattr(landmark, "known_object_b", None)
+        if landmark.kind == "LINE":
+            other_id = getattr(landmark, "parallel_to", "NONE")
+            if other_id and other_id != "NONE" and other_id != landmark.item_id:
+                pair = tuple(sorted((landmark.item_id, other_id)))
+                if pair not in seen_pairs:
+                    # Confirm the target still exists as a Line landmark.
+                    target = next(
+                        (
+                            item
+                            for item in space.landmarks
+                            if item.item_id == other_id and item.kind == "LINE"
+                        ),
+                        None,
+                    )
+                    if target is not None:
+                        seen_pairs.add(pair)
+                        parallel_pairs.append(pair)
+            if (
+                known_object is not None
+                and known_object.name in bpy.data.objects
+                and known_object_b is not None
+                and known_object_b.name in bpy.data.objects
+            ):
+                location_a = known_object.matrix_world.to_translation()
+                location_b = known_object_b.matrix_world.to_translation()
+                known_lines[landmark.item_id] = (
+                    (float(location_a.x), float(location_a.y), float(location_a.z)),
+                    (float(location_b.x), float(location_b.y), float(location_b.z)),
+                )
+        elif known_object is not None and known_object.name in bpy.data.objects:
+            # World-space location of the Empty / object origin (anchor frame).
+            location = known_object.matrix_world.to_translation()
+            known_world[landmark.item_id] = (
+                float(location.x),
+                float(location.y),
+                float(location.z),
+            )
+        for observation in landmark.observations:
+            root = observation.match_root
+            if (
+                not observation.is_set
+                or root is None
+                or root.name not in match_ids
+            ):
+                continue
+            if landmark.kind == "LINE":
+                line_observations.append(
+                    sync_module.SyncLineObservation(
+                        match_id=root.name,
+                        landmark_id=landmark.item_id,
+                        u1=float(observation.x),
+                        v1=float(observation.y),
+                        u2=float(observation.x2),
+                        v2=float(observation.y2),
+                        landmark_name=landmark.name or landmark.item_id,
+                        weight=sync_module.confidence_weight(observation.confidence),
+                    )
+                )
+            else:
+                observations.append(
+                    sync_module.SyncObservation(
+                        match_id=root.name,
+                        landmark_id=landmark.item_id,
+                        u=float(observation.x),
+                        v=float(observation.y),
+                        on_ground=bool(landmark.on_ground),
+                        landmark_name=landmark.name or landmark.item_id,
+                        weight=sync_module.confidence_weight(observation.confidence),
+                    )
+                )
+    return (
+        matches,
+        observations,
+        known_world,
+        line_observations,
+        known_lines,
+        parallel_pairs,
+    )
+
+
+def known_anchor_pick_warnings(context: bpy.types.Context) -> list[str]:
+    """Flag Known 3D Empties whose stored anchor pick disagrees with re-projection.
+
+    Large deltas usually mean the Empty moved after auto-project, or the
+    anchor camera/intrinsics changed without re-projecting.
+    """
+    from . import sync as sync_module
+
+    anchor = properties.anchor_root(context)
+    if anchor is None:
+        return []
+    session = anchor.pm_session
+    if session.image is None or session.fx <= 0.0:
+        return []
+    calibration = calibration_from_settings(session)
+    warnings: list[str] = []
+    for landmark in properties.workspace(context).landmarks:
+        if landmark.known_object is None:
+            continue
+        observation = observation_for_match(landmark, anchor)
+        if observation is None or not observation.is_set:
+            continue
+        world = landmark.known_object.matrix_world.to_translation()
+        private_point = _private_point_from_world(anchor, world)
+        projected = sync_module.project_private_point(private_point, calibration)
+        if projected is None:
+            warnings.append(
+                f"{landmark.name or landmark.item_id}: Known 3D off-screen in anchor"
+            )
+            continue
+        delta = float(
+            (projected[0] - observation.x) ** 2 + (projected[1] - observation.y) ** 2
+        ) ** 0.5
+        if delta > 5.0:
+            warnings.append(
+                f"{landmark.name or landmark.item_id}: Empty vs anchor pick "
+                f"{delta:.0f}px — re-run Landmarks from Selected / Use Selected"
+            )
+    return warnings
+
+
+def _apply_sync_landmark_diagnostics(context: bpy.types.Context, result) -> None:
+    """Write per-landmark RMSE onto the workspace even when sync is rejected."""
+    space = properties.workspace(context)
+    for landmark in space.landmarks:
+        rmse = result.per_landmark_rmse_px.get(landmark.item_id)
+        if rmse is None:
+            continue
+        landmark.rmse_px = float(rmse)
+
+
+def diagnose_sync(context: bpy.types.Context):
+    """Run sync solve for diagnostics without applying Empty transforms."""
+    from . import sync as sync_module
+
+    space = properties.workspace(context)
+    anchor = properties.anchor_root(context)
+    if anchor is None:
+        raise ValueError("Choose an anchor match first")
+
+    warnings = known_anchor_pick_warnings(context)
+    matches, observations, known_world, line_observations, known_lines, parallel_pairs = (
+        build_sync_problem(context)
+    )
+    if not matches:
+        raise ValueError("No solved matches available to sync")
+    if anchor.name not in {item.match_id for item in matches}:
+        raise ValueError("Anchor match needs a solved camera")
+
+    result = sync_module.solve_landmark_sync(
+        matches,
+        observations,
+        anchor_id=anchor.name,
+        known_world=known_world,
+        line_observations=line_observations,
+        known_lines=known_lines,
+        parallel_pairs=parallel_pairs,
+    )
+    _apply_sync_landmark_diagnostics(context, result)
+
+    parts = []
+    if warnings:
+        parts.append("Known 3D: " + "; ".join(warnings[:3]))
+    parts.append(result.message)
+    if result.per_landmark_rmse_px:
+        ranked = sorted(
+            result.per_landmark_rmse_px.items(), key=lambda item: -item[1]
+        )[:5]
+        name_by_id = {
+            landmark.item_id: (landmark.name or landmark.item_id)
+            for landmark in space.landmarks
+        }
+        bits = [
+            f"{name_by_id.get(landmark_id, landmark_id[:8])} {rmse:.1f}px"
+            for landmark_id, rmse in ranked
+        ]
+        parts.append("Per-landmark: " + ", ".join(bits))
+    if result.success:
+        parts.append("Pose OK to apply via Solve Sync (not applied by Diagnose)")
+    space.sync_status = " | ".join(parts)
+    properties.tag_viewport_redraw(context)
+    return result
+
+
+def solve_and_apply_sync(context: bpy.types.Context):
+    """Run landmark sync and write similarities onto match root Empties."""
+    from . import sync as sync_module
+
+    space = properties.workspace(context)
+    anchor = properties.anchor_root(context)
+    if anchor is None:
+        raise ValueError("Choose an anchor match first")
+
+    warnings = known_anchor_pick_warnings(context)
+    matches, observations, known_world, line_observations, known_lines, parallel_pairs = (
+        build_sync_problem(context)
+    )
+    if not matches:
+        raise ValueError("No solved matches available to sync")
+    if anchor.name not in {item.match_id for item in matches}:
+        raise ValueError("Anchor match needs a solved camera")
+
+    result = sync_module.solve_landmark_sync(
+        matches,
+        observations,
+        anchor_id=anchor.name,
+        known_world=known_world,
+        line_observations=line_observations,
+        known_lines=known_lines,
+        parallel_pairs=parallel_pairs,
+    )
+    _apply_sync_landmark_diagnostics(context, result)
+    message = result.message
+    if warnings:
+        message = "Known 3D warn: " + "; ".join(warnings[:2]) + " | " + message
+    space.sync_status = message
+    if not result.success:
+        raise ValueError(message)
+
+    root_by_name = {root.name: root for root in properties.iter_match_roots()}
+    for match_id, similarity in result.similarities.items():
+        root = root_by_name.get(match_id)
+        if root is None:
+            continue
+        apply_similarity_to_root(root, similarity)
+        root.pm_session.sync_rmse_px = float(
+            result.per_match_rmse_px.get(match_id, 0.0)
+        )
+
+    landmark_by_id = {landmark.item_id: landmark for landmark in space.landmarks}
+    for landmark_id, position in result.landmarks.items():
+        landmark = landmark_by_id.get(landmark_id)
+        if landmark is None:
+            continue
+        landmark.position = tuple(float(value) for value in position)
+        landmark.has_position = True
+        landmark.rmse_px = float(result.per_landmark_rmse_px.get(landmark_id, 0.0))
+        segment = result.line_segments.get(landmark_id)
+        if segment is not None:
+            landmark.position = tuple(float(value) for value in segment[0])
+            landmark.position_b = tuple(float(value) for value in segment[1])
+            landmark.has_line_segment = True
+        else:
+            landmark.has_line_segment = False
+
+    sync_landmark_empties(context)
+    properties.tag_viewport_redraw(context)
+    return result
+
+
+def clear_sync_transforms(context: bpy.types.Context) -> None:
+    """Reset all match root Empties and clear solved landmark positions."""
+    space = properties.workspace(context)
+    for root in properties.iter_match_roots():
+        reset_root_sync_transform(root)
+    for landmark in space.landmarks:
+        landmark.has_position = False
+        landmark.has_line_segment = False
+        landmark.rmse_px = 0.0
+    clear_landmark_empties(context)
+    space.sync_status = "Sync cleared"
     properties.tag_viewport_redraw(context)

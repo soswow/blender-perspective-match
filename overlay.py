@@ -1,4 +1,4 @@
-"""GPU overlay for VP guides, handles, and origin."""
+"""GPU overlay for VP guides, handles, origin, and landmarks."""
 
 from __future__ import annotations
 
@@ -552,6 +552,44 @@ def _draw_placement(context: bpy.types.Context, fill_shader, settings) -> None:
         )
 
 
+def _draw_landmarks(context: bpy.types.Context, fill_shader, settings) -> None:
+    """Draw landmark picks that belong to the active match."""
+    space = properties.workspace(context)
+    if not space.show_landmark_overlay:
+        return
+    root = properties.active_root(context)
+    if root is None:
+        return
+    active_index = space.active_landmark_index
+    opacity = settings.overlay_opacity
+    for index, landmark in enumerate(space.landmarks):
+        observation = scene.observation_for_match(landmark, root)
+        if observation is None or not observation.is_set:
+            continue
+        is_active = index == active_index
+        if landmark.known_object is not None:
+            base = (0.35, 0.85, 1.0, 1.0) if is_active else (0.25, 0.7, 0.95, 1.0)
+        else:
+            base = (1.0, 0.85, 0.2, 1.0) if is_active else (0.95, 0.65, 0.15, 1.0)
+        color = _with_alpha(base, opacity)
+        if landmark.kind == "LINE":
+            point_a = scene.image_to_region(context, observation.x, observation.y)
+            point_b = scene.image_to_region(context, observation.x2, observation.y2)
+            if point_a is None or point_b is None:
+                continue
+            _draw_line(
+                point_a,
+                point_b,
+                color,
+                3.0 if is_active else 2.0,
+            )
+            _draw_crosshair(fill_shader, point_a, color, 7.0 if is_active else 5.0)
+            _draw_crosshair(fill_shader, point_b, color, 7.0 if is_active else 5.0)
+            continue
+        point = scene.image_to_region(context, observation.x, observation.y)
+        _draw_crosshair(fill_shader, point, color, 9.0 if is_active else 6.0)
+
+
 def _draw_preview(context: bpy.types.Context, settings) -> None:
     if (
         context.area is None
@@ -597,6 +635,7 @@ def _draw_callback() -> None:
     try:
         _draw_vp_geometry(context, fill_shader, settings)
         _draw_placement(context, fill_shader, settings)
+        _draw_landmarks(context, fill_shader, settings)
         _draw_preview(context, settings)
     finally:
         gpu.state.line_width_set(1.0)

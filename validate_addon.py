@@ -339,6 +339,86 @@ def main() -> None:
                 raise AssertionError("Malformed project should be rejected")
             assert reloaded.camera_object == camera_before_invalid_load
 
+            # Landmark sync: 2D↔2D essential pose; ground tags pin absolute scale.
+            from match_perspective import sync
+            root_sync_a = scene.create_match_camera(bpy.context)
+            scene.bind_reference_image(bpy.context, str(image_path))
+            session_a = root_sync_a.pm_session
+            session_a.fx = session_a.fy = 800.0
+            session_a.cx, session_a.cy = 400.0, 300.0
+            session_a.image_width, session_a.image_height = 800, 600
+            session_a.camera_center = (-3.0, -4.0, 2.0)
+            session_a.rotation_w2c = (
+                1.0, 0.0, 0.0,
+                0.0, 0.0, -1.0,
+                0.0, 1.0, 0.0,
+            )
+            session_a.origin_is_set = True
+
+            root_sync_b = scene.create_match_camera(bpy.context)
+            scene.bind_reference_image(bpy.context, str(image_b_path))
+            session_b = root_sync_b.pm_session
+            session_b.fx = session_b.fy = 800.0
+            session_b.cx, session_b.cy = 400.0, 300.0
+            session_b.image_width, session_b.image_height = 800, 600
+            angle = 0.4
+            cosine, sine = float(np.cos(angle)), float(np.sin(angle))
+            rotation_sim = np.array(
+                ((cosine, -sine, 0.0), (sine, cosine, 0.0), (0.0, 0.0, 1.0)),
+                dtype=np.float64,
+            )
+            translation_sim = np.array((2.0, -1.0, 0.5), dtype=np.float64)
+            shared_center_b = np.array((4.0, -3.0, 2.5), dtype=np.float64)
+            shared_rotation_b = np.array(
+                ((1.0, 0.0, 0.0), (0.0, 0.0, -1.0), (0.0, 1.0, 0.0)),
+                dtype=np.float64,
+            )
+            rotation_private_b = shared_rotation_b @ rotation_sim
+            center_private_b = rotation_sim.T @ (shared_center_b - translation_sim)
+            session_b.rotation_w2c = tuple(float(value) for value in rotation_private_b.reshape(-1))
+            session_b.camera_center = tuple(float(value) for value in center_private_b)
+            session_b.origin_is_set = True
+            scene.apply_camera(bpy.context.scene, session_a, scene.calibration_from_settings(session_a))
+            scene.apply_camera(bpy.context.scene, session_b, scene.calibration_from_settings(session_b))
+
+            space = properties.workspace(bpy.context)
+            space.anchor_root = root_sync_a
+            properties.sync_anchor_match_enum(space, root_sync_a.name)
+            landmarks_shared = {
+                "g0": (np.array((0.0, 0.0, 0.0)), True),
+                "g1": (np.array((2.0, 0.0, 0.0)), True),
+                "g2": (np.array((0.0, 2.0, 0.0)), True),
+                "g3": (np.array((1.5, 1.0, 0.0)), True),
+                "up": (np.array((1.0, 0.5, 1.5)), False),
+            }
+            calib_a = scene.calibration_from_settings(session_a)
+            calib_b = scene.calibration_from_settings(session_b)
+            true_sim = sync.SimilarityTransform(1.0, rotation_sim, translation_sim)
+            for name, (shared_point, on_ground) in landmarks_shared.items():
+                landmark = space.landmarks.add()
+                landmark.item_id = f"smoke-{name}"
+                landmark.name = name
+                landmark.on_ground = on_ground
+                private_b = true_sim.inverse_point(shared_point)
+                projected_a = sync.project_private_point(shared_point, calib_a)
+                projected_b = sync.project_private_point(private_b, calib_b)
+                assert projected_a is not None and projected_b is not None
+                observation_a = landmark.observations.add()
+                observation_a.match_root = root_sync_a
+                observation_a.x, observation_a.y = float(projected_a[0]), float(projected_a[1])
+                observation_a.is_set = True
+                observation_b = landmark.observations.add()
+                observation_b.match_root = root_sync_b
+                observation_b.x, observation_b.y = float(projected_b[0]), float(projected_b[1])
+                observation_b.is_set = True
+            space.active_landmark_index = 0
+
+            result = scene.solve_and_apply_sync(bpy.context)
+            assert result.success, result.message
+            assert session_b.sync_is_applied
+            assert abs(session_b.sync_scale - 1.0) < 1.0e-6
+            assert abs(session_b.sync_translation[0] - translation_sim[0]) < 0.2
+
             print("Perspective Match smoke test passed")
         finally:
             if registered:

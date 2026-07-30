@@ -6,7 +6,7 @@ from pathlib import Path
 
 import bpy
 
-from . import properties
+from . import properties, scene
 
 
 def _axis_counts(settings) -> dict[str, int]:
@@ -35,6 +35,85 @@ def _panel_lines_hint(settings) -> str:
     return f"Need 2+ lines on two axes ({summary})"
 
 
+def _observation_count(landmark) -> int:
+    return sum(1 for observation in landmark.observations if observation.is_set)
+
+
+def _landmark_is_parallel_linked(landmark, workspace) -> bool:
+    """True when this line is parallel-linked to another (either direction)."""
+    if landmark.kind != "LINE":
+        return False
+    if landmark.parallel_to and landmark.parallel_to != "NONE":
+        return True
+    for other in workspace.landmarks:
+        if other.item_id == landmark.item_id:
+            continue
+        if other.kind == "LINE" and other.parallel_to == landmark.item_id:
+            return True
+    return False
+
+
+class PM_UL_landmarks(bpy.types.UIList):
+    """Compact landmark list for the sync section."""
+
+    bl_idname = "PM_UL_landmarks"
+
+    def draw_item(
+        self,
+        _context,
+        layout,
+        _data,
+        item,
+        _icon,
+        _active_data,
+        _active_property,
+        _index=0,
+        _flt_flag=0,
+    ) -> None:
+        row = layout.row(align=True)
+        row.prop(item, "name", text="", emboss=False, icon="EMPTY_AXIS")
+        if item.kind == "LINE":
+            row.label(text="", icon="MESH_DATA")
+            if _landmark_is_parallel_linked(item, _data):
+                row.label(text="", icon="LINKED")
+        if item.known_object is not None:
+            row.label(text="", icon="PIVOT_CURSOR")
+        elif item.on_ground:
+            row.label(text="", icon="ORIENTATION_VIEW")
+        count = _observation_count(item)
+        if item.rmse_px > 0.5:
+            row.label(text=f"{count} · {item.rmse_px:.0f}px")
+        else:
+            row.label(text=f"{count}")
+
+    def filter_items(self, context, data, propname):
+        """Alphabetical when Sort A–Z is on; otherwise creation / add order.
+
+        Read-only: Blender forbids writing Scene ID data from UIList draw.
+        creation_index is assigned on add / file load, not here.
+        """
+        landmarks = getattr(data, propname)
+        helper_funcs = bpy.types.UI_UL_list
+        flt_flags = []
+        flt_neworder = []
+        if not landmarks:
+            return flt_flags, flt_neworder
+        if getattr(data, "landmarks_sort_alphabetical", False):
+            flt_neworder = helper_funcs.sort_items_by_name(landmarks, "name")
+        elif any(landmark.creation_index < 0 for landmark in landmarks):
+            # Legacy / not yet migrated — keep collection order (no ID writes).
+            flt_neworder = []
+        else:
+            keyed = [
+                (index, int(landmark.creation_index))
+                for index, landmark in enumerate(landmarks)
+            ]
+            flt_neworder = helper_funcs.sort_items_helper(
+                keyed, lambda item: item[1], False
+            )
+        return flt_flags, flt_neworder
+
+
 class VIEW3D_PT_perspective_match(bpy.types.Panel):
     """Perspective Match sidebar panel."""
 
@@ -60,8 +139,23 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
 
         if settings is None:
             header.label(text="Create or select a match camera", icon="INFO")
-            return
+        else:
+            self._draw_active_match(layout, context, workspace, settings)
 
+        self._draw_sync(layout, context, workspace, settings)
+
+        if settings is not None and settings.error:
+            error_box = layout.box()
+            error_box.alert = True
+            error_box.label(text=settings.error, icon="ERROR")
+        if settings is not None:
+            layout.label(text=settings.status, icon="INFO")
+        elif workspace.sync_status:
+            layout.label(text=workspace.sync_status, icon="INFO")
+        layout.separator()
+        layout.operator("perspective_match.reload", icon="FILE_REFRESH")
+
+    def _draw_active_match(self, layout, context, workspace, settings) -> None:
         image_box = layout.box()
         image_box.label(text="1. Reference Image", icon="IMAGE_DATA")
         row = image_box.row(align=True)
@@ -160,7 +254,11 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
         row = origin_box.row(align=True)
         pick_row = row.row(align=True)
         pick_row.operator_context = "INVOKE_REGION_WIN"
-        operator = pick_row.operator("perspective_match.interact", text="Pick Origin", icon="PIVOT_CURSOR")
+        operator = pick_row.operator(
+            "perspective_match.interact",
+            text="Pick Origin",
+            icon="PIVOT_CURSOR",
+        )
         operator.mode = "ORIGIN"
         apply_row = origin_box.row(align=True)
         apply_row.enabled = settings.origin_is_set
@@ -199,16 +297,196 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
         row.operator("perspective_match.apply_view_lighting", icon="CHECKMARK")
         row.operator("perspective_match.reset_view_lighting", text="", icon="LOOP_BACK")
         if settings.view_lighting_applied:
-            view_box.label(text=Path(settings.view_path).name or "View plate active", icon="CHECKMARK")
+            view_box.label(
+                text=Path(settings.view_path).name or "View plate active",
+                icon="CHECKMARK",
+            )
         view_box.prop(settings, "overlay_opacity")
 
-        if settings.error:
-            error_box = layout.box()
-            error_box.alert = True
-            error_box.label(text=settings.error, icon="ERROR")
-        layout.label(text=settings.status, icon="INFO")
-        layout.separator()
-        layout.operator("perspective_match.reload", icon="FILE_REFRESH")
+    def _draw_sync(self, layout, context, workspace, settings) -> None:
+        sync_box = layout.box()
+        sync_header = sync_box.row()
+        sync_header.label(text="5. Sync Matches", icon="LINKED")
+        sync_header.prop(
+            workspace,
+            "show_landmark_overlay",
+            text="",
+            icon="HIDE_OFF" if workspace.show_landmark_overlay else "HIDE_ON",
+            emboss=False,
+        )
+        match_count = len(properties.iter_match_roots())
+        if match_count < 2:
+            sync_box.label(text="Create at least two matched cameras", icon="INFO")
+            return
+
+        sync_box.prop(workspace, "anchor_match", text="Anchor")
+        sync_box.label(
+            text="Points or lines across stills; Known 3D Empties optional",
+            icon="INFO",
+        )
+
+        list_row = sync_box.row()
+        list_row.template_list(
+            "PM_UL_landmarks",
+            "",
+            workspace,
+            "landmarks",
+            workspace,
+            "active_landmark_index",
+            rows=3,
+        )
+        list_column = list_row.column(align=True)
+        add_point = list_column.operator(
+            "perspective_match.add_landmark",
+            text="",
+            icon="ADD",
+        )
+        add_point.kind = "POINT"
+        add_line = list_column.operator(
+            "perspective_match.add_landmark",
+            text="",
+            icon="MESH_DATA",
+        )
+        add_line.kind = "LINE"
+        list_column.operator(
+            "perspective_match.add_landmarks_from_selected",
+            text="",
+            icon="IMPORT",
+        )
+        list_column.operator("perspective_match.remove_landmark", text="", icon="REMOVE")
+        # Separate control group: display order only (does not reorder storage).
+        list_column.separator()
+        list_column.prop(
+            workspace,
+            "landmarks_sort_alphabetical",
+            text="",
+            icon="SORTALPHA",
+            toggle=True,
+        )
+
+        landmark = scene.active_landmark(context)
+        if landmark is not None:
+            sync_box.prop(landmark, "kind")
+            if landmark.kind == "POINT":
+                sync_box.prop(landmark, "on_ground")
+            known_row = sync_box.row(align=True)
+            known_row.prop(landmark, "known_object", text="Known 3D")
+            known_row.operator(
+                "perspective_match.landmark_use_selected",
+                text="",
+                icon="EYEDROPPER",
+            )
+            known_row.operator(
+                "perspective_match.landmark_clear_known",
+                text="",
+                icon="X",
+            )
+            if landmark.kind == "LINE":
+                sync_box.prop(landmark, "known_object_b", text="Known 3D B")
+                sync_box.prop(landmark, "parallel_to", text="Is Parallel To")
+                sync_box.label(
+                    text="Optional: two Empties = metric edge; else draw in ≥3 stills",
+                    icon="INFO",
+                )
+            if landmark.known_object is not None:
+                location = landmark.known_object.matrix_world.to_translation()
+                sync_box.label(
+                    text=(
+                        f"World ({location.x:.2f}, {location.y:.2f}, {location.z:.2f})"
+                    ),
+                    icon="EMPTY_AXIS",
+                )
+            pick_row = sync_box.row(align=True)
+            pick_row.operator_context = "INVOKE_REGION_WIN"
+            pick_enabled = pick_row.row(align=True)
+            pick_enabled.enabled = (
+                settings is not None and settings.image is not None
+            )
+            pick_label = (
+                "Draw Line in Active Match"
+                if landmark.kind == "LINE"
+                else "Pick in Active Match"
+            )
+            operator = pick_enabled.operator(
+                "perspective_match.interact",
+                text=pick_label,
+                icon="EYEDROPPER",
+            )
+            operator.mode = "LANDMARK"
+            pick_row.operator(
+                "perspective_match.clear_landmark_observation",
+                text="",
+                icon="X",
+            )
+            sync_box.prop(workspace, "landmark_pick_confidence")
+            if workspace.is_modal and workspace.work_mode == "LANDMARK":
+                sync_box.label(
+                    text="Landmark tool active — switch matches to pick more",
+                    icon="MOUSE_LMB",
+                )
+
+            # Compact per-match pick status for the active landmark.
+            for root in properties.iter_match_roots():
+                observation = scene.observation_for_match(landmark, root)
+                row = sync_box.row(align=True)
+                if observation is not None and observation.is_set:
+                    if landmark.kind == "LINE":
+                        row.label(
+                            text=(
+                                f"{root.name}: "
+                                f"({observation.x:.0f},{observation.y:.0f})–"
+                                f"({observation.x2:.0f},{observation.y2:.0f})"
+                            ),
+                            icon="CHECKMARK",
+                        )
+                    else:
+                        row.label(
+                            text=f"{root.name}: ({observation.x:.0f}, {observation.y:.0f})",
+                            icon="CHECKMARK",
+                        )
+                    row.prop(observation, "confidence", text="")
+                else:
+                    row.label(text=f"{root.name}: —", icon="DOT")
+            if landmark.has_position or landmark.rmse_px > 0.5:
+                detail = f"Last sync RMSE {landmark.rmse_px:.2f} px"
+                if landmark.has_position:
+                    detail += (
+                        f" · ({landmark.position[0]:.2f}, "
+                        f"{landmark.position[1]:.2f}, "
+                        f"{landmark.position[2]:.2f})"
+                    )
+                else:
+                    detail += " · diagnose/reject"
+                sync_box.label(text=detail, icon="EMPTY_AXIS")
+
+        row = sync_box.row(align=True)
+        row.operator("perspective_match.solve_sync", icon="FILE_REFRESH")
+        row.operator("perspective_match.diagnose_sync", text="Diagnose", icon="INFO")
+        row.operator("perspective_match.clear_sync", text="Clear", icon="X")
+        empties_row = sync_box.row(align=True)
+        empties_row.prop(workspace, "show_landmark_empties", text="Landmark Empties")
+        size_row = empties_row.row(align=True)
+        size_row.enabled = workspace.show_landmark_empties
+        size_row.prop(workspace, "landmark_empty_size", text="Size")
+        if workspace.sync_status:
+            status_column = sync_box.column(align=True)
+            # Blender labels do not wrap — split so the full message is readable.
+            wrap_width = 48
+            text = workspace.sync_status
+            while text:
+                status_column.label(text=text[:wrap_width])
+                text = text[wrap_width:]
+        if settings is not None and settings.sync_is_applied:
+            sync_box.label(
+                text=(
+                    f"This match sync RMSE {settings.sync_rmse_px:.2f} px · "
+                    f"s={settings.sync_scale:.3f}"
+                ),
+                icon="CHECKMARK",
+            )
 
 
-CLASSES = (VIEW3D_PT_perspective_match,)
+CLASSES = (
+    PM_UL_landmarks,
+    VIEW3D_PT_perspective_match,
+)

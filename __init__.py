@@ -20,6 +20,7 @@ CLASSES = (
 # Dependency order for importlib.reload during development.
 _RELOAD_SUBMODULES = (
     "core",
+    "sync",
     "properties",
     "scene",
     "distortion",
@@ -38,9 +39,12 @@ def _reset_modal_state(_dummy=None) -> None:
     operators._active_interact = None
     for scene in bpy.data.scenes:
         workspace = getattr(scene, "match_perspective", None)
-        if workspace is not None:
-            workspace.is_modal = False
-            workspace.work_mode = "NONE"
+        if workspace is None:
+            continue
+        workspace.is_modal = False
+        workspace.work_mode = "NONE"
+        # Backfill creation_index so Sort A–Z off restores saved add order.
+        properties.ensure_landmark_creation_indices(workspace)
 
 
 def _clear_modal_flags() -> None:
@@ -129,6 +133,8 @@ def register() -> None:
     operators._active_interact = None
     if _reset_modal_state not in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.append(_reset_modal_state)
+    # Existing open file: migrate landmark creation indices once on enable.
+    properties.ensure_landmark_creation_indices()
     overlay.register_viewport_draw_handler()
 
 

@@ -550,6 +550,32 @@ def pixel_ray(u_coordinate: float, v_coordinate: float, intrinsics: CameraIntrin
     return ray / max(float(np.linalg.norm(ray)), 1.0e-12)
 
 
+def ground_hit(
+    image_point: tuple[float, float],
+    calibration: Calibration,
+) -> np.ndarray | None:
+    """Intersect an image ray with the private-world ground plane Z=0."""
+    camera_center = calibration.camera_center
+    camera_to_world = calibration.rotation_w2c.T
+    ideal_point = undistort_points(
+        np.array([[image_point[0], image_point[1]]], dtype=np.float64),
+        calibration.intrinsics.fx,
+        calibration.intrinsics.fy,
+        calibration.intrinsics.cx,
+        calibration.intrinsics.cy,
+        calibration.division_lambda,
+    )[0]
+    direction = camera_to_world @ pixel_ray(
+        float(ideal_point[0]),
+        float(ideal_point[1]),
+        calibration.intrinsics,
+    )
+    if abs(float(direction[2])) < 1.0e-8:
+        return None
+    distance = -float(camera_center[2]) / float(direction[2])
+    return camera_center + distance * direction if distance > 0.0 else None
+
+
 def apply_origin_and_scale(
     calibration: Calibration,
     origin_image: tuple[float, float],
@@ -559,34 +585,14 @@ def apply_origin_and_scale(
 ) -> tuple[np.ndarray, float]:
     """Return a camera center shifted to the picked ground origin and scaled."""
     camera_center = calibration.camera_center.copy()
-    camera_to_world = calibration.rotation_w2c.T
 
-    def ground_hit(point: tuple[float, float]) -> np.ndarray | None:
-        ideal_point = undistort_points(
-            np.array([[point[0], point[1]]], dtype=np.float64),
-            calibration.intrinsics.fx,
-            calibration.intrinsics.fy,
-            calibration.intrinsics.cx,
-            calibration.intrinsics.cy,
-            calibration.division_lambda,
-        )[0]
-        direction = camera_to_world @ pixel_ray(
-            float(ideal_point[0]),
-            float(ideal_point[1]),
-            calibration.intrinsics,
-        )
-        if abs(float(direction[2])) < 1.0e-8:
-            return None
-        distance = -float(camera_center[2]) / float(direction[2])
-        return camera_center + distance * direction if distance > 0.0 else None
-
-    origin_world = ground_hit(origin_image)
+    origin_world = ground_hit(origin_image, calibration)
     if origin_world is None:
         origin_world = np.zeros(3)
     scale = 1.0
     if scale_point_a is not None and scale_point_b is not None and measured_length > 0.0:
-        world_a = ground_hit(scale_point_a)
-        world_b = ground_hit(scale_point_b)
+        world_a = ground_hit(scale_point_a, calibration)
+        world_b = ground_hit(scale_point_b, calibration)
         if world_a is not None and world_b is not None:
             current_length = float(np.linalg.norm(world_a - world_b))
             if current_length > 1.0e-8:
