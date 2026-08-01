@@ -637,6 +637,11 @@ def _draw_callback() -> None:
         _draw_placement(context, fill_shader, settings)
         _draw_landmarks(context, fill_shader, settings)
         _draw_preview(context, settings)
+    except Exception:
+        # Keep the handler alive — an uncaught error can stop POST_PIXEL draws.
+        import traceback
+
+        traceback.print_exc()
     finally:
         gpu.state.line_width_set(1.0)
         gpu.state.blend_set("NONE")
@@ -644,20 +649,33 @@ def _draw_callback() -> None:
 
 def register_viewport_draw_handler() -> None:
     """Register one 3D View POST_PIXEL callback."""
+    ensure_viewport_draw_handler()
+
+
+def ensure_viewport_draw_handler() -> None:
+    """Drop a stale handle if needed and ensure a live POST_PIXEL callback."""
     global _draw_handle
-    if _draw_handle is None:
-        _draw_handle = bpy.types.SpaceView3D.draw_handler_add(
-            _draw_callback,
-            (),
-            "WINDOW",
-            "POST_PIXEL",
-        )
+    if _draw_handle is not None:
+        try:
+            bpy.types.SpaceView3D.draw_handler_remove(_draw_handle, "WINDOW")
+        except (ValueError, RuntimeError):
+            pass
+        _draw_handle = None
+    _draw_handle = bpy.types.SpaceView3D.draw_handler_add(
+        _draw_callback,
+        (),
+        "WINDOW",
+        "POST_PIXEL",
+    )
 
 
 def unregister_viewport_draw_handler() -> None:
     """Remove the registered viewport callback."""
     global _draw_handle
     if _draw_handle is not None:
-        bpy.types.SpaceView3D.draw_handler_remove(_draw_handle, "WINDOW")
+        try:
+            bpy.types.SpaceView3D.draw_handler_remove(_draw_handle, "WINDOW")
+        except (ValueError, RuntimeError):
+            pass
         _draw_handle = None
     clear_preview()

@@ -127,7 +127,7 @@ While the tool is active, left-clicks in the 3D View belong to Perspective Match
 
 The camera refines whenever enough required lines exist. **Auto from VPs** allows orthogonal VP pairs to solve FOV. Enable **Manual FOV**, set the horizontal angle, and apply it to lock focal length while continuing to solve orientation.
 
-Middle mouse and the wheel retain normal Blender navigation while a match tool is active. Sidebar sections use Blender’s native collapsible panels (Lens Distortion and View start collapsed).
+Middle mouse and the wheel retain normal Blender navigation while a match tool is active. Sidebar sections use Blender’s native collapsible panels (Lens Distortion and View start collapsed). Overlay guides only draw in **camera view** of the active match — choosing a match from the dropdown (or **View Match Camera**) rehydrates the plate/lens after opening a `.blend` and enters that view.
 
 ### 4. Set origin
 

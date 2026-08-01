@@ -198,6 +198,7 @@ class PM_OT_refine(bpy.types.Operator):
             calibration = scene.refine_match(context)
         except Exception as error:
             return _report_exception(self, error)
+        scene.enter_camera_view(context)
         self.report({"INFO"}, f"Matched camera at {calibration.hfov_degrees:.2f}° HFOV")
         return {"FINISHED"}
 
@@ -220,6 +221,7 @@ class PM_OT_camera_view(bpy.types.Operator):
         )
 
     def execute(self, context: bpy.types.Context) -> set[str]:
+        scene.ensure_match_ready(context)
         scene.enter_camera_view(context)
         return {"FINISHED"}
 

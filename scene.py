@@ -195,6 +195,8 @@ def set_active_match(context: bpy.types.Context, root: bpy.types.Object) -> None
     camera = session.camera_object
     if camera is not None:
         context.scene.camera = camera
+    # Rehydrate image pointer + lens/pose so overlays map after .blend load.
+    ensure_match_ready(context)
     # Keep scene render size aligned with the plate being edited.
     if session.image_width > 0 and session.image_height > 0:
         use_undistorted = (
@@ -610,6 +612,90 @@ def enter_camera_view(context: bpy.types.Context) -> None:
         region_3d.view_perspective = "CAMERA"
 
 
+def ensure_session_image(settings: properties.PMSession) -> bool:
+    """Restore the reference Image pointer after .blend load if it was lost.
+
+    Camera background images often survive even when the session PointerProperty
+    does not; fall back to that, then to image_path on disk.
+    """
+    image = settings.image
+    if image is not None and image.name in bpy.data.images:
+        if settings.image_width <= 0 or settings.image_height <= 0:
+            settings.image_width = int(image.size[0])
+            settings.image_height = int(image.size[1])
+            if settings.source_image_width <= 0:
+                settings.source_image_width = settings.image_width
+        return True
+
+    camera = settings.camera_object
+    if camera is not None and camera.type == "CAMERA":
+        for background in camera.data.background_images:
+            candidate = background.image
+            if candidate is None or candidate.name not in bpy.data.images:
+                continue
+            settings.image = candidate
+            settings.image_width = int(candidate.size[0])
+            settings.image_height = int(candidate.size[1])
+            if settings.source_image_width <= 0:
+                settings.source_image_width = settings.image_width
+            if not settings.image_path and candidate.filepath:
+                settings.image_path = str(
+                    Path(bpy.path.abspath(candidate.filepath)).expanduser().resolve()
+                )
+            return True
+
+    if settings.image_path:
+        absolute_path = str(
+            Path(bpy.path.abspath(settings.image_path)).expanduser().resolve()
+        )
+        if Path(absolute_path).is_file():
+            loaded = bpy.data.images.load(absolute_path, check_existing=True)
+            settings.image = loaded
+            settings.image_width = int(loaded.size[0])
+            settings.image_height = int(loaded.size[1])
+            if settings.source_image_width <= 0:
+                settings.source_image_width = settings.image_width
+            settings.image_path = absolute_path
+            if camera is not None and camera.type == "CAMERA":
+                camera_data = camera.data
+                camera_data.show_background_images = True
+                if len(camera_data.background_images) == 0:
+                    camera_data.background_images.new()
+                camera_data.background_images[0].image = loaded
+                camera_data.background_images[0].show_background_image = True
+            return True
+    return False
+
+
+def ensure_match_ready(context: bpy.types.Context) -> bool:
+    """Rehydrate image + Blender camera from persisted session (safe after .blend load).
+
+    Overlay mapping depends on lens/shift/local matrix matching stored intrinsics.
+    After file load those can drift from the RNA session — re-apply before drawing.
+    """
+    settings = properties.active_session(context)
+    if settings is None or settings.camera_object is None:
+        return False
+    ensure_session_image(settings)
+    if settings.image is None:
+        return False
+    if settings.image_width <= 0 or settings.image_height <= 0:
+        settings.image_width = max(int(settings.image.size[0]), 1)
+        settings.image_height = max(int(settings.image.size[1]), 1)
+    if settings.fx <= 0.0 or settings.fy <= 0.0:
+        calibration = _default_calibration(
+            settings.hfov_degrees,
+            settings.image_width,
+            settings.image_height,
+        )
+        store_calibration(settings, calibration)
+    try:
+        apply_camera(context.scene, settings, calibration_from_settings(settings))
+    except Exception:
+        return False
+    return True
+
+
 def is_camera_view(context: bpy.types.Context) -> bool:
     """Return whether input occurs in the active match camera view."""
     settings = properties.active_session(context)
@@ -703,8 +789,8 @@ def ideal_to_region(
         )
     storage = core.distort_points(
         np.array([[ideal_x, ideal_y]], dtype=np.float64),
-        settings.fx,
-        settings.fy,
+        max(float(settings.fx), 1.0e-6),
+        max(float(settings.fy), 1.0e-6),
         settings.cx,
         settings.cy,
         settings.division_lambda,

@@ -37,14 +37,44 @@ _reload_pending = False
 def _reset_modal_state(_dummy=None) -> None:
     """Clear transient modal flags after file load (safe outside register())."""
     operators._active_interact = None
-    for scene in bpy.data.scenes:
-        workspace = getattr(scene, "match_perspective", None)
+    for scene_block in bpy.data.scenes:
+        workspace = getattr(scene_block, "match_perspective", None)
         if workspace is None:
             continue
         workspace.is_modal = False
         workspace.work_mode = "NONE"
         # Backfill creation_index so Sort A–Z off restores saved add order.
         properties.ensure_landmark_creation_indices(workspace)
+    # Re-bind overlay callback + rehydrate active match after .blend load.
+    overlay.ensure_viewport_draw_handler()
+    if not bpy.app.timers.is_registered(_restore_active_match_after_load):
+        bpy.app.timers.register(_restore_active_match_after_load, first_interval=0.15)
+
+
+def _restore_active_match_after_load() -> None:
+    """Deferred: apply saved camera state and enter camera view after load."""
+    context = bpy.context
+    if context is None or not hasattr(context, "scene"):
+        return None
+    try:
+        from . import scene as scene_module
+
+        root = properties.active_root(context)
+        if root is None:
+            space = properties.workspace(context)
+            # Pointer may be empty while enum still names a loaded root.
+            name = getattr(space, "active_match", "NONE")
+            if name and name != "NONE":
+                candidate = bpy.data.objects.get(name)
+                if properties.is_match_root(candidate):
+                    root = candidate
+        if root is not None:
+            scene_module.set_active_match(context, root)
+        else:
+            overlay.ensure_viewport_draw_handler()
+    except Exception:
+        traceback.print_exc()
+    return None
 
 
 def _clear_modal_flags() -> None:

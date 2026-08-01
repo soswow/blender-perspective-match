@@ -1,9 +1,9 @@
 TODOs to be done:
-
-- Sync: optional refine of non-anchor intrinsics / VP orientation from landmarks using frames you trust more (bundle-adjust K/R inside matches; keep anchor locked).
-- Sync: landmark graph UI polish (rename, reorder, multi-select clear).
-- Sync: better absolute-scale UX (known baseline length, ruler, or user slider) when no ground/Known 3D tags.
-- Sync: optional snap Known 3D from mesh edit-mode verts without placing Empties first.
+- Undistorted plate saved message is shown at the end of the table. not sure if we need it there. writing to console should be enough.
+- Pressing "Auto from VPs" seem to reset undistored plate.
+- Move VP Lines stuff out of "VP Lines & Canera" section into own "VP Lines"
+- Camera section should have the rest + estimation distortion checkbox. So it should be sections: "VP Lines", "Origin", "Camera" 
+- When "estimation distortion" is checked, it should automatically generate undistorted plate as well as replace current image with that. There is no need for separate button for that as it is right now. "Original plate" should uncheck  "estimation distortion", recalc camera, load the original image.
 
 Done TODOs:
 - let's reduce complexity of this app and remove feature that creates surfaces completely. I can make surfaces myself. I am in blender already. Leave Setting origin.
