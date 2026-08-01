@@ -22,7 +22,7 @@ The extension is a native port of the manual workflow from Perspective Match Stu
 - Pick a ground origin so the matched camera sits relative to world origin.
 - Synchronise multiple matched cameras into one shared world with a landmark graph: 2D↔2D picks and/or **Known 3D** Blender objects (Empties at verts on a modeled edge), optional On Ground, choose an anchor, solve similarities onto match root Empties.
 - Estimate Fitzgibbon one-parameter radial distortion from three or more concurrent segments.
-- Generate a transparent, expanded undistorted PNG using Blender's NumPy—no OpenCV required.
+- With **Estimate Distortion**, automatically generate and show an expanded undistorted PNG (NumPy only—no OpenCV).
 - Apply display-only exposure/contrast to a sibling ``*-pm-view.png`` plate (undistorted uses the same lit image).
 - Save match state in the `.blend` and import desktop-compatible `.pmproj` files.
 
@@ -127,7 +127,7 @@ While the tool is active, left-clicks in the 3D View belong to Perspective Match
 
 The camera refines whenever enough required lines exist. **Auto from VPs** allows orthogonal VP pairs to solve FOV. Enable **Manual FOV**, set the horizontal angle, and apply it to lock focal length while continuing to solve orientation.
 
-Middle mouse and the wheel retain normal Blender navigation while a match tool is active. Sidebar sections use Blender’s native collapsible panels (Lens Distortion and View start collapsed). Overlay guides only draw in **camera view** of the active match — choosing a match from the dropdown (or **View Match Camera**) rehydrates the plate/lens after opening a `.blend` and enters that view.
+Middle mouse and the wheel retain normal Blender navigation while a match tool is active. Sidebar sections use Blender’s native collapsible panels (**View** starts collapsed). Overlay guides only draw in **camera view** of the active match — choosing a match from the dropdown (or **View Match Camera**) rehydrates the plate/lens after opening a `.blend` and enters that view.
 
 ### 4. Set origin
 
@@ -144,7 +144,7 @@ When several matches show the same scene, register them into one Blender world:
 3. Add landmarks for features visible in two or more stills (≥5 shared 2D picks), **or** link **Known 3D** Blender objects (≥3) and pick them in the other stills. Each landmark keeps a stable `item_id` plus a `creation_index` (add order). The **A–Z** toggle beside the list (below + / line / import / −) is a depressed/undepressed control: on = alphabetical by name, off = original add order. Sort only changes the list display — not storage order.
 4. Pick each landmark in every still where it is visible. **Point** landmarks: click the feature. **Line** landmarks: drag a segment along the same edge (no need for a shared point). **Known 3D** Empties: auto-projected on the anchor; pick them in other matches only. For a metric edge, set **Known 3D** + **Known 3D B** on a Line landmark. Free lines (no Empties) need the edge in **≥3 stills** to constrain pose. Ordinary point landmarks must be picked in **both** stills when Known 3D sit on one line. Set **Pick Confidence** before clicking.
 5. Optional: tag **On Ground** on point landmarks in the anchor, or rely on Known 3D points/lines, to pin absolute scale. Without metric cues, sync still recovers orientation and baseline *direction* with a depth heuristic.
-6. **Solve Sync** writes a rigid transform (`R`, `t`, scale 1) onto non-anchor root Empties. Use **Diagnose** first to see per-landmark RMSE without moving cameras; **Clear** resets sync transforms. The eye icon on **Sync Matches** toggles landmark picks on the plate (same pattern as VP Lines & Camera); **Landmark Empties** still controls the 3D helpers after sync.
+6. **Solve Sync** writes a rigid transform (`R`, `t`, scale 1) onto non-anchor root Empties. Use **Diagnose** first to see per-landmark RMSE without moving cameras; **Clear** resets sync transforms. The eye icon on **Sync Matches** toggles landmark picks on the plate (same pattern as VP Lines); **Landmark Empties** still controls the 3D helpers after sync.
 
 Why not “any corresponding points”? Photogrammetry / SfM does solve relative orientation and baseline *direction* from enough 2D↔2D matches — and so does this sync. What stays free is absolute baseline **length** when dropping the second camera into an already-metric Blender world from the first match (classic stereo scale ambiguity). **Known 3D** Empties, On Ground picks, or a later ruler pin that one DOF; without them, a depth heuristic chooses a plausible scale.
 
@@ -166,16 +166,7 @@ Why not “any corresponding points”? Photogrammetry / SfM does solve relative
 
 ## Lens distortion
 
-Enable **Estimate Distortion** and refine after drawing at least three concurrent segments on one axis. The solver estimates the Fitzgibbon division parameter λ.
-
-**Generate Undistorted Plate**:
-
-1. Expands the output canvas when necessary so source content is not cropped.
-2. Writes a transparent PNG beside the source image.
-3. Switches the camera background and projection to the pinhole plate.
-4. Warps overlay coordinates between stored source pixels and visible plate pixels.
-
-Extreme or weakly constrained estimates that hit the λ search boundary are rejected and the pinhole model is retained.
+Enable **Estimate Distortion** in the **Camera** section (Manual FOV must be off). After a successful VP refine with ≥3 concurrent segments on one axis, the solver estimates Fitzgibbon λ and **automatically** generates/switches to an undistorted plate. **Original Plate** turns estimation off, clears λ, re-solves, and restores the source still. Plate file paths are logged to the console, not the sidebar status line.
 
 ## Project compatibility
 

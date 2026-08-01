@@ -213,7 +213,7 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             perspective.label(text=tip, icon="INFO")
 
         line_header, line_body = _section(
-            layout, "PM_vp_lines", "3. VP Lines & Camera", "TRACKING"
+            layout, "PM_vp_lines", "3. VP Lines", "TRACKING"
         )
         line_header.prop(
             settings,
@@ -240,56 +240,8 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             row.operator("perspective_match.clear_axis", text="", icon="X")
             if workspace.is_modal and workspace.work_mode == "LINE":
                 line_body.label(text="Line tool active — Esc exits", icon="MOUSE_LMB")
-
-            focal_row = line_body.row(align=True)
-            focal_row.prop(settings, "lock_focal", text="Manual FOV", toggle=True)
-            focal_row.operator(
-                "perspective_match.refine", text="Auto from VPs", icon="FILE_REFRESH"
-            )
             if not _panel_lines_ready(settings):
                 line_body.label(text=_panel_lines_hint(settings), icon="INFO")
-            manual_column = line_body.column(align=True)
-            manual_column.enabled = settings.lock_focal or settings.vp_mode == "1"
-            manual_column.prop(settings, "hfov_degrees")
-            manual_column.operator(
-                "perspective_match.apply_manual_fov", icon="CHECKMARK"
-            )
-            line_body.operator("perspective_match.reset_camera", icon="LOOP_BACK")
-
-            if settings.fov_xy > 0.0 or settings.fov_zy > 0.0 or settings.fov_zx > 0.0:
-                diagnostics = line_body.column(align=True)
-                diagnostics.label(text="HFOV by VP pair:")
-                if settings.fov_xy > 0.0:
-                    diagnostics.label(text=f"XY: {settings.fov_xy:.2f}°")
-                if settings.fov_zy > 0.0:
-                    diagnostics.label(text=f"ZY: {settings.fov_zy:.2f}°")
-                if settings.fov_zx > 0.0:
-                    diagnostics.label(text=f"ZX: {settings.fov_zx:.2f}°")
-                diagnostics.label(
-                    text=f"Axis residual: {settings.residual_degrees:.2f}°"
-                )
-            if (
-                settings.camera_object is not None
-                and settings.camera_object.data is not None
-            ):
-                line_body.label(
-                    text=(
-                        f"Lens: {settings.camera_object.data.lens:.2f} mm · "
-                        f"HFOV {settings.hfov_degrees:.2f}°"
-                    ),
-                    icon="CAMERA_DATA",
-                )
-            if abs(settings.cx - settings.image_width * 0.5) > 0.5 or abs(
-                settings.cy - settings.image_height * 0.5
-            ) > 0.5:
-                line_body.label(
-                    text=(
-                        f"PP offset: "
-                        f"{settings.cx - settings.image_width * 0.5:+.1f}, "
-                        f"{settings.cy - settings.image_height * 0.5:+.1f} px"
-                    ),
-                    icon="PIVOT_CURSOR",
-                )
 
         _header, origin = _section(layout, "PM_origin", "4. Origin", "PIVOT_CURSOR")
         if origin is not None:
@@ -315,33 +267,67 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
                     text="Origin tool active — click ground point", icon="MOUSE_LMB"
                 )
 
-        _header, distortion = _section(
-            layout,
-            "PM_distortion",
-            "Lens Distortion",
-            "MOD_SIMPLEDEFORM",
-            default_closed=True,
-        )
-        if distortion is not None:
-            distortion.prop(settings, "estimate_distortion")
-            row = distortion.row(align=True)
-            row.operator(
-                "perspective_match.refine", text="Estimate λ", icon="FILE_REFRESH"
+        _header, camera = _section(layout, "PM_camera", "5. Camera", "CAMERA_DATA")
+        if camera is not None:
+            focal_row = camera.row(align=True)
+            focal_row.prop(settings, "lock_focal", text="Manual FOV", toggle=True)
+            focal_row.operator(
+                "perspective_match.refine", text="Auto from VPs", icon="FILE_REFRESH"
             )
-            row.enabled = settings.estimate_distortion
-            distortion.label(text=f"Division λ: {settings.division_lambda:.5f}")
+            manual_column = camera.column(align=True)
+            manual_column.enabled = settings.lock_focal or settings.vp_mode == "1"
+            manual_column.prop(settings, "hfov_degrees")
+            manual_column.operator(
+                "perspective_match.apply_manual_fov", icon="CHECKMARK"
+            )
+            camera.operator("perspective_match.reset_camera", icon="LOOP_BACK")
+
+            if settings.fov_xy > 0.0 or settings.fov_zy > 0.0 or settings.fov_zx > 0.0:
+                diagnostics = camera.column(align=True)
+                diagnostics.label(text="HFOV by VP pair:")
+                if settings.fov_xy > 0.0:
+                    diagnostics.label(text=f"XY: {settings.fov_xy:.2f}°")
+                if settings.fov_zy > 0.0:
+                    diagnostics.label(text=f"ZY: {settings.fov_zy:.2f}°")
+                if settings.fov_zx > 0.0:
+                    diagnostics.label(text=f"ZX: {settings.fov_zx:.2f}°")
+                diagnostics.label(
+                    text=f"Axis residual: {settings.residual_degrees:.2f}°"
+                )
+            if (
+                settings.camera_object is not None
+                and settings.camera_object.data is not None
+            ):
+                camera.label(
+                    text=(
+                        f"Lens: {settings.camera_object.data.lens:.2f} mm · "
+                        f"HFOV {settings.hfov_degrees:.2f}°"
+                    ),
+                    icon="CAMERA_DATA",
+                )
+            if abs(settings.cx - settings.image_width * 0.5) > 0.5 or abs(
+                settings.cy - settings.image_height * 0.5
+            ) > 0.5:
+                camera.label(
+                    text=(
+                        f"PP offset: "
+                        f"{settings.cx - settings.image_width * 0.5:+.1f}, "
+                        f"{settings.cy - settings.image_height * 0.5:+.1f} px"
+                    ),
+                    icon="PIVOT_CURSOR",
+                )
+
+            camera.prop(settings, "estimate_distortion")
+            camera.label(text=f"Division λ: {settings.division_lambda:.5f}")
             if settings.lambda_saturated:
-                distortion.label(
+                camera.label(
                     text="Estimate saturated; pinhole retained", icon="ERROR"
                 )
-            row = distortion.row(align=True)
-            row.enabled = abs(settings.division_lambda) > 1.0e-8
-            row.operator("perspective_match.generate_undistorted", icon="IMAGE_DATA")
-            if settings.undistorted_image is not None:
-                row.operator(
-                    "perspective_match.toggle_undistorted",
-                    text="Original" if settings.view_undistorted else "Undistorted",
-                    icon="UV_SYNC_SELECT",
+            if settings.view_undistorted or settings.estimate_distortion:
+                camera.operator(
+                    "perspective_match.use_original_plate",
+                    text="Original Plate",
+                    icon="IMAGE_DATA",
                 )
 
         _header, view = _section(
@@ -365,7 +351,7 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
 
     def _draw_sync(self, layout, context, workspace, settings) -> None:
         sync_header, sync_body = _section(
-            layout, "PM_sync", "5. Sync Matches", "LINKED"
+            layout, "PM_sync", "6. Sync Matches", "LINKED"
         )
         sync_header.prop(
             workspace,

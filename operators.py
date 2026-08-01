@@ -71,6 +71,7 @@ def _refine_if_ready(context: bpy.types.Context) -> None:
         return
     if _required_lines_ready(settings):
         scene.refine_match(context)
+        distortion.sync_undistorted_plate_after_refine(context)
     else:
         settings.status = _lines_needed_message(settings)
         properties.tag_viewport_redraw(context)
@@ -196,6 +197,9 @@ class PM_OT_refine(bpy.types.Operator):
         settings.lock_focal = False
         try:
             calibration = scene.refine_match(context)
+            from . import distortion
+
+            distortion.sync_undistorted_plate_after_refine(context)
         except Exception as error:
             return _report_exception(self, error)
         scene.enter_camera_view(context)
@@ -245,6 +249,7 @@ class PM_OT_apply_manual_fov(bpy.types.Operator):
                 scene.refine_match(context)
             else:
                 scene.apply_manual_fov(context)
+            distortion.sync_undistorted_plate_after_refine(context)
         except Exception as error:
             self.report({"ERROR"}, str(error))
             return {"CANCELLED"}
@@ -275,6 +280,7 @@ class PM_OT_reset_camera(bpy.types.Operator):
                 scene.refine_match(context)
             else:
                 scene.apply_manual_fov(context)
+            distortion.sync_undistorted_plate_after_refine(context)
         except Exception as error:
             self.report({"ERROR"}, str(error))
             return {"CANCELLED"}
@@ -390,6 +396,32 @@ class PM_OT_generate_undistorted(bpy.types.Operator):
             self.report({"ERROR"}, str(error))
             return {"CANCELLED"}
         self.report({"INFO"}, f"Generated {Path(image.filepath_raw).name}")
+        return {"FINISHED"}
+
+
+class PM_OT_use_original_plate(bpy.types.Operator):
+    """Turn off distortion estimation and restore the original still."""
+
+    bl_idname = "perspective_match.use_original_plate"
+    bl_label = "Original Plate"
+    bl_description = (
+        "Uncheck Estimate Distortion, clear λ, re-solve the camera, "
+        "and show the original reference image"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        settings = _session(context)
+        return settings is not None and settings.image is not None
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        try:
+            distortion.use_original_plate(context)
+        except Exception as error:
+            return _report_exception(self, error)
+        scene.enter_camera_view(context)
+        self.report({"INFO"}, "Restored original plate")
         return {"FINISHED"}
 
 
@@ -1261,6 +1293,7 @@ CLASSES = (
     PM_OT_apply_placement,
     PM_OT_clear_placement,
     PM_OT_generate_undistorted,
+    PM_OT_use_original_plate,
     PM_OT_toggle_undistorted,
     PM_OT_apply_view_lighting,
     PM_OT_reset_view_lighting,

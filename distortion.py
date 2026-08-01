@@ -391,8 +391,90 @@ def generate_undistorted_plate(
     settings.undistorted_offset_y = offset_y
     settings.view_undistorted = True
     scene.refresh_background_projection(context)
-    settings.status = f"Undistorted plate saved: {Path(resolved_path).name}"
+    # Path is noisy in the sidebar footer — console is enough.
+    print(f"Perspective Match: undistorted plate saved → {resolved_path}")
     return output_image
+
+
+def sync_undistorted_plate_after_refine(context: bpy.types.Context) -> None:
+    """Build/show undistorted plate when Estimate Distortion is on; else stay original.
+
+    Call after refine so Auto from VPs regenerates the plate instead of leaving
+    a blank/reset background when λ or intrinsics change.
+    """
+    settings = properties.active_session(context)
+    if settings is None:
+        return
+    if (
+        settings.estimate_distortion
+        and not settings.lock_focal
+        and abs(settings.division_lambda) > 1.0e-8
+        and not settings.lambda_saturated
+    ):
+        try:
+            generate_undistorted_plate(context)
+        except Exception as error:
+            settings.status = f"Distortion estimated; plate failed: {error}"
+            print(f"Perspective Match: undistorted plate failed: {error}")
+        return
+    if settings.view_undistorted or settings.undistorted_image is not None:
+        scene.invalidate_undistorted_cache(settings)
+        scene.refresh_background_projection(context)
+
+
+def revert_to_original_plate(context: bpy.types.Context) -> None:
+    """Clear λ, drop undistorted cache, re-solve, and show the source plate."""
+    settings = properties.active_session(context)
+    if settings is None:
+        raise ValueError("Create or activate a match camera first")
+    settings.division_lambda = 0.0
+    settings.lambda_saturated = False
+    scene.invalidate_undistorted_cache(settings)
+    line_bundles = scene.line_bundles_from_settings(settings)
+    ready_axes = sum(1 for segments in line_bundles.values() if len(segments) >= 2)
+    if ready_axes >= 2:
+        scene.refine_match(context)
+    else:
+        scene.apply_manual_fov(context)
+    scene.refresh_background_projection(context)
+    settings.status = "Viewing original image"
+
+
+def use_original_plate(context: bpy.types.Context) -> None:
+    """Turn off Estimate Distortion and restore the original plate + camera."""
+    settings = properties.active_session(context)
+    if settings is None:
+        raise ValueError("Create or activate a match camera first")
+    # Avoid re-entering the checkbox update while clearing the flag.
+    properties._syncing_estimate_distortion = True
+    try:
+        settings.estimate_distortion = False
+    finally:
+        properties._syncing_estimate_distortion = False
+    revert_to_original_plate(context)
+
+
+def on_estimate_distortion_toggled(context: bpy.types.Context) -> None:
+    """React to the Estimate Distortion checkbox (enable → plate; disable → original)."""
+    settings = properties.active_session(context)
+    if settings is None or settings.image is None:
+        return
+    if not settings.estimate_distortion:
+        revert_to_original_plate(context)
+        return
+    # Enabling: unlock FOV so λ can be estimated, refine if lines allow, then plate.
+    settings.lock_focal = False
+    line_bundles = scene.line_bundles_from_settings(settings)
+    ready_axes = sum(1 for segments in line_bundles.values() if len(segments) >= 2)
+    if ready_axes < 2:
+        settings.status = "Estimate Distortion on — draw VP lines, then Auto from VPs"
+        return
+    scene.refine_match(context)
+    sync_undistorted_plate_after_refine(context)
+    if abs(settings.division_lambda) <= 1.0e-8:
+        settings.status = (
+            "Estimate Distortion on — need ≥3 concurrent segments on one axis for λ"
+        )
 
 
 def set_undistorted_view(context: bpy.types.Context, enabled: bool) -> None:

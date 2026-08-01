@@ -1,11 +1,16 @@
 TODOs to be done:
+- No need for `-view` variant of the image file name below "Apply lighting" button.
+- Move Opacity slider to top of that section. and call it "Overlay opacity"
+- No need for warning "Display only - does not affect ... "
+- Opacity should affect actively drawn VP line. right now it is only applied for already drawn ones.
+
+
+Done TODOs:
 - Undistorted plate saved message is shown at the end of the table. not sure if we need it there. writing to console should be enough.
 - Pressing "Auto from VPs" seem to reset undistored plate.
 - Move VP Lines stuff out of "VP Lines & Canera" section into own "VP Lines"
-- Camera section should have the rest + estimation distortion checkbox. So it should be sections: "VP Lines", "Origin", "Camera" 
+- Camera section should have the rest + estimation distortion checkbox. So it should be sections: "VP Lines", "Origin", "Camera"
 - When "estimation distortion" is checked, it should automatically generate undistorted plate as well as replace current image with that. There is no need for separate button for that as it is right now. "Original plate" should uncheck  "estimation distortion", recalc camera, load the original image.
-
-Done TODOs:
 - let's reduce complexity of this app and remove feature that creates surfaces completely. I can make surfaces myself. I am in blender already. Leave Setting origin.
 - Remove Measure scale and known length and all that as well. Just keep setting origin.
 - VP Lines don't have any antialiasing and look very bad. IS there anything can be done about it?

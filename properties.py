@@ -39,6 +39,24 @@ def _redraw(_self, context: bpy.types.Context) -> None:
     tag_viewport_redraw(context)
 
 
+_syncing_estimate_distortion = False
+
+
+def _update_estimate_distortion(self, context: bpy.types.Context) -> None:
+    """Enable → refine + undistorted plate; disable → original plate."""
+    global _syncing_estimate_distortion
+    if _syncing_estimate_distortion or context is None:
+        return
+    from . import distortion
+
+    _syncing_estimate_distortion = True
+    try:
+        distortion.on_estimate_distortion_toggled(context)
+    finally:
+        _syncing_estimate_distortion = False
+    tag_viewport_redraw(context)
+
+
 def _update_landmark_empties(_self, context: bpy.types.Context) -> None:
     """Rebuild point Empties / line meshes when visibility or size changes."""
     from . import scene
@@ -436,8 +454,12 @@ class PMSession(bpy.types.PropertyGroup):
     )
     estimate_distortion: bpy.props.BoolProperty(
         name="Estimate Distortion",
-        description="Estimate division λ when an axis has at least three segments",
+        description=(
+            "Estimate division λ from VP lines (≥3 concurrent segments on one axis), "
+            "then generate and show an undistorted plate. Turn off via Original Plate"
+        ),
         default=False,
+        update=_update_estimate_distortion,
     )
     lambda_saturated: bpy.props.BoolProperty(default=False, options={"HIDDEN"})
 
