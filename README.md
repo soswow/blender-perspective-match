@@ -131,7 +131,7 @@ Middle mouse and the wheel retain normal Blender navigation while a match tool i
 
 ### 4. Set origin
 
-Use **Pick Origin** to choose a ground point that should become world origin. **Apply Origin** recomputes camera position from the current solve; clear removes the pick.
+Use **Pick Origin** to choose a ground point that should become world origin (placement updates automatically after VP solves). Clear (X) removes the pick.
 
 Build your own floor/wall geometry in Blender once the camera is matched—the extension no longer creates surface meshes or measures known lengths.
 

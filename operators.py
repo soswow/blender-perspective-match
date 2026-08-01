@@ -330,28 +330,6 @@ class PM_OT_delete_selected(bpy.types.Operator):
         return {"FINISHED"}
 
 
-class PM_OT_apply_placement(bpy.types.Operator):
-    """Reapply the picked origin."""
-
-    bl_idname = "perspective_match.apply_placement"
-    bl_label = "Apply Origin"
-    bl_description = "Recompute camera position from the picked origin"
-    bl_options = {"REGISTER", "UNDO"}
-
-    @classmethod
-    def poll(cls, context: bpy.types.Context) -> bool:
-        settings = _session(context)
-        return settings is not None and settings.origin_is_set
-
-    def execute(self, context: bpy.types.Context) -> set[str]:
-        try:
-            scene.reapply_placement(context)
-        except Exception as error:
-            self.report({"ERROR"}, str(error))
-            return {"CANCELLED"}
-        return {"FINISHED"}
-
-
 class PM_OT_clear_placement(bpy.types.Operator):
     """Clear the origin pick."""
 
@@ -1290,7 +1268,6 @@ CLASSES = (
     PM_OT_reset_camera,
     PM_OT_clear_axis,
     PM_OT_delete_selected,
-    PM_OT_apply_placement,
     PM_OT_clear_placement,
     PM_OT_generate_undistorted,
     PM_OT_use_original_plate,

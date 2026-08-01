@@ -254,10 +254,9 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
                 icon="PIVOT_CURSOR",
             )
             operator.mode = "ORIGIN"
-            apply_row = origin.row(align=True)
-            apply_row.enabled = settings.origin_is_set
-            apply_row.operator("perspective_match.apply_placement", icon="CHECKMARK")
-            apply_row.operator(
+            clear_row = row.row(align=True)
+            clear_row.enabled = settings.origin_is_set
+            clear_row.operator(
                 "perspective_match.clear_placement", text="", icon="X"
             )
             if settings.origin_is_set:
