@@ -571,7 +571,9 @@ def _draw_landmarks(context: bpy.types.Context, fill_shader, settings) -> None:
             base = (0.35, 0.85, 1.0, 1.0) if is_active else (0.25, 0.7, 0.95, 1.0)
         else:
             base = (1.0, 0.85, 0.2, 1.0) if is_active else (0.95, 0.65, 0.15, 1.0)
-        color = _with_alpha(base, opacity)
+        # Dim picks that are excluded from the sync solve.
+        draw_opacity = opacity * (0.35 if not landmark.use_in_sync else 1.0)
+        color = _with_alpha(base, draw_opacity)
         if landmark.kind == "LINE":
             point_a = scene.image_to_region(context, observation.x, observation.y)
             point_b = scene.image_to_region(context, observation.x2, observation.y2)

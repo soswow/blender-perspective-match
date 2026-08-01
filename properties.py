@@ -319,6 +319,16 @@ class PMLandmark(bpy.types.PropertyGroup):
     # Stable insertion order for UI sort-off; assigned on add / file load migrate.
     creation_index: bpy.props.IntProperty(default=-1, options={"HIDDEN"})
     name: bpy.props.StringProperty(name="Name", default="Landmark")
+    # Off = keep picks/overlay but omit from Solve Sync / Diagnose graph.
+    use_in_sync: bpy.props.BoolProperty(
+        name="Use in Sync",
+        description=(
+            "Include this landmark in Solve Sync and Diagnose. "
+            "Turn off to debug which landmarks break the solve without deleting picks"
+        ),
+        default=True,
+        update=_redraw,
+    )
     kind: bpy.props.EnumProperty(
         name="Kind",
         description="Point feature or the same 3D edge drawn as a line in each still",

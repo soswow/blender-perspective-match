@@ -70,7 +70,15 @@ class PM_UL_landmarks(bpy.types.UIList):
         _index=0,
         _flt_flag=0,
     ) -> None:
+        if self.layout_type == "GRID":
+            layout.alignment = "CENTER"
+            layout.label(text="", icon="EMPTY_AXIS")
+            return
+
         row = layout.row(align=True)
+        # Icon toggle — plain Bool+emboss=False reserves a half-row and centers the name.
+        sync_icon = "CHECKBOX_HLT" if item.use_in_sync else "CHECKBOX_DEHLT"
+        row.prop(item, "use_in_sync", text="", emboss=False, icon=sync_icon)
         row.prop(item, "name", text="", emboss=False, icon="EMPTY_AXIS")
         if item.kind == "LINE":
             row.label(text="", icon="MESH_DATA")
@@ -81,7 +89,9 @@ class PM_UL_landmarks(bpy.types.UIList):
         elif item.on_ground:
             row.label(text="", icon="ORIENTATION_VIEW")
         count = _observation_count(item)
-        if item.rmse_px > 0.5:
+        if not item.use_in_sync:
+            row.label(text=f"{count} · off")
+        elif item.rmse_px > 0.5:
             row.label(text=f"{count} · {item.rmse_px:.0f}px")
         else:
             row.label(text=f"{count}")
@@ -414,6 +424,7 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
 
         landmark = scene.active_landmark(context)
         if landmark is not None:
+            sync_body.prop(landmark, "use_in_sync")
             sync_body.prop(landmark, "kind")
             if landmark.kind == "POINT":
                 sync_body.prop(landmark, "on_ground")

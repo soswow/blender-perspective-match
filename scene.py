@@ -1238,6 +1238,9 @@ def build_sync_problem(context: bpy.types.Context):
     seen_pairs: set[tuple[str, str]] = set()
     space = properties.workspace(context)
     for landmark in space.landmarks:
+        # Disabled landmarks keep picks for debugging but stay out of the graph.
+        if not getattr(landmark, "use_in_sync", True):
+            continue
         known_object = landmark.known_object
         known_object_b = getattr(landmark, "known_object_b", None)
         if landmark.kind == "LINE":
@@ -1245,12 +1248,14 @@ def build_sync_problem(context: bpy.types.Context):
             if other_id and other_id != "NONE" and other_id != landmark.item_id:
                 pair = tuple(sorted((landmark.item_id, other_id)))
                 if pair not in seen_pairs:
-                    # Confirm the target still exists as a Line landmark.
+                    # Confirm the target still exists as an enabled Line landmark.
                     target = next(
                         (
                             item
                             for item in space.landmarks
-                            if item.item_id == other_id and item.kind == "LINE"
+                            if item.item_id == other_id
+                            and item.kind == "LINE"
+                            and getattr(item, "use_in_sync", True)
                         ),
                         None,
                     )
@@ -1337,6 +1342,8 @@ def known_anchor_pick_warnings(context: bpy.types.Context) -> list[str]:
     calibration = calibration_from_settings(session)
     warnings: list[str] = []
     for landmark in properties.workspace(context).landmarks:
+        if not getattr(landmark, "use_in_sync", True):
+            continue
         if landmark.known_object is None:
             continue
         observation = observation_for_match(landmark, anchor)
@@ -1401,6 +1408,11 @@ def diagnose_sync(context: bpy.types.Context):
     _apply_sync_landmark_diagnostics(context, result)
 
     parts = []
+    excluded = sum(
+        1 for landmark in space.landmarks if not getattr(landmark, "use_in_sync", True)
+    )
+    if excluded:
+        parts.append(f"{excluded} landmark(s) excluded from sync")
     if warnings:
         parts.append("Known 3D: " + "; ".join(warnings[:3]))
     parts.append(result.message)
@@ -1453,6 +1465,11 @@ def solve_and_apply_sync(context: bpy.types.Context):
     )
     _apply_sync_landmark_diagnostics(context, result)
     message = result.message
+    excluded = sum(
+        1 for landmark in space.landmarks if not getattr(landmark, "use_in_sync", True)
+    )
+    if excluded:
+        message = f"{excluded} landmark(s) excluded · " + message
     if warnings:
         message = "Known 3D warn: " + "; ".join(warnings[:2]) + " | " + message
     space.sync_status = message

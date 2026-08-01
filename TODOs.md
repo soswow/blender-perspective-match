@@ -3,9 +3,10 @@ TODOs to be done:
 - Move Opacity slider to top of that section. and call it "Overlay opacity"
 - No need for warning "Display only - does not affect ... "
 - Opacity should affect actively drawn VP line. right now it is only applied for already drawn ones.
-
+- Sync: leave-one-out Diagnose / automatic outlier rejection when sync fails.
 
 Done TODOs:
+- Sync: per-landmark Use in Sync toggle (exclude from solve without deleting picks).
 - Undistorted plate saved message is shown at the end of the table. not sure if we need it there. writing to console should be enough.
 - Pressing "Auto from VPs" seem to reset undistored plate.
 - Move VP Lines stuff out of "VP Lines & Canera" section into own "VP Lines"
