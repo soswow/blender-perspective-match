@@ -101,12 +101,94 @@ def _view3d_under_event(context: bpy.types.Context, event):
 # Live modal instance — is_modal alone can go stale if the handler dies uncleanly.
 _active_interact: "PM_OT_interact | None" = None
 
+_NUMPAD_SLOT_KEYS = {
+    "NUMPAD_1": 1,
+    "NUMPAD_2": 2,
+    "NUMPAD_3": 3,
+    "NUMPAD_4": 4,
+    "NUMPAD_5": 5,
+    "NUMPAD_6": 6,
+    "NUMPAD_7": 7,
+    "NUMPAD_8": 8,
+    "NUMPAD_9": 9,
+}
+
 
 def _clear_interact_flags(context: bpy.types.Context) -> None:
     """Reset workspace modal flags without touching a live operator."""
     workspace = _workspace(context)
     workspace.is_modal = False
     workspace.work_mode = "NONE"
+
+
+def _perspective_match_sidebar_active(context: bpy.types.Context) -> bool:
+    """True when a 3D View has the Perspective Match N-panel tab selected."""
+    screen = getattr(context, "screen", None)
+    if screen is None:
+        return False
+    for area in screen.areas:
+        if area.type != "VIEW_3D":
+            continue
+        for region in area.regions:
+            if region.type != "UI":
+                continue
+            if region.width > 1 and region.active_panel_category == "Perspective Match":
+                return True
+    return False
+
+
+def _match_slot_from_event(event) -> int | None:
+    """Ctrl+Alt+NumPad 1–9 → 1-based match slot, else None."""
+    if event.value != "PRESS" or not event.ctrl or not event.alt:
+        return None
+    return _NUMPAD_SLOT_KEYS.get(event.type)
+
+
+def cancel_active_interact(context: bpy.types.Context) -> bool:
+    """Cancel Draw / Pick Origin / PP / Landmark modal. True if one was live."""
+    global _active_interact
+    active = _active_interact
+    if active is None:
+        workspace = _workspace(context)
+        if workspace.is_modal:
+            _clear_interact_flags(context)
+            overlay.clear_preview(context)
+            if context.window is not None:
+                context.window.cursor_set("DEFAULT")
+        return False
+    # Drop in-progress gestures (half-drawn lines, PP drag, etc.) then exit.
+    active._cancel_drag(context)
+    active._finish(context, cancelled=True)
+    return True
+
+
+def activate_match_by_slot(
+    context: bpy.types.Context,
+    index: int,
+    *,
+    report=None,
+) -> set[str]:
+    """Activate the Nth match root (1-based, name-sorted). Cancels live tools."""
+    roots = properties.iter_match_roots()
+    if index < 1 or index > len(roots):
+        message = (
+            f"No match in slot {index} "
+            f"({len(roots)} match{'es' if len(roots) != 1 else ''})"
+        )
+        if report is not None:
+            report({"WARNING"}, message)
+        return {"CANCELLED"}
+    root = roots[index - 1]
+    try:
+        # set_active_match cancels any Draw / Pick modal before switching.
+        scene.set_active_match(context, root)
+    except Exception as error:
+        if report is not None:
+            report({"ERROR"}, str(error))
+        return {"CANCELLED"}
+    if report is not None:
+        report({"INFO"}, f"Active match {index}: {root.name}")
+    return {"FINISHED"}
 
 
 def _delete_selected_item(context: bpy.types.Context) -> bool:
@@ -867,6 +949,14 @@ class PM_OT_interact(bpy.types.Operator):
         # External clears (match switch / unload) or lost session end the tool.
         if settings is None or not workspace.is_modal or _active_interact is not self:
             return self._finish(context, cancelled=True)
+        # Ctrl+Alt+NumPad must be handled here — modal handlers see keys first.
+        slot = _match_slot_from_event(event)
+        if slot is not None:
+            result = activate_match_by_slot(context, slot, report=self.report)
+            # Successful switch already finished this modal via set_active_match.
+            if result == {"FINISHED"}:
+                return {"CANCELLED"}
+            return {"RUNNING_MODAL"}
         if event.type in {"ESC", "RIGHTMOUSE"} and event.value == "PRESS":
             if self._cancel_drag(context):
                 return {"RUNNING_MODAL"}
@@ -975,6 +1065,34 @@ class PM_OT_interact(bpy.types.Operator):
     def cancel(self, context: bpy.types.Context) -> None:
         self._cancel_drag(context)
         self._finish(context, cancelled=True)
+
+
+class PM_OT_activate_match_slot(bpy.types.Operator):
+    """Activate a match by 1-based index in the name-sorted match list."""
+
+    bl_idname = "perspective_match.activate_match_slot"
+    bl_label = "Activate Match Slot"
+    bl_description = (
+        "Switch to a Perspective Match by slot (Ctrl+Alt+NumPad 1–9). "
+        "Cancels any active Draw / Pick tool"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    index: bpy.props.IntProperty(
+        name="Slot",
+        description="1-based index into the name-sorted match list",
+        default=1,
+        min=1,
+        max=9,
+    )
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        # Only claim the shortcut while the Perspective Match sidebar tab is active.
+        return _perspective_match_sidebar_active(context)
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        return activate_match_by_slot(context, int(self.index), report=self.report)
 
 
 class PM_OT_new_match_camera(bpy.types.Operator):
@@ -1377,5 +1495,6 @@ CLASSES = (
     PM_OT_diagnose_sync,
     PM_OT_refine_lenses,
     PM_OT_clear_sync,
+    PM_OT_activate_match_slot,
     PM_OT_interact,
 )

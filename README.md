@@ -91,10 +91,11 @@ PM_<image>
 
 1. Click **New Match Camera** to create an empty match and activate it.
 2. Use **Active Match** to switch which session the sidebar edits. Switching also sets the scene camera and enters that camera view.
-3. Click **Unload** to detach the sidebar from editing without deleting objects.
-4. Delete a match by removing its Empty/camera in the Outliner; the dropdown prunes dead entries automatically.
+3. With the **Perspective Match** sidebar tab selected, **Ctrl+Alt+NumPad 1–9** jumps to the Nth match (name-sorted). Any Draw / Pick Origin / PP / Landmark tool is cancelled first.
+4. Click **Unload** to detach the sidebar from editing without deleting objects.
+5. Delete a match by removing its Empty/camera in the Outliner; the dropdown prunes dead entries automatically.
 
-Selecting objects in the viewport does **not** change the active match—only New, Unload, and the dropdown do.
+Selecting objects in the viewport does **not** change the active match—only New, Unload, the dropdown, and the NumPad shortcuts do.
 
 ### 1. Load a reference
 

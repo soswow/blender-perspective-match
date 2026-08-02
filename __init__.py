@@ -32,6 +32,34 @@ _RELOAD_SUBMODULES = (
 )
 
 _reload_pending = False
+_addon_keymaps: list[tuple] = []
+
+
+def _register_keymaps() -> None:
+    """Ctrl+Alt+NumPad 1–9 → activate match slot (poll-gated to sidebar tab)."""
+    window_manager = bpy.context.window_manager
+    if window_manager is None:
+        return
+    keyconfig = window_manager.keyconfigs.addon
+    if keyconfig is None:
+        return
+    keymap = keyconfig.keymaps.new(name="3D View", space_type="VIEW_3D")
+    for index in range(1, 10):
+        item = keymap.keymap_items.new(
+            "perspective_match.activate_match_slot",
+            f"NUMPAD_{index}",
+            "PRESS",
+            ctrl=True,
+            alt=True,
+        )
+        item.properties.index = index
+        _addon_keymaps.append((keymap, item))
+
+
+def _unregister_keymaps() -> None:
+    for keymap, item in _addon_keymaps:
+        keymap.keymap_items.remove(item)
+    _addon_keymaps.clear()
 
 
 @persistent
@@ -167,10 +195,12 @@ def register() -> None:
     # Existing open file: migrate landmark creation indices once on enable.
     properties.ensure_landmark_creation_indices()
     overlay.register_viewport_draw_handler()
+    _register_keymaps()
 
 
 def unregister() -> None:
     """Remove drawing, scene state, and all registered classes."""
+    _unregister_keymaps()
     if _reset_modal_state in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.remove(_reset_modal_state)
     operators._active_interact = None

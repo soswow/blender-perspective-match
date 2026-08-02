@@ -181,10 +181,10 @@ def set_active_match(context: bpy.types.Context, root: bpy.types.Object) -> None
     """Activate a match root and switch the viewport to its camera."""
     if not properties.is_match_root(root):
         raise ValueError("Not a Perspective Match root")
-    # Drop any live interact handler ownership; the modal exits on its next event.
+    # Cancel Draw / Pick Origin / PP / Landmark tools before changing session.
     from . import operators as operators_module
 
-    operators_module._active_interact = None
+    operators_module.cancel_active_interact(context)
     space = properties.workspace(context)
     space.active_root = root
     # Keep the dropdown in sync without re-entering its update callback.
@@ -219,7 +219,7 @@ def unload_match(context: bpy.types.Context) -> None:
     """Clear the active editing session without deleting match objects."""
     from . import operators as operators_module
 
-    operators_module._active_interact = None
+    operators_module.cancel_active_interact(context)
     space = properties.workspace(context)
     space.active_root = None
     properties.sync_active_match_enum(space, "NONE")
