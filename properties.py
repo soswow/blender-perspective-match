@@ -670,6 +670,15 @@ class PMWorkspace(bpy.types.PropertyGroup):
         step=100,
         precision=0,
     )
+    lens_refine_progress: bpy.props.FloatProperty(
+        name="Refine Progress",
+        description="Progress of the running Refine Lenses job",
+        default=0.0,
+        min=0.0,
+        max=1.0,
+        subtype="FACTOR",
+        options={"SKIP_SAVE"},
+    )
     sync_status: bpy.props.StringProperty(default="")
     work_mode: bpy.props.EnumProperty(
         name="Tool",

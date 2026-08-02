@@ -51,6 +51,28 @@ class LensRefineResult:
     fx_deltas: dict[str, float] = field(default_factory=dict)
     message: str = ""
     improved: bool = False
+    cancelled: bool = False
+
+
+def estimate_refine_evaluation_count(
+    free_match_count: int,
+    *,
+    passes: int = 2,
+    coarse_samples: int = 9,
+    refine_samples: int = 7,
+) -> int:
+    """Upper bound on sync evaluations (for progress bars)."""
+    if free_match_count <= 0:
+        return 1
+    # Initial score + per free match: coarse (+ optional current fx) + fine.
+    per_match = (coarse_samples + 1) + refine_samples
+    return 1 + max(1, int(passes)) * int(free_match_count) * per_match
+
+
+def _sample_focals(center: float, span: float, count: int) -> list[float]:
+    low = max(center * (1.0 - span), 1.0)
+    high = max(center * (1.0 + span), low + 1.0)
+    return [float(value) for value in np.linspace(low, high, count)]
 
 
 def calibration_at_focal(
@@ -132,12 +154,6 @@ def _run_sync(
     )
 
 
-def _sample_focals(center: float, span: float, count: int) -> list[float]:
-    low = max(center * (1.0 - span), 1.0)
-    high = max(center * (1.0 + span), low + 1.0)
-    return [float(value) for value in np.linspace(low, high, count)]
-
-
 def refine_lenses_from_landmarks(
     matches: list[MatchLensInput],
     observations: list[sync_module.SyncObservation],
@@ -152,11 +168,17 @@ def refine_lenses_from_landmarks(
     passes: int = 2,
     coarse_samples: int = 9,
     refine_samples: int = 7,
+    cancel_check=None,
+    progress_callback=None,
 ) -> LensRefineResult:
     """Coordinate-descent search over free focals; returns best calibrations.
 
     Frozen matches (Manual FOV / 1-point / weak VPs) keep their starting fx but
     still contribute VP residual and sync observations.
+
+    ``cancel_check`` is an optional ``() -> bool`` polled between evaluations.
+    ``progress_callback(step, total, label)`` reports progress (may be called
+    from a worker thread — keep it bpy-free).
     """
     if not matches:
         raise ValueError("No matches to refine")
@@ -180,7 +202,24 @@ def refine_lenses_from_landmarks(
     known_lines = known_lines or {}
     parallel_pairs = parallel_pairs or []
 
+    free_ids = [item.match_id for item in matches if not item.freeze_focal]
+    total_steps = estimate_refine_evaluation_count(
+        len(free_ids),
+        passes=passes,
+        coarse_samples=coarse_samples,
+        refine_samples=refine_samples,
+    )
+    step = 0
+
+    def _cancelled() -> bool:
+        return bool(cancel_check and cancel_check())
+
+    def _progress(label: str) -> None:
+        if progress_callback is not None:
+            progress_callback(min(step, total_steps), total_steps, label)
+
     def evaluate(cals: dict[str, core.Calibration]):
+        nonlocal step
         result = _run_sync(
             cals,
             match_ids,
@@ -192,15 +231,65 @@ def refine_lenses_from_landmarks(
             parallel_pairs,
         )
         cost = _joint_cost(cals, match_map, result, vp_weight=vp_weight)
+        step += 1
         return cost, result
+
+    def _cancelled_result(
+        best_cals,
+        best_sync,
+        initial_cost,
+        best_cost,
+        initial_sync,
+        start_fx,
+        free_ids_local,
+    ) -> LensRefineResult:
+        initial_rmse = _sync_rmse(initial_sync)
+        final_rmse = _sync_rmse(best_sync)
+        return LensRefineResult(
+            calibrations=best_cals,
+            sync_result=best_sync,
+            initial_cost=initial_cost,
+            final_cost=best_cost,
+            initial_sync_rmse=initial_rmse,
+            final_sync_rmse=final_rmse,
+            fx_deltas={
+                match_id: float(best_cals[match_id].intrinsics.fx - start_fx[match_id])
+                for match_id in free_ids_local
+            },
+            message=f"Lens refine cancelled · sync {final_rmse:.1f}px",
+            improved=best_cost + 1.0e-3 < initial_cost,
+            cancelled=True,
+        )
+
+    _progress("Scoring initial lenses")
+    if _cancelled():
+        start_fx = {item.match_id: float(item.intrinsics.fx) for item in matches}
+        empty_sync = sync_module.SyncSolveResult(
+            similarities={},
+            landmarks={},
+            mean_reprojection_px=0.0,
+            per_match_rmse_px={},
+            per_landmark_rmse_px={},
+            message="Cancelled",
+            success=False,
+        )
+        return _cancelled_result(
+            calibrations,
+            empty_sync,
+            _FAILURE_COST,
+            _FAILURE_COST,
+            empty_sync,
+            start_fx,
+            free_ids,
+        )
 
     initial_cost, initial_sync = evaluate(calibrations)
     best_cost = initial_cost
     best_sync = initial_sync
     best_cals = {key: value for key, value in calibrations.items()}
     start_fx = {item.match_id: float(item.intrinsics.fx) for item in matches}
+    _progress("Initial sync scored")
 
-    free_ids = [item.match_id for item in matches if not item.freeze_focal]
     if not free_ids:
         return LensRefineResult(
             calibrations=best_cals,
@@ -214,8 +303,18 @@ def refine_lenses_from_landmarks(
             improved=False,
         )
 
-    for _pass in range(max(1, int(passes))):
+    for pass_index in range(max(1, int(passes))):
         for match_id in free_ids:
+            if _cancelled():
+                return _cancelled_result(
+                    best_cals,
+                    best_sync,
+                    initial_cost,
+                    best_cost,
+                    initial_sync,
+                    start_fx,
+                    free_ids,
+                )
             current_fx = float(best_cals[match_id].intrinsics.fx)
             candidates = _sample_focals(current_fx, fx_span, coarse_samples)
             # Always evaluate the current fx so we never force a worse step.
@@ -228,6 +327,20 @@ def refine_lenses_from_landmarks(
             local_best_cals = best_cals
 
             for focal in candidates:
+                if _cancelled():
+                    return _cancelled_result(
+                        best_cals,
+                        best_sync,
+                        initial_cost,
+                        best_cost,
+                        initial_sync,
+                        start_fx,
+                        free_ids,
+                    )
+                _progress(
+                    f"Pass {pass_index + 1}/{passes} · {match_id} · "
+                    f"fx {focal:.0f}px"
+                )
                 trial = {key: value for key, value in local_best_cals.items()}
                 trial[match_id] = calibration_at_focal(match_map[match_id], focal)
                 cost, result = evaluate(trial)
@@ -240,6 +353,20 @@ def refine_lenses_from_landmarks(
             # Fine pass around the coarse winner.
             fine_span = fx_span * 0.25
             for focal in _sample_focals(local_best_fx, fine_span, refine_samples):
+                if _cancelled():
+                    return _cancelled_result(
+                        local_best_cals,
+                        local_best_sync,
+                        initial_cost,
+                        local_best_cost,
+                        initial_sync,
+                        start_fx,
+                        free_ids,
+                    )
+                _progress(
+                    f"Pass {pass_index + 1}/{passes} · {match_id} refine · "
+                    f"fx {focal:.0f}px"
+                )
                 trial = {key: value for key, value in local_best_cals.items()}
                 trial[match_id] = calibration_at_focal(match_map[match_id], focal)
                 cost, result = evaluate(trial)
@@ -275,6 +402,7 @@ def refine_lenses_from_landmarks(
             f"No lens improvement · sync {final_rmse:.1f}px "
             f"(cost {initial_cost:.1f}→{best_cost:.1f})"
         )
+    _progress("Finished")
     return LensRefineResult(
         calibrations=best_cals,
         sync_result=best_sync,

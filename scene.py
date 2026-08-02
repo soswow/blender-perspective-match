@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 import bpy
@@ -1750,7 +1751,41 @@ def refine_lenses_and_sync(context: bpy.types.Context):
 
     Matches with 1-point mode or fewer than two VP axes stay frozen.
     Manual FOV matches are included so multi-view RMSE can adjust their fx.
+    Blocking convenience wrapper — the UI operator runs this work in a thread.
     """
+    prep = prepare_lens_refine(context)
+    from . import lens_refine
+
+    refine_result = lens_refine.refine_lenses_from_landmarks(
+        prep.lens_inputs,
+        prep.observations,
+        anchor_id=prep.anchor_id,
+        known_world=prep.known_world,
+        line_observations=prep.line_observations,
+        known_lines=prep.known_lines,
+        parallel_pairs=prep.parallel_pairs,
+        fx_span=prep.fx_span,
+    )
+    return apply_lens_refine_result(context, refine_result, prep.root_by_name)
+
+
+@dataclass
+class LensRefinePrep:
+    """bpy-free inputs gathered on the main thread for a lens refine job."""
+
+    lens_inputs: list
+    observations: list
+    known_world: dict
+    line_observations: list
+    known_lines: dict
+    parallel_pairs: list
+    anchor_id: str
+    fx_span: float
+    root_by_name: dict
+
+
+def prepare_lens_refine(context: bpy.types.Context) -> LensRefinePrep:
+    """Validate sync state and build pure-data inputs for lens refine."""
     from . import lens_refine
 
     space = properties.workspace(context)
@@ -1806,16 +1841,27 @@ def refine_lenses_and_sync(context: bpy.types.Context):
     if not lens_inputs:
         raise ValueError("No matches available for lens refine")
 
-    refine_result = lens_refine.refine_lenses_from_landmarks(
-        lens_inputs,
-        observations,
-        anchor_id=anchor.name,
+    return LensRefinePrep(
+        lens_inputs=lens_inputs,
+        observations=observations,
         known_world=known_world,
         line_observations=line_observations,
         known_lines=known_lines,
         parallel_pairs=parallel_pairs,
+        anchor_id=anchor.name,
         fx_span=max(float(space.lens_refine_span_percent), 1.0) / 100.0,
+        root_by_name=root_by_name,
     )
+
+
+def apply_lens_refine_result(context: bpy.types.Context, refine_result, root_by_name: dict):
+    """Write refined calibrations and re-run Solve Sync (main thread only)."""
+    space = properties.workspace(context)
+    if refine_result.cancelled:
+        space.sync_status = refine_result.message
+        space.lens_refine_progress = 0.0
+        properties.tag_viewport_redraw(context)
+        return refine_result, None
 
     # Write private calibrations without flipping the scene camera each time.
     active_root = properties.active_root(context)
@@ -1848,11 +1894,13 @@ def refine_lenses_and_sync(context: bpy.types.Context):
         sync_result = solve_and_apply_sync(context)
         message = refine_result.message + " · " + sync_result.message
         space.sync_status = message
+        space.lens_refine_progress = 0.0
         properties.tag_viewport_redraw(context)
         return refine_result, sync_result
     except Exception as error:
         # Lenses may still have improved even if the hard reject remains.
         space.sync_status = refine_result.message + " · " + str(error)
+        space.lens_refine_progress = 0.0
         properties.tag_viewport_redraw(context)
         # Surface a synthetic failed sync result so the operator can WARN, not ERROR.
         from . import sync as sync_module

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import bpy
 
-from . import properties, scene
+from . import operators, properties, scene
 
 
 def _axis_counts(settings) -> dict[str, int]:
@@ -569,13 +569,29 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
         row.operator("perspective_match.diagnose_sync", text="Diagnose", icon="INFO")
         row.operator("perspective_match.clear_sync", text="Clear", icon="X")
         refine_row = sync_body.row(align=True)
-        refine_row.operator(
-            "perspective_match.refine_lenses",
-            icon="CAMERA_DATA",
-        )
-        span = refine_row.row(align=True)
-        span.ui_units_x = 4
-        span.prop(workspace, "lens_refine_span_percent", text="%")
+        if operators.lens_refine_is_running():
+            progress = refine_row.row(align=True)
+            progress.enabled = False
+            progress.prop(
+                workspace,
+                "lens_refine_progress",
+                text="Refining",
+                slider=True,
+            )
+            refine_row.operator(
+                "perspective_match.cancel_refine_lenses",
+                text="Cancel",
+                icon="X",
+            )
+        else:
+            refine_row.operator_context = "INVOKE_DEFAULT"
+            refine_row.operator(
+                "perspective_match.refine_lenses",
+                icon="CAMERA_DATA",
+            )
+            span = refine_row.row(align=True)
+            span.ui_units_x = 4
+            span.prop(workspace, "lens_refine_span_percent", text="%")
         empties_row = sync_body.row(align=True)
         empties_row.prop(workspace, "show_landmark_empties", text="Landmark Empties")
         size_row = empties_row.row(align=True)

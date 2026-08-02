@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import sys
+import threading
 import time
 from pathlib import Path
 from uuid import uuid4
@@ -100,6 +101,28 @@ def _view3d_under_event(context: bpy.types.Context, event):
 
 # Live modal instance — is_modal alone can go stale if the handler dies uncleanly.
 _active_interact: "PM_OT_interact | None" = None
+
+# Background Refine Lenses job (pure numpy in a worker thread; bpy apply on main).
+_lens_refine_lock = threading.Lock()
+_lens_refine_cancel: threading.Event | None = None
+_lens_refine_running = False
+_lens_refine_progress = {"step": 0, "total": 1, "label": ""}
+_lens_refine_result_box: dict = {}
+
+
+def lens_refine_is_running() -> bool:
+    """True while a Refine Lenses modal/worker is active."""
+    return bool(_lens_refine_running)
+
+
+def request_lens_refine_cancel() -> bool:
+    """Signal the running Refine Lenses worker to stop. True if one was running."""
+    event = _lens_refine_cancel
+    if event is None:
+        return False
+    event.set()
+    return True
+
 
 _NUMPAD_SLOT_KEYS = {
     "NUMPAD_1": 1,
@@ -1478,15 +1501,201 @@ class PM_OT_refine_lenses(bpy.types.Operator):
     bl_description = (
         "Search each unlocked match's focal length (re-orient from VP lines) "
         "to lower sync reprojection error, then Solve Sync. "
+        "Runs in the background — Esc or Cancel Refine to stop. "
         "Skips 1-point matches and matches without enough VP lines"
     )
     bl_options = {"REGISTER", "UNDO"}
 
+    _timer = None
+    _prep = None
+    _progress_max = 1
+
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
+        if lens_refine_is_running():
+            return False
         return PM_OT_solve_sync.poll(context)
 
+    def invoke(self, context: bpy.types.Context, _event) -> set[str]:
+        global _lens_refine_cancel, _lens_refine_running, _lens_refine_result_box
+        global _lens_refine_progress
+
+        workspace = _workspace(context)
+        try:
+            prep = scene.prepare_lens_refine(context)
+        except Exception as error:
+            message = str(error)
+            workspace.sync_status = message
+            return _report_exception(self, error)
+
+        from . import lens_refine
+
+        free_count = sum(1 for item in prep.lens_inputs if not item.freeze_focal)
+        total = lens_refine.estimate_refine_evaluation_count(free_count)
+        cancel_event = threading.Event()
+        result_box: dict = {"done": False}
+        progress_state = {"step": 0, "total": max(total, 1), "label": "Starting…"}
+
+        with _lens_refine_lock:
+            if _lens_refine_running:
+                self.report({"WARNING"}, "Refine Lenses already running")
+                return {"CANCELLED"}
+            _lens_refine_cancel = cancel_event
+            _lens_refine_running = True
+            _lens_refine_result_box = result_box
+            _lens_refine_progress = progress_state
+
+        self._prep = prep
+        self._progress_max = max(total, 1)
+        workspace.lens_refine_progress = 0.0
+        workspace.sync_status = "Refine Lenses running… Esc to cancel"
+        properties.tag_viewport_redraw(context)
+
+        def _on_progress(step: int, total_steps: int, label: str) -> None:
+            progress_state["step"] = int(step)
+            progress_state["total"] = max(int(total_steps), 1)
+            progress_state["label"] = str(label)
+
+        def _worker() -> None:
+            try:
+                refine_result = lens_refine.refine_lenses_from_landmarks(
+                    prep.lens_inputs,
+                    prep.observations,
+                    anchor_id=prep.anchor_id,
+                    known_world=prep.known_world,
+                    line_observations=prep.line_observations,
+                    known_lines=prep.known_lines,
+                    parallel_pairs=prep.parallel_pairs,
+                    fx_span=prep.fx_span,
+                    cancel_check=cancel_event.is_set,
+                    progress_callback=_on_progress,
+                )
+                result_box["result"] = refine_result
+            except Exception as error:
+                result_box["error"] = error
+            finally:
+                result_box["done"] = True
+
+        thread = threading.Thread(
+            target=_worker,
+            name="PM-RefineLenses",
+            daemon=True,
+        )
+        thread.start()
+
+        window_manager = context.window_manager
+        window_manager.progress_begin(0, self._progress_max)
+        self._timer = window_manager.event_timer_add(0.1, window=context.window)
+        window_manager.modal_handler_add(self)
+        return {"RUNNING_MODAL"}
+
+    def _finish_job(self, context: bpy.types.Context, *, cancelled: bool) -> set[str]:
+        global _lens_refine_cancel, _lens_refine_running
+
+        window_manager = context.window_manager
+        if self._timer is not None:
+            window_manager.event_timer_remove(self._timer)
+            self._timer = None
+        try:
+            window_manager.progress_end()
+        except Exception:
+            pass
+
+        workspace = _workspace(context)
+        result_box = _lens_refine_result_box
+        prep = self._prep
+
+        with _lens_refine_lock:
+            _lens_refine_running = False
+            _lens_refine_cancel = None
+
+        if result_box.get("error") is not None:
+            error = result_box["error"]
+            workspace.sync_status = str(error)
+            workspace.lens_refine_progress = 0.0
+            properties.tag_viewport_redraw(context)
+            return _report_exception(self, error if isinstance(error, Exception) else Exception(str(error)))
+
+        refine_result = result_box.get("result")
+        if refine_result is None:
+            workspace.sync_status = "Lens refine cancelled"
+            workspace.lens_refine_progress = 0.0
+            properties.tag_viewport_redraw(context)
+            self.report({"WARNING"}, "Lens refine cancelled")
+            return {"CANCELLED"}
+
+        if refine_result.cancelled or cancelled:
+            # Discard partial lens changes — leave the scene as it was.
+            workspace.sync_status = refine_result.message
+            workspace.lens_refine_progress = 0.0
+            properties.tag_viewport_redraw(context)
+            self.report({"WARNING"}, refine_result.message)
+            return {"CANCELLED"}
+
+        try:
+            _refine, sync_result = scene.apply_lens_refine_result(
+                context,
+                refine_result,
+                prep.root_by_name,
+            )
+        except Exception as error:
+            return _report_exception(self, error)
+
+        settings = properties.active_session(context)
+        if settings is not None:
+            settings.error = ""
+        success = refine_result.improved or (
+            sync_result is not None and sync_result.success
+        )
+        self.report(
+            {"INFO"} if success else {"WARNING"},
+            workspace.sync_status or refine_result.message,
+        )
+        return {"FINISHED"}
+
+    def modal(self, context: bpy.types.Context, event) -> set[str]:
+        workspace = _workspace(context)
+        if event.type in {"ESC"} and event.value == "PRESS":
+            request_lens_refine_cancel()
+            workspace.sync_status = "Cancelling lens refine…"
+            properties.tag_viewport_redraw(context)
+            return {"RUNNING_MODAL"}
+
+        if event.type != "TIMER":
+            return {"PASS_THROUGH"}
+
+        progress = _lens_refine_progress
+        total = max(int(progress.get("total", 1)), 1)
+        step = int(progress.get("step", 0))
+        label = str(progress.get("label", ""))
+        workspace.lens_refine_progress = min(max(step / total, 0.0), 1.0)
+        if label:
+            workspace.sync_status = f"Refine Lenses {step}/{total} · {label}"
+        try:
+            context.window_manager.progress_update(min(step, total))
+        except Exception:
+            pass
+        properties.tag_viewport_redraw(context)
+
+        if not _lens_refine_result_box.get("done"):
+            return {"PASS_THROUGH"}
+
+        return self._finish_job(
+            context,
+            cancelled=bool(_lens_refine_cancel and _lens_refine_cancel.is_set()),
+        )
+
+    def cancel(self, context: bpy.types.Context) -> None:
+        request_lens_refine_cancel()
+        # Wait briefly so the worker can exit cleanly before apply is skipped.
+        for _ in range(50):
+            if _lens_refine_result_box.get("done"):
+                break
+            time.sleep(0.02)
+        self._finish_job(context, cancelled=True)
+
     def execute(self, context: bpy.types.Context) -> set[str]:
+        # Scripting / redo: run blocking on the main thread.
         workspace = _workspace(context)
         try:
             refine_result, sync_result = scene.refine_lenses_and_sync(context)
@@ -1497,10 +1706,35 @@ class PM_OT_refine_lenses(bpy.types.Operator):
         settings = properties.active_session(context)
         if settings is not None:
             settings.error = ""
+        success = refine_result.improved or (
+            sync_result is not None and sync_result.success
+        )
         self.report(
-            {"INFO"} if refine_result.improved or sync_result.success else {"WARNING"},
+            {"INFO"} if success else {"WARNING"},
             workspace.sync_status or refine_result.message,
         )
+        return {"FINISHED"}
+
+
+class PM_OT_cancel_refine_lenses(bpy.types.Operator):
+    """Stop the running Refine Lenses background job."""
+
+    bl_idname = "perspective_match.cancel_refine_lenses"
+    bl_label = "Cancel Refine"
+    bl_description = "Cancel the running Refine Lenses search (Esc also works)"
+    bl_options = {"REGISTER"}
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        return lens_refine_is_running()
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        if not request_lens_refine_cancel():
+            return {"CANCELLED"}
+        workspace = _workspace(context)
+        workspace.sync_status = "Cancelling lens refine…"
+        properties.tag_viewport_redraw(context)
+        self.report({"INFO"}, "Cancelling Refine Lenses…")
         return {"FINISHED"}
 
 
@@ -1546,6 +1780,7 @@ CLASSES = (
     PM_OT_solve_sync,
     PM_OT_diagnose_sync,
     PM_OT_refine_lenses,
+    PM_OT_cancel_refine_lenses,
     PM_OT_clear_sync,
     PM_OT_activate_match_slot,
     PM_OT_interact,

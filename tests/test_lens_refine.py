@@ -74,6 +74,53 @@ class LensRefinePlumbingTests(unittest.TestCase):
         self.assertAlmostEqual(calibration.intrinsics.fy, 750.0, places=3)
         self.assertTrue(np.isfinite(calibration.rotation_w2c).all())
 
+    def test_cancel_check_stops_early(self) -> None:
+        bundles = {
+            "x": [
+                core.LineSegment(100.0, 200.0, 700.0, 220.0),
+                core.LineSegment(100.0, 400.0, 700.0, 380.0),
+            ],
+            "z": [
+                core.LineSegment(200.0, 100.0, 220.0, 500.0),
+                core.LineSegment(600.0, 100.0, 580.0, 500.0),
+            ],
+            "y": [],
+        }
+        intrinsics = core.CameraIntrinsics(
+            fx=900.0,
+            fy=900.0,
+            cx=400.0,
+            cy=300.0,
+            image_width=800,
+            image_height=600,
+        )
+        matches = [
+            lens_refine.MatchLensInput(
+                match_id="A",
+                line_bundles=bundles,
+                intrinsics=intrinsics,
+            ),
+            lens_refine.MatchLensInput(
+                match_id="B",
+                line_bundles=bundles,
+                intrinsics=intrinsics,
+            ),
+        ]
+        calls = {"n": 0}
+
+        def cancel_after_two() -> bool:
+            calls["n"] += 1
+            return calls["n"] > 2
+
+        result = lens_refine.refine_lenses_from_landmarks(
+            matches,
+            [],
+            anchor_id="A",
+            cancel_check=cancel_after_two,
+        )
+        self.assertTrue(result.cancelled)
+        self.assertIn("cancelled", result.message.lower())
+
 
 if __name__ == "__main__":
     unittest.main()
