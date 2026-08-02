@@ -551,6 +551,20 @@ def _draw_placement(context: bpy.types.Context, fill_shader, settings) -> None:
             7.0,
         )
 
+    # Violet PP marker when off-center, or while Manual PP Offset tool is active.
+    workspace = properties.workspace(context)
+    show_pp = scene.principal_point_is_off_center(settings) or (
+        workspace.is_modal and workspace.work_mode == "PP"
+    )
+    if show_pp and settings.image_width > 0 and settings.image_height > 0:
+        principal = scene.image_to_region(context, settings.cx, settings.cy)
+        _draw_crosshair(
+            fill_shader,
+            principal,
+            _with_alpha((0.72, 0.35, 1.0, 1.0), settings.overlay_opacity),
+            9.0 if workspace.work_mode == "PP" else 7.0,
+        )
+
 
 def _draw_landmarks(context: bpy.types.Context, fill_shader, settings) -> None:
     """Draw landmark picks that belong to the active match."""

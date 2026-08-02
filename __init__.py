@@ -21,6 +21,7 @@ CLASSES = (
 _RELOAD_SUBMODULES = (
     "core",
     "sync",
+    "lens_refine",
     "properties",
     "scene",
     "distortion",

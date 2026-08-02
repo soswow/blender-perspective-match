@@ -623,6 +623,19 @@ class PMWorkspace(bpy.types.PropertyGroup):
         precision=2,
         update=_update_landmark_empties,
     )
+    lens_refine_span_percent: bpy.props.FloatProperty(
+        name="Lens Search %",
+        description=(
+            "Focal search window for Refine Lenses as ± percent of each match's "
+            "current fx (18 = search 82%–118% of current focal)"
+        ),
+        default=18.0,
+        min=1.0,
+        soft_max=40.0,
+        max=80.0,
+        step=100,
+        precision=0,
+    )
     sync_status: bpy.props.StringProperty(default="")
     work_mode: bpy.props.EnumProperty(
         name="Tool",
@@ -630,6 +643,7 @@ class PMWorkspace(bpy.types.PropertyGroup):
             ("NONE", "Navigate", "Use normal viewport navigation"),
             ("LINE", "VP Lines", "Draw or edit vanishing-point lines"),
             ("ORIGIN", "Origin", "Pick the world origin on the ground plane"),
+            ("PP", "Principal Point", "Drag the principal point on the plate"),
             ("LANDMARK", "Landmark", "Pick the active landmark in the active match"),
         ),
         default="NONE",

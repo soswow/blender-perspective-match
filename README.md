@@ -17,7 +17,7 @@ The extension is a native port of the manual workflow from Perspective Match Stu
 - Robust length-weighted VP fitting with Huber outlier reduction.
 - Solve camera orientation and, when constrained, focal length from orthogonal VPs.
 - Lock and edit horizontal FOV manually, including underconstrained 1-point shots.
-- Solve an off-center principal point from three finite orthogonal VPs.
+- Solve an off-center principal point from three finite orthogonal VPs, or set it with **Manual PP Offset** (violet crosshair when off-center).
 - Show per-plane FOV estimates and angular consistency diagnostics.
 - Pick a ground origin so the matched camera sits relative to world origin.
 - Synchronise multiple matched cameras into one shared world with a landmark graph: 2D↔2D picks and/or **Known 3D** Blender objects (Empties at verts on a modeled edge), optional On Ground, choose an anchor, solve similarities onto match root Empties.
@@ -127,6 +127,8 @@ While the tool is active, left-clicks in the 3D View belong to Perspective Match
 
 The camera refines whenever enough required lines exist. **Auto from VPs** allows orthogonal VP pairs to solve FOV. Enable **Manual FOV**, set the horizontal angle, and apply it to lock focal length while continuing to solve orientation.
 
+**Manual PP Offset** (Camera section): drag the principal point on the plate. A **violet** crosshair marks it whenever it is off-center (and always while the tool is active). While dragging, orientation is rebuilt from VP lines on a short throttle (~12 Hz) so the mesh tracks the same “snap” you get on release; release does a final rebuild. **Esc** exits like other tools (cancels an in-progress drag). **Reset Camera** recenters PP.
+
 Middle mouse and the wheel retain normal Blender navigation while a match tool is active. Sidebar sections use Blender’s native collapsible panels (**View** starts collapsed). Overlay guides only draw in **camera view** of the active match — choosing a match from the dropdown (or **View Match Camera**) rehydrates the plate/lens after opening a `.blend` and enters that view.
 
 ### 4. Set origin
@@ -144,7 +146,7 @@ When several matches show the same scene, register them into one Blender world:
 3. Add landmarks for features visible in two or more stills (≥5 shared 2D picks), **or** link **Known 3D** Blender objects (≥3) and pick them in the other stills. Each landmark keeps a stable `item_id` plus a `creation_index` (add order). The **A–Z** toggle beside the list (below + / line / import / −) is a depressed/undepressed control: on = alphabetical by name, off = original add order. Sort only changes the list display — not storage order. Uncheck **Use in Sync** (list checkbox or detail prop) to exclude a landmark from Solve Sync / Diagnose without deleting its picks — useful when sync starts failing after adding one point.
 4. Pick each landmark in every still where it is visible. **Point** landmarks: click the feature. **Line** landmarks: drag a segment along the same edge (no need for a shared point). **Known 3D** Empties: auto-projected on the anchor; pick them in other matches only. For a metric edge, set **Known 3D** + **Known 3D B** on a Line landmark. Free lines (no Empties) need the edge in **≥3 stills** to constrain pose. Ordinary point landmarks must be picked in **both** stills when Known 3D sit on one line. Set **Pick Confidence** before clicking.
 5. Optional: tag **On Ground** on point landmarks in the anchor, or rely on Known 3D points/lines, to pin absolute scale. Without metric cues, sync still recovers orientation and baseline *direction* with a depth heuristic.
-6. **Solve Sync** writes a rigid transform (`R`, `t`, scale 1) onto non-anchor root Empties. Use **Diagnose** first to see per-landmark RMSE without moving cameras; **Clear** resets sync transforms. The eye icon on **Sync Matches** toggles landmark picks on the plate (same pattern as VP Lines); **Landmark Empties** still controls the 3D helpers after sync.
+6. **Solve Sync** writes a rigid transform (`R`, `t`, scale 1) onto non-anchor root Empties. Use **Diagnose** first to see per-landmark RMSE without moving cameras; **Clear** resets sync transforms. **Refine Lenses** searches each unlocked match’s focal length (re-orients from VP lines at each trial, with a VP angular prior) to lower sync RMSE, then runs Solve Sync. The % field beside it is the ± search window around current fx (default 18). Skips **Manual FOV** and **1-point** matches. The eye icon on **Sync Matches** toggles landmark picks on the plate (same pattern as VP Lines); **Landmark Empties** still controls the 3D helpers after sync.
 
 Why not “any corresponding points”? Photogrammetry / SfM does solve relative orientation and baseline *direction* from enough 2D↔2D matches — and so does this sync. What stays free is absolute baseline **length** when dropping the second camera into an already-metric Blender world from the first match (classic stereo scale ambiguity). **Known 3D** Empties, On Ground picks, or a later ruler pin that one DOF; without them, a depth heuristic chooses a plausible scale.
 
@@ -159,7 +161,7 @@ Why not “any corresponding points”? Photogrammetry / SfM does solve relative
 - **Rejected (~40+ px)** means no pose fits your picks. Status / **Diagnose** lists the worst landmarks — re-pick those features in *both* stills (same physical point).
 - **Accepted but camera looks wrong** with RMSE still a few–tens of px: wrong local minimum or soft constraints. Prefer **Diagnose**, fix the worst landmarks, **Clear**, then **Solve Sync** again. A “WARN high error” line means treat the pose as suspicious.
 - **One landmark huge, others fine:** that pick is mismatched (wrong corner / wrong still). Uncheck **Use in Sync** on it and re-run Diagnose to confirm the rest solve.
-- **Many landmarks all high:** FOV or VP solve is likely off on one match — re-refine that camera, then re-project Known 3D (**Landmarks from Selected**).
+- **Many landmarks all high:** FOV or VP solve is likely off on one match — try **Refine Lenses**, or re-refine that camera manually, then re-project Known 3D (**Landmarks from Selected**).
 - **Sync broke after adding one landmark:** turn off **Use in Sync** on the new one (list checkbox) and Diagnose again. If it succeeds, re-pick that feature on both stills.
 - **Known 3D warn (Empty vs anchor pick):** the Empty moved or the anchor camera changed after auto-project — re-run **Landmarks from Selected**.
 - **Uncertain pick:** set that still's confidence to **Low** (or pick with Pick Confidence = Low). High-confidence picks dominate the pose; Low ones still help but the landmark Empty is allowed to miss them more.
@@ -193,7 +195,7 @@ The referenced image remains external. Relative image paths are resolved from th
 - Distortion uses one radial division parameter, not Blender's full tracking-camera lens models.
 - Cropped, anamorphic, curved, or CGI plates can require manual FOV and principal-point judgment.
 - Sync solves relative pose from 2D↔2D and/or Known 3D Blender objects. Absolute baseline vs the metric anchor world needs Known 3D, On Ground, or the depth heuristic.
-- Sync does not yet refine non-anchor lenses or VP orientation from landmarks.
+- Sync **Solve Sync** keeps intrinsics frozen; use **Refine Lenses** afterward to adjust unlocked focals against landmarks + a VP prior.
 - Display-only exposure and contrast controls from the desktop app are not reproduced; use Blender's image/color-management tools.
 - Projects are import-only; there is no Save Project or camera JSON export.
 
@@ -206,6 +208,7 @@ match_perspective/
   properties.py           # Object sessions + scene workspace controller
   core.py                 # VP, focal, distortion, placement, and surface math
   sync.py                 # Multi-match landmark graph registration
+  lens_refine.py          # Outer fx search (VP prior + sync RMSE)
   scene.py                # Camera/background integration and coordinate mapping
   overlay.py              # Camera-view GPU drawing
   operators.py            # File, solve, and modal interaction operators
@@ -215,6 +218,7 @@ match_perspective/
   validate_addon.py       # Headless Blender smoke test
   tests/test_core.py      # Pure geometry regressions
   tests/test_sync.py      # Landmark sync regressions
+  tests/test_lens_refine.py  # VP residual + locked-focal helper
   link-dev.sh             # Symlink checkout into Blender 5.1 for live reload
   build-extension.sh      # Validate and build installable zip
 ```

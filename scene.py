@@ -339,11 +339,16 @@ def apply_camera(
     blender_scene: bpy.types.Scene,
     settings: properties.PMSession,
     calibration: core.Calibration,
+    *,
+    update_scene_camera: bool = True,
 ) -> None:
     """Apply solved intrinsics and OpenCV extrinsics to the managed Blender camera.
 
     The private-world pose is written as the camera's *local* matrix so a sync
     transform on the match root Empty can move the whole rig into shared space.
+
+    When ``update_scene_camera`` is False, only this match's camera datablock and
+    RNA are updated (used when writing several matches during lens refine).
     """
     camera_object = settings.camera_object
     if camera_object is None or camera_object.type != "CAMERA":
@@ -396,11 +401,12 @@ def apply_camera(
     # Private pose as local; root Empty carries optional sync similarity.
     camera_object.matrix_parent_inverse = Matrix.Identity(4)
     camera_object.matrix_local = private_camera_matrix(calibration)
-    blender_scene.camera = camera_object
-    blender_scene.render.resolution_x = int(plate_width)
-    blender_scene.render.resolution_y = plate_height
-    blender_scene.render.resolution_percentage = 100
     store_calibration(settings, calibration)
+    if update_scene_camera:
+        blender_scene.camera = camera_object
+        blender_scene.render.resolution_x = int(plate_width)
+        blender_scene.render.resolution_y = plate_height
+        blender_scene.render.resolution_percentage = 100
 
 
 def private_camera_matrix(calibration: core.Calibration) -> Matrix:
@@ -497,16 +503,10 @@ def _update_diagnostics(
         if "ZX" in estimates
         else 0.0
     )
-    directions = {
-        axis: core._normalized_direction(vanishing, calibration.intrinsics)
-        for axis, vanishing in working.items()
-    }
-    axis_columns = {"x": 0, "z": 1, "y": 2}
-    errors = []
-    for axis, direction in directions.items():
-        cosine = abs(float(np.dot(direction, calibration.rotation_w2c[:, axis_columns[axis]])))
-        errors.append(float(np.degrees(np.arccos(np.clip(cosine, 0.0, 1.0)))))
-    settings.residual_degrees = max(errors, default=0.0)
+    settings.residual_degrees = core.vp_angular_residual_degrees(
+        calibration,
+        line_bundles,
+    )
 
 
 def apply_manual_fov(context: bpy.types.Context) -> None:
@@ -580,6 +580,86 @@ def set_origin(
     settings.origin_is_set = True
     settings.status = "Origin set on the ground plane"
     reapply_placement(context)
+
+
+def principal_point_is_off_center(settings: properties.PMSession) -> bool:
+    """True when cx/cy differ from the plate center by more than half a pixel."""
+    if settings.image_width <= 0 or settings.image_height <= 0:
+        return False
+    return (
+        abs(settings.cx - settings.image_width * 0.5) > 0.5
+        or abs(settings.cy - settings.image_height * 0.5) > 0.5
+    )
+
+
+def set_principal_point(
+    context: bpy.types.Context,
+    image_point: tuple[float, float],
+    *,
+    finalize: bool = True,
+) -> None:
+    """Move the principal point in source-image pixels.
+
+    ``finalize=False`` updates shift/intrinsics only (cheap drag samples).
+    ``finalize=True`` also rebuilds orientation from VP lines at the locked
+    focal — used on release and on throttled samples during drag.
+    """
+    settings = properties.active_session(context)
+    if settings is None:
+        raise ValueError("Create or activate a match camera first")
+    if settings.image is None:
+        raise ValueError("Load a reference image first")
+
+    width = max(int(settings.image_width), 1)
+    height = max(int(settings.image_height), 1)
+    cx = float(np.clip(image_point[0], 0.0, float(width)))
+    cy = float(np.clip(image_point[1], 0.0, float(height)))
+
+    previous = calibration_from_settings(settings)
+    settings.cx = cx
+    settings.cy = cy
+
+    line_bundles = line_bundles_from_settings(settings)
+    ready_axes = sum(1 for segments in line_bundles.values() if len(segments) >= 2)
+
+    if finalize and ready_axes >= 2:
+        intrinsics = previous.intrinsics
+        intrinsics.cx = cx
+        intrinsics.cy = cy
+        calibration = core.refine_camera(
+            line_bundles,
+            intrinsics,
+            lock_focal=True,
+            estimate_principal_point=False,
+            estimate_distortion=False,
+            initial_division_lambda=previous.division_lambda,
+        )
+        calibration.division_lambda = previous.division_lambda
+        calibration.lambda_saturated = previous.lambda_saturated
+        if settings.origin_is_set:
+            origin = tuple(float(value) for value in settings.origin_image)
+            calibration.camera_center, _scale = core.apply_origin_and_scale(
+                calibration,
+                origin,
+            )
+        else:
+            calibration.camera_center = core.default_camera_center(
+                calibration.rotation_w2c
+            )
+        if _intrinsics_or_distortion_changed(previous, calibration):
+            invalidate_undistorted_cache(settings)
+        apply_camera(context.scene, settings, calibration)
+        _update_diagnostics(settings, line_bundles, calibration)
+    else:
+        calibration = calibration_from_settings(settings)
+        if _intrinsics_or_distortion_changed(previous, calibration):
+            invalidate_undistorted_cache(settings)
+        apply_camera(context.scene, settings, calibration)
+
+    offset_x = settings.cx - width * 0.5
+    offset_y = settings.cy - height * 0.5
+    settings.status = f"PP offset {offset_x:+.1f}, {offset_y:+.1f} px"
+    properties.tag_viewport_redraw(context)
 
 
 def reapply_placement(context: bpy.types.Context) -> None:
@@ -1519,3 +1599,123 @@ def clear_sync_transforms(context: bpy.types.Context) -> None:
     clear_landmark_empties(context)
     space.sync_status = "Sync cleared"
     properties.tag_viewport_redraw(context)
+
+
+def refine_lenses_and_sync(context: bpy.types.Context):
+    """Search per-match fx (VP prior) to lower sync RMSE, then apply sync.
+
+    Matches with Manual FOV, 1-point mode, or fewer than two VP axes stay frozen.
+    """
+    from . import lens_refine
+
+    space = properties.workspace(context)
+    anchor = properties.anchor_root(context)
+    if anchor is None:
+        raise ValueError("Choose an anchor match first")
+
+    matches_pack, observations, known_world, line_observations, known_lines, parallel_pairs = (
+        build_sync_problem(context)
+    )
+    if not matches_pack:
+        raise ValueError("No solved matches available to sync")
+    if anchor.name not in {item.match_id for item in matches_pack}:
+        raise ValueError("Anchor match needs a solved camera")
+    if not observations and not line_observations:
+        raise ValueError("Add landmark picks before refining lenses")
+
+    root_by_name = {root.name: root for root in properties.iter_match_roots()}
+    lens_inputs: list[lens_refine.MatchLensInput] = []
+    for item in matches_pack:
+        root = root_by_name.get(item.match_id)
+        if root is None:
+            continue
+        settings = root.pm_session
+        line_bundles = line_bundles_from_settings(settings)
+        ready_axes = sum(1 for segments in line_bundles.values() if len(segments) >= 2)
+        freeze = (
+            bool(settings.lock_focal)
+            or settings.vp_mode == "1"
+            or ready_axes < 2
+        )
+        origin_image = None
+        if settings.origin_is_set:
+            origin_image = (
+                float(settings.origin_image[0]),
+                float(settings.origin_image[1]),
+            )
+        lens_inputs.append(
+            lens_refine.MatchLensInput(
+                match_id=item.match_id,
+                line_bundles=line_bundles,
+                intrinsics=item.calibration.intrinsics,
+                division_lambda=float(item.calibration.division_lambda),
+                origin_image=origin_image,
+                freeze_focal=freeze,
+                base_calibration=item.calibration,
+            )
+        )
+
+    if not lens_inputs:
+        raise ValueError("No matches available for lens refine")
+
+    refine_result = lens_refine.refine_lenses_from_landmarks(
+        lens_inputs,
+        observations,
+        anchor_id=anchor.name,
+        known_world=known_world,
+        line_observations=line_observations,
+        known_lines=known_lines,
+        parallel_pairs=parallel_pairs,
+        fx_span=max(float(space.lens_refine_span_percent), 1.0) / 100.0,
+    )
+
+    # Write private calibrations without flipping the scene camera each time.
+    active_root = properties.active_root(context)
+    for match_id, calibration in refine_result.calibrations.items():
+        root = root_by_name.get(match_id)
+        if root is None:
+            continue
+        settings = root.pm_session
+        previous = calibration_from_settings(settings)
+        if _intrinsics_or_distortion_changed(previous, calibration):
+            invalidate_undistorted_cache(settings)
+        apply_camera(
+            context.scene,
+            settings,
+            calibration,
+            update_scene_camera=False,
+        )
+        _update_diagnostics(settings, line_bundles_from_settings(settings), calibration)
+
+    if active_root is not None:
+        apply_camera(
+            context.scene,
+            active_root.pm_session,
+            calibration_from_settings(active_root.pm_session),
+            update_scene_camera=True,
+        )
+
+    # Re-run the normal apply path so Empty transforms match the new lenses.
+    try:
+        sync_result = solve_and_apply_sync(context)
+        message = refine_result.message + " · " + sync_result.message
+        space.sync_status = message
+        properties.tag_viewport_redraw(context)
+        return refine_result, sync_result
+    except Exception as error:
+        # Lenses may still have improved even if the hard reject remains.
+        space.sync_status = refine_result.message + " · " + str(error)
+        properties.tag_viewport_redraw(context)
+        # Surface a synthetic failed sync result so the operator can WARN, not ERROR.
+        from . import sync as sync_module
+
+        failed = sync_module.SyncSolveResult(
+            similarities={},
+            landmarks={},
+            mean_reprojection_px=0.0,
+            per_match_rmse_px={},
+            per_landmark_rmse_px={},
+            message=str(error),
+            success=False,
+        )
+        return refine_result, failed

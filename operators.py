@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import sys
+import time
 from pathlib import Path
 from uuid import uuid4
 
@@ -501,6 +502,7 @@ class PM_OT_interact(bpy.types.Operator):
         items=(
             ("LINE", "VP Lines", "Draw and edit VP lines"),
             ("ORIGIN", "Origin", "Pick the ground origin"),
+            ("PP", "Principal Point", "Drag the principal point on the plate"),
             ("LANDMARK", "Landmark", "Pick the active landmark in this match"),
         ),
         default="LINE",
@@ -511,6 +513,9 @@ class PM_OT_interact(bpy.types.Operator):
     _original: tuple[float, ...] | None = None
     _edit_index: int = -1
     _edit_endpoint: int = 0
+    # Throttle full VP re-orient while dragging the principal point.
+    _pp_last_reorient: float = 0.0
+    _PP_REORIENT_INTERVAL = 0.08
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
@@ -571,6 +576,8 @@ class PM_OT_interact(bpy.types.Operator):
                     f"Drag line '{name}' · pull endpoints to edit · Esc exits"
                 )
             return f"Click landmark '{name}' in this match · Esc exits"
+        if self.mode == "PP":
+            return "Drag principal point (violet) · Esc exits"
         return "Click the world origin on the ground plane"
 
     def _finish(self, context: bpy.types.Context, *, cancelled: bool = False) -> set[str]:
@@ -737,6 +744,19 @@ class PM_OT_interact(bpy.types.Operator):
             else:
                 observation.x2, observation.y2 = image_point
             properties.tag_viewport_redraw(context)
+        elif self._drag_kind == "PP":
+            # Shift every move; rebuild orientation on a throttle so geometry
+            # tracks the release "snap" without refining on every mouse event.
+            now = time.monotonic()
+            reorient = (now - self._pp_last_reorient) >= self._PP_REORIENT_INTERVAL
+            try:
+                scene.set_principal_point(
+                    context, image_point, finalize=reorient
+                )
+                if reorient:
+                    self._pp_last_reorient = now
+            except Exception as error:
+                self.report({"ERROR"}, str(error))
 
     def _complete_landmark_line_drag(
         self,
@@ -786,6 +806,13 @@ class PM_OT_interact(bpy.types.Operator):
                 _refine_if_ready(context)
         elif self._drag_kind == "LINE_ENDPOINT":
             _refine_if_ready(context)
+        elif self._drag_kind == "PP":
+            try:
+                scene.set_principal_point(context, image_point, finalize=True)
+            except Exception as error:
+                self.report({"ERROR"}, str(error))
+            if settings is not None:
+                settings.status = self._status_prompt()
         self._drag_kind = ""
         self._start = None
         self._original = None
@@ -817,6 +844,17 @@ class PM_OT_interact(bpy.types.Operator):
                     observation.x2,
                     observation.y2,
                 ) = self._original
+        if self._original is not None and self._drag_kind == "PP":
+            # Restore pre-drag PP without a second orientation solve yet —
+            # finalize=False keeps R; Esc then exits the tool.
+            try:
+                scene.set_principal_point(
+                    context,
+                    (float(self._original[0]), float(self._original[1])),
+                    finalize=False,
+                )
+            except Exception:
+                pass
         self._drag_kind = ""
         self._original = None
         self._start = None
@@ -882,6 +920,25 @@ class PM_OT_interact(bpy.types.Operator):
                         self.report({"ERROR"}, str(error))
                         return {"RUNNING_MODAL"}
                     return self._finish(context)
+                if self.mode == "PP":
+                    settings_local = _session(context)
+                    self._drag_kind = "PP"
+                    self._original = (
+                        float(settings_local.cx),
+                        float(settings_local.cy),
+                    )
+                    self._pp_last_reorient = 0.0
+                    try:
+                        # First sample reorients immediately (interval gate open).
+                        scene.set_principal_point(
+                            context, image_point, finalize=True
+                        )
+                        self._pp_last_reorient = time.monotonic()
+                    except Exception as error:
+                        self._drag_kind = ""
+                        self._original = None
+                        self.report({"ERROR"}, str(error))
+                    return {"RUNNING_MODAL"}
                 if self.mode == "LANDMARK":
                     landmark = scene.active_landmark(context)
                     if landmark is not None and landmark.kind == "LINE":
@@ -1242,6 +1299,40 @@ class PM_OT_diagnose_sync(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class PM_OT_refine_lenses(bpy.types.Operator):
+    """Adjust match focals so landmark sync and VP lines agree better."""
+
+    bl_idname = "perspective_match.refine_lenses"
+    bl_label = "Refine Lenses"
+    bl_description = (
+        "Search each unlocked match's focal length (re-orient from VP lines) "
+        "to lower sync reprojection error, then Solve Sync. "
+        "Skips Manual FOV and 1-point matches"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        return PM_OT_solve_sync.poll(context)
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        workspace = _workspace(context)
+        try:
+            refine_result, sync_result = scene.refine_lenses_and_sync(context)
+        except Exception as error:
+            message = str(error)
+            workspace.sync_status = message
+            return _report_exception(self, error)
+        settings = properties.active_session(context)
+        if settings is not None:
+            settings.error = ""
+        self.report(
+            {"INFO"} if refine_result.improved or sync_result.success else {"WARNING"},
+            workspace.sync_status or refine_result.message,
+        )
+        return {"FINISHED"}
+
+
 class PM_OT_clear_sync(bpy.types.Operator):
     """Reset match Empty sync transforms and landmark Empties."""
 
@@ -1282,6 +1373,7 @@ CLASSES = (
     PM_OT_clear_landmark_observation,
     PM_OT_solve_sync,
     PM_OT_diagnose_sync,
+    PM_OT_refine_lenses,
     PM_OT_clear_sync,
     PM_OT_interact,
 )

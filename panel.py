@@ -326,6 +326,20 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
                     icon="PIVOT_CURSOR",
                 )
 
+            pp_row = camera.row(align=True)
+            pp_row.operator_context = "INVOKE_REGION_WIN"
+            pp_operator = pp_row.operator(
+                "perspective_match.interact",
+                text="Manual PP Offset",
+                icon="PIVOT_CURSOR",
+            )
+            pp_operator.mode = "PP"
+            if workspace.is_modal and workspace.work_mode == "PP":
+                camera.label(
+                    text="PP tool active — drag violet crosshair",
+                    icon="MOUSE_LMB",
+                )
+
             camera.prop(settings, "estimate_distortion")
             camera.label(text=f"Division λ: {settings.division_lambda:.5f}")
             if settings.lambda_saturated:
@@ -525,6 +539,14 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
         row.operator("perspective_match.solve_sync", icon="FILE_REFRESH")
         row.operator("perspective_match.diagnose_sync", text="Diagnose", icon="INFO")
         row.operator("perspective_match.clear_sync", text="Clear", icon="X")
+        refine_row = sync_body.row(align=True)
+        refine_row.operator(
+            "perspective_match.refine_lenses",
+            icon="CAMERA_DATA",
+        )
+        span = refine_row.row(align=True)
+        span.ui_units_x = 4
+        span.prop(workspace, "lens_refine_span_percent", text="%")
         empties_row = sync_body.row(align=True)
         empties_row.prop(workspace, "show_landmark_empties", text="Landmark Empties")
         size_row = empties_row.row(align=True)

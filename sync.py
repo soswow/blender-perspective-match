@@ -6,7 +6,8 @@ transform ``X_shared = R X_private + t`` (scale 1) per non-anchor match.
 Enough 2D↔2D landmark correspondences recover relative orientation and
 baseline *direction* (same idea as SfM). Absolute baseline length vs the
 already-metric anchor world is pinned by optional On Ground picks,
-known Blender-object 3D positions, or a depth heuristic. Intrinsics stay frozen.
+known Blender-object 3D positions, or a depth heuristic. Intrinsics stay
+frozen here; ``lens_refine`` can adjust focals in an outer loop.
 """
 
 from __future__ import annotations
