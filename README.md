@@ -8,6 +8,7 @@ The extension is a native port of the manual workflow from Perspective Match Stu
 
 - Create multiple match cameras in one scene; each still keeps its own calibration session.
 - Switch the active match from a dropdown to edit that session and view through its camera.
+- Remember each match’s last camera-view zoom and pan when switching or saving.
 - Load a still directly as a Blender camera background on the active match only.
 - Choose 1-, 2-, or 3-point perspective.
 - Draw, select, edit, and delete axis-colored VP segments in camera view.
@@ -96,6 +97,8 @@ PM_<image>
 5. Delete a match by removing its Empty/camera in the Outliner; the dropdown prunes dead entries automatically.
 
 Selecting objects in the viewport does **not** change the active match—only New, Unload, the dropdown, and the NumPad shortcuts do.
+
+Each match remembers its last camera-view zoom and pan. Switching matches (or Unload / save) stores the current framing; activating a match restores it.
 
 ### 1. Load a reference
 

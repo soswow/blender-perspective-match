@@ -488,6 +488,19 @@ class PMSession(bpy.types.PropertyGroup):
     origin_is_set: bpy.props.BoolProperty(default=False, options={"HIDDEN"})
     origin_image: bpy.props.FloatVectorProperty(size=2, default=(0.0, 0.0))
 
+    # Last camera-view zoom/pan for this match (RegionView3D framing).
+    view_camera_zoom: bpy.props.FloatProperty(
+        default=0.0,
+        min=-30.0,
+        max=600.0,
+        options={"HIDDEN"},
+    )
+    view_camera_offset: bpy.props.FloatVectorProperty(
+        size=2,
+        default=(0.0, 0.0),
+        options={"HIDDEN"},
+    )
+
     show_vp_overlay: bpy.props.BoolProperty(
         name="VP Guides",
         default=True,

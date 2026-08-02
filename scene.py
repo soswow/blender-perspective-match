@@ -186,6 +186,14 @@ def set_active_match(context: bpy.types.Context, root: bpy.types.Object) -> None
 
     operators_module.cancel_active_interact(context)
     space = properties.workspace(context)
+    previous = space.active_root
+    # Persist the outgoing match's camera-view zoom/pan before replacing it.
+    if (
+        previous is not None
+        and previous != root
+        and properties.is_match_root(previous)
+    ):
+        capture_camera_view_framing(context, previous.pm_session)
     space.active_root = root
     # Keep the dropdown in sync without re-entering its update callback.
     properties.sync_active_match_enum(space, root.name)
@@ -211,7 +219,7 @@ def set_active_match(context: bpy.types.Context, root: bpy.types.Object) -> None
             session.undistorted_height if use_undistorted else session.image_height
         )
         context.scene.render.resolution_percentage = 100
-    enter_camera_view(context)
+    enter_camera_view(context, restore_framing=True)
     properties.tag_viewport_redraw(context)
 
 
@@ -221,6 +229,9 @@ def unload_match(context: bpy.types.Context) -> None:
 
     operators_module.cancel_active_interact(context)
     space = properties.workspace(context)
+    previous = space.active_root
+    if properties.is_match_root(previous):
+        capture_camera_view_framing(context, previous.pm_session)
     space.active_root = None
     properties.sync_active_match_enum(space, "NONE")
     space.is_modal = False
@@ -679,8 +690,17 @@ def reapply_placement(context: bpy.types.Context) -> None:
     properties.tag_viewport_redraw(context)
 
 
-def enter_camera_view(context: bpy.types.Context) -> None:
-    """Switch the current 3D View to the active match camera."""
+def enter_camera_view(
+    context: bpy.types.Context,
+    *,
+    restore_framing: bool = False,
+) -> None:
+    """Switch the current 3D View to the active match camera.
+
+    When ``restore_framing`` is True, reapply this match's last saved
+    camera-view zoom/pan (used when switching matches or clicking Camera View).
+    Modal re-pins leave framing alone so live pan/zoom is not reset.
+    """
     if context.area is None or context.area.type != "VIEW_3D":
         return
     settings = properties.active_session(context)
@@ -690,6 +710,100 @@ def enter_camera_view(context: bpy.types.Context) -> None:
     region_3d = getattr(context.space_data, "region_3d", None)
     if region_3d is not None:
         region_3d.view_perspective = "CAMERA"
+        if restore_framing:
+            restore_camera_view_framing(context, settings)
+
+
+def _iter_view3d_spaces(context: bpy.types.Context):
+    """Yield (space, region_3d) for every 3D View in the current window set."""
+    window_manager = getattr(context, "window_manager", None)
+    if window_manager is None:
+        return
+    for window in window_manager.windows:
+        screen = window.screen
+        if screen is None:
+            continue
+        for area in screen.areas:
+            if area.type != "VIEW_3D":
+                continue
+            space = area.spaces.active
+            region_3d = getattr(space, "region_3d", None)
+            if region_3d is not None:
+                yield space, region_3d
+
+
+def _region_3d_for_session(context: bpy.types.Context, session) -> object | None:
+    """Find a camera-view RegionView3D showing this match camera, if any."""
+    camera = session.camera_object if session is not None else None
+    if camera is None:
+        return None
+    # Prefer the calling context when it is already that camera view.
+    space = getattr(context, "space_data", None)
+    if space is not None and getattr(space, "type", None) == "VIEW_3D":
+        region_3d = getattr(space, "region_3d", None)
+        if (
+            region_3d is not None
+            and region_3d.view_perspective == "CAMERA"
+            and space.camera == camera
+        ):
+            return region_3d
+    for space, region_3d in _iter_view3d_spaces(context):
+        if region_3d.view_perspective == "CAMERA" and space.camera == camera:
+            return region_3d
+    return None
+
+
+def capture_camera_view_framing(
+    context: bpy.types.Context,
+    session=None,
+) -> bool:
+    """Store camera-view zoom/pan from the viewport onto the match session."""
+    settings = session if session is not None else properties.active_session(context)
+    if settings is None:
+        return False
+    region_3d = _region_3d_for_session(context, settings)
+    if region_3d is None:
+        return False
+    settings.view_camera_zoom = float(
+        max(-30.0, min(600.0, region_3d.view_camera_zoom))
+    )
+    settings.view_camera_offset = (
+        float(region_3d.view_camera_offset[0]),
+        float(region_3d.view_camera_offset[1]),
+    )
+    return True
+
+
+def restore_camera_view_framing(
+    context: bpy.types.Context,
+    session=None,
+) -> bool:
+    """Apply a match session's saved camera-view zoom/pan to the 3D View."""
+    settings = session if session is not None else properties.active_session(context)
+    if settings is None:
+        return False
+    space = getattr(context, "space_data", None)
+    if space is None or getattr(space, "type", None) != "VIEW_3D":
+        return False
+    region_3d = getattr(space, "region_3d", None)
+    if region_3d is None:
+        return False
+    region_3d.view_camera_zoom = float(
+        max(-30.0, min(600.0, settings.view_camera_zoom))
+    )
+    region_3d.view_camera_offset = (
+        float(settings.view_camera_offset[0]),
+        float(settings.view_camera_offset[1]),
+    )
+    return True
+
+
+def capture_active_match_framing(context: bpy.types.Context | None = None) -> bool:
+    """Capture framing for the active match (used before .blend save)."""
+    blender_context = context or bpy.context
+    if blender_context is None:
+        return False
+    return capture_camera_view_framing(blender_context)
 
 
 def ensure_session_image(settings: properties.PMSession) -> bool:

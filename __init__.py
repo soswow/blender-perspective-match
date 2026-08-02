@@ -63,6 +63,17 @@ def _unregister_keymaps() -> None:
 
 
 @persistent
+def _capture_framing_before_save(_dummy=None) -> None:
+    """Persist active match camera-view zoom/pan before writing the .blend."""
+    try:
+        from . import scene as scene_module
+
+        scene_module.capture_active_match_framing(bpy.context)
+    except Exception:
+        traceback.print_exc()
+
+
+@persistent
 def _reset_modal_state(_dummy=None) -> None:
     """Clear transient modal flags after file load (safe outside register())."""
     operators._active_interact = None
@@ -192,6 +203,8 @@ def register() -> None:
     operators._active_interact = None
     if _reset_modal_state not in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.append(_reset_modal_state)
+    if _capture_framing_before_save not in bpy.app.handlers.save_pre:
+        bpy.app.handlers.save_pre.append(_capture_framing_before_save)
     # Existing open file: migrate landmark creation indices once on enable.
     properties.ensure_landmark_creation_indices()
     overlay.register_viewport_draw_handler()
@@ -201,6 +214,8 @@ def register() -> None:
 def unregister() -> None:
     """Remove drawing, scene state, and all registered classes."""
     _unregister_keymaps()
+    if _capture_framing_before_save in bpy.app.handlers.save_pre:
+        bpy.app.handlers.save_pre.remove(_capture_framing_before_save)
     if _reset_modal_state in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.remove(_reset_modal_state)
     operators._active_interact = None

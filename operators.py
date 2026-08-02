@@ -309,7 +309,7 @@ class PM_OT_camera_view(bpy.types.Operator):
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         scene.ensure_match_ready(context)
-        scene.enter_camera_view(context)
+        scene.enter_camera_view(context, restore_framing=True)
         return {"FINISHED"}
 
 
