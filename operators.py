@@ -1246,9 +1246,11 @@ class PM_OT_solve_sync(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
+        anchor = properties.anchor_root(context)
         return (
-            properties.anchor_root(context) is not None
-            and len(properties.iter_match_roots()) >= 2
+            anchor is not None
+            and properties.match_sync_enabled(anchor)
+            and len(properties.iter_sync_enabled_roots()) >= 2
             and len(properties.workspace(context).landmarks) >= 1
         )
 

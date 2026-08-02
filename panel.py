@@ -386,9 +386,29 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
         if sync_body is None:
             return
 
+        if settings is None:
+            sync_body.label(text="Activate a match camera first", icon="INFO")
+            return
+
+        # Opt-in for this match — when off, hide the rest of the sync UI.
+        sync_body.prop(settings, "sync_enabled", text="Enable sync for current match")
+        if not settings.sync_enabled:
+            sync_body.label(
+                text="This match is excluded from Solve Sync / Diagnose / Refine Lenses",
+                icon="INFO",
+            )
+            return
+
         match_count = len(properties.iter_match_roots())
+        enabled_count = len(properties.iter_sync_enabled_roots())
         if match_count < 2:
             sync_body.label(text="Create at least two matched cameras", icon="INFO")
+            return
+        if enabled_count < 2:
+            sync_body.label(
+                text="Enable sync on at least two matches",
+                icon="INFO",
+            )
             return
 
         sync_body.prop(workspace, "anchor_match", text="Anchor")

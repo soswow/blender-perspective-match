@@ -6,6 +6,7 @@ TODOs to be done:
 - Sync: leave-one-out Diagnose / automatic outlier rejection when sync fails.
 
 Done TODOs:
+- Sync: per-match Enable sync for current match (opt out of Solve Sync).
 - Sync: Refine Lenses — deterministic fx search with VP angular prior + sync RMSE.
 - Sync: per-landmark Use in Sync toggle (exclude from solve without deleting picks).
 - Undistorted plate saved message is shown at the end of the table. not sure if we need it there. writing to console should be enough.

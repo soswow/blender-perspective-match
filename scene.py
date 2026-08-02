@@ -1300,6 +1300,8 @@ def build_sync_problem(context: bpy.types.Context):
     matches = []
     for root in roots:
         session = root.pm_session
+        if not getattr(session, "sync_enabled", True):
+            continue
         if session.image is None or session.fx <= 0.0:
             continue
         matches.append(
@@ -1417,6 +1419,8 @@ def known_anchor_pick_warnings(context: bpy.types.Context) -> list[str]:
     if anchor is None:
         return []
     session = anchor.pm_session
+    if not getattr(session, "sync_enabled", True):
+        return []
     if session.image is None or session.fx <= 0.0:
         return []
     calibration = calibration_from_settings(session)
@@ -1471,8 +1475,14 @@ def diagnose_sync(context: bpy.types.Context):
     matches, observations, known_world, line_observations, known_lines, parallel_pairs = (
         build_sync_problem(context)
     )
+    if not getattr(anchor.pm_session, "sync_enabled", True):
+        raise ValueError(
+            "Anchor match has sync disabled — enable it or choose another anchor"
+        )
     if not matches:
-        raise ValueError("No solved matches available to sync")
+        raise ValueError("No sync-enabled solved matches available")
+    if len(matches) < 2:
+        raise ValueError("Need at least two sync-enabled matches")
     if anchor.name not in {item.match_id for item in matches}:
         raise ValueError("Anchor match needs a solved camera")
 
@@ -1488,6 +1498,13 @@ def diagnose_sync(context: bpy.types.Context):
     _apply_sync_landmark_diagnostics(context, result)
 
     parts = []
+    skipped_matches = sum(
+        1
+        for root in properties.iter_match_roots()
+        if not getattr(root.pm_session, "sync_enabled", True)
+    )
+    if skipped_matches:
+        parts.append(f"{skipped_matches} match(es) sync-disabled")
     excluded = sum(
         1 for landmark in space.landmarks if not getattr(landmark, "use_in_sync", True)
     )
@@ -1529,8 +1546,14 @@ def solve_and_apply_sync(context: bpy.types.Context):
     matches, observations, known_world, line_observations, known_lines, parallel_pairs = (
         build_sync_problem(context)
     )
+    if not getattr(anchor.pm_session, "sync_enabled", True):
+        raise ValueError(
+            "Anchor match has sync disabled — enable it or choose another anchor"
+        )
     if not matches:
-        raise ValueError("No solved matches available to sync")
+        raise ValueError("No sync-enabled solved matches available")
+    if len(matches) < 2:
+        raise ValueError("Need at least two sync-enabled matches")
     if anchor.name not in {item.match_id for item in matches}:
         raise ValueError("Anchor match needs a solved camera")
 
@@ -1545,6 +1568,13 @@ def solve_and_apply_sync(context: bpy.types.Context):
     )
     _apply_sync_landmark_diagnostics(context, result)
     message = result.message
+    skipped_matches = sum(
+        1
+        for root in properties.iter_match_roots()
+        if not getattr(root.pm_session, "sync_enabled", True)
+    )
+    if skipped_matches:
+        message = f"{skipped_matches} match(es) sync-disabled · " + message
     excluded = sum(
         1 for landmark in space.landmarks if not getattr(landmark, "use_in_sync", True)
     )
@@ -1616,8 +1646,14 @@ def refine_lenses_and_sync(context: bpy.types.Context):
     matches_pack, observations, known_world, line_observations, known_lines, parallel_pairs = (
         build_sync_problem(context)
     )
+    if not getattr(anchor.pm_session, "sync_enabled", True):
+        raise ValueError(
+            "Anchor match has sync disabled — enable it or choose another anchor"
+        )
     if not matches_pack:
-        raise ValueError("No solved matches available to sync")
+        raise ValueError("No sync-enabled solved matches available")
+    if len(matches_pack) < 2:
+        raise ValueError("Need at least two sync-enabled matches")
     if anchor.name not in {item.match_id for item in matches_pack}:
         raise ValueError("Anchor match needs a solved camera")
     if not observations and not line_observations:

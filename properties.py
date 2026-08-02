@@ -121,6 +121,18 @@ def iter_match_roots() -> list[bpy.types.Object]:
     return sorted(roots, key=lambda item: item.name)
 
 
+def match_sync_enabled(root: bpy.types.Object | None) -> bool:
+    """Whether this match opts into Solve Sync / Diagnose / Refine Lenses."""
+    if not is_match_root(root):
+        return False
+    return bool(getattr(root.pm_session, "sync_enabled", True))
+
+
+def iter_sync_enabled_roots() -> list[bpy.types.Object]:
+    """Match roots that participate in sync solves."""
+    return [root for root in iter_match_roots() if match_sync_enabled(root)]
+
+
 def workspace(context: bpy.types.Context | None = None) -> PMWorkspace:
     """Return the scene-level Perspective Match workspace."""
     blender_context = context or bpy.context
@@ -534,6 +546,15 @@ class PMSession(bpy.types.PropertyGroup):
     error: bpy.props.StringProperty(default="")
 
     # Sync Empty transform (private → shared); identity when not registered.
+    sync_enabled: bpy.props.BoolProperty(
+        name="Enable Sync",
+        description=(
+            "Include this match in Solve Sync, Diagnose, and Refine Lenses. "
+            "Turn off to leave it out of the shared-world registration"
+        ),
+        default=True,
+        update=_redraw,
+    )
     sync_is_applied: bpy.props.BoolProperty(default=False, options={"HIDDEN"})
     sync_scale: bpy.props.FloatProperty(default=1.0, options={"HIDDEN"})
     sync_rotation: bpy.props.FloatVectorProperty(
