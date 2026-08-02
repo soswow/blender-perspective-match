@@ -1634,7 +1634,8 @@ def clear_sync_transforms(context: bpy.types.Context) -> None:
 def refine_lenses_and_sync(context: bpy.types.Context):
     """Search per-match fx (VP prior) to lower sync RMSE, then apply sync.
 
-    Matches with Manual FOV, 1-point mode, or fewer than two VP axes stay frozen.
+    Matches with 1-point mode or fewer than two VP axes stay frozen.
+    Manual FOV matches are included so multi-view RMSE can adjust their fx.
     """
     from . import lens_refine
 
@@ -1668,11 +1669,8 @@ def refine_lenses_and_sync(context: bpy.types.Context):
         settings = root.pm_session
         line_bundles = line_bundles_from_settings(settings)
         ready_axes = sum(1 for segments in line_bundles.values() if len(segments) >= 2)
-        freeze = (
-            bool(settings.lock_focal)
-            or settings.vp_mode == "1"
-            or ready_axes < 2
-        )
+        freeze = settings.vp_mode == "1" or ready_axes < 2
+        # Manual FOV matches stay searchable — Refine Lenses exists to adjust fx.
         origin_image = None
         if settings.origin_is_set:
             origin_image = (

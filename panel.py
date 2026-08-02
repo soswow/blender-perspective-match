@@ -79,22 +79,26 @@ class PM_UL_landmarks(bpy.types.UIList):
         # Icon toggle — plain Bool+emboss=False reserves a half-row and centers the name.
         sync_icon = "CHECKBOX_HLT" if item.use_in_sync else "CHECKBOX_DEHLT"
         row.prop(item, "use_in_sync", text="", emboss=False, icon=sync_icon)
-        row.prop(item, "name", text="", emboss=False, icon="EMPTY_AXIS")
+        # Name gets ~2/3; status icons / count share the remaining third.
+        split = row.split(factor=0.67, align=True)
+        split.prop(item, "name", text="", emboss=False, icon="EMPTY_AXIS")
+        meta = split.row(align=True)
+        meta.alignment = "RIGHT"
         if item.kind == "LINE":
-            row.label(text="", icon="MESH_DATA")
+            meta.label(text="", icon="MESH_DATA")
             if _landmark_is_parallel_linked(item, _data):
-                row.label(text="", icon="LINKED")
+                meta.label(text="", icon="LINKED")
         if item.known_object is not None:
-            row.label(text="", icon="PIVOT_CURSOR")
+            meta.label(text="", icon="PIVOT_CURSOR")
         elif item.on_ground:
-            row.label(text="", icon="ORIENTATION_VIEW")
+            meta.label(text="", icon="ORIENTATION_VIEW")
         count = _observation_count(item)
         if not item.use_in_sync:
-            row.label(text=f"{count} · off")
+            meta.label(text=f"{count} · off")
         elif item.rmse_px > 0.5:
-            row.label(text=f"{count} · {item.rmse_px:.0f}px")
+            meta.label(text=f"{count} · {item.rmse_px:.0f}px")
         else:
-            row.label(text=f"{count}")
+            meta.label(text=f"{count}")
 
     def filter_items(self, context, data, propname):
         """Alphabetical when Sort A–Z is on; otherwise creation / add order.

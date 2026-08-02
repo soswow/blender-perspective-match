@@ -1,7 +1,8 @@
 """Multi-match landmark sync: register private worlds into an anchor frame.
 
 Each match keeps its VP solve in a private world. Sync finds a rigid Empty
-transform ``X_shared = R X_private + t`` (scale 1) per non-anchor match.
+transform ``X_shared = R X_private + t`` (scale 1) per non-anchor match, and
+falls back to a similarity with free scale when a rigid pose cannot lock.
 
 Enough 2D↔2D landmark correspondences recover relative orientation and
 baseline *direction* (same idea as SfM). Absolute baseline length vs the
@@ -1400,8 +1401,10 @@ def _similarity_from_camera_pose(
     calibration: core.Calibration,
     rotation_w2c_shared: np.ndarray,
     center_shared: np.ndarray,
+    *,
+    scale: float = 1.0,
 ) -> SimilarityTransform:
-    """Build Empty similarity (s=1) that realizes a shared camera pose."""
+    """Build Empty similarity that realizes a shared camera pose."""
     # R_w2c_shared = R_priv @ R_sim.T  ⇒  R_sim = R_w2c_shared.T @ R_priv
     rotation_sim = rotation_w2c_shared.T @ calibration.rotation_w2c
     # Orthonormalize in case of numeric drift.
@@ -1410,8 +1413,50 @@ def _similarity_from_camera_pose(
     if np.linalg.det(rotation_sim) < 0.0:
         u_matrix[:, -1] *= -1.0
         rotation_sim = u_matrix @ vt_matrix
-    translation = center_shared - rotation_sim @ calibration.camera_center
-    return SimilarityTransform(scale=1.0, rotation=rotation_sim, translation=translation)
+    scale = max(float(scale), 1.0e-8)
+    translation = center_shared - scale * (rotation_sim @ calibration.camera_center)
+    return SimilarityTransform(
+        scale=scale, rotation=rotation_sim, translation=translation
+    )
+
+
+def _pack_similarity_pose(
+    similarity: SimilarityTransform,
+    *,
+    lock_scale: bool = False,
+) -> np.ndarray:
+    """Pack (log s, ω, t) — or (ω, t) when scale is locked."""
+    if lock_scale:
+        return np.concatenate(
+            [_log_rodrigues(similarity.rotation), similarity.translation]
+        )
+    return np.concatenate(
+        [
+            [float(np.log(max(float(similarity.scale), 1.0e-8)))],
+            _log_rodrigues(similarity.rotation),
+            similarity.translation,
+        ]
+    )
+
+
+def _unpack_similarity_pose(
+    params: np.ndarray,
+    *,
+    lock_scale: bool = False,
+    fixed_scale: float = 1.0,
+) -> SimilarityTransform:
+    """Unpack pose params into a similarity."""
+    if lock_scale:
+        return SimilarityTransform(
+            scale=max(float(fixed_scale), 1.0e-8),
+            rotation=_rodrigues(params[:3]),
+            translation=params[3:6].copy(),
+        )
+    return SimilarityTransform(
+        scale=float(np.exp(params[0])),
+        rotation=_rodrigues(params[1:4]),
+        translation=params[4:7].copy(),
+    )
 
 
 def _pnp_similarity(
@@ -1423,14 +1468,24 @@ def _pnp_similarity(
     initial: SimilarityTransform | None = None,
     max_iterations: int = 40,
     weights: np.ndarray | None = None,
+    lock_scale: bool = True,
 ) -> SimilarityTransform | None:
-    """Solve Empty rigid transform (s=1) from shared 3D ↔ image 2D correspondences."""
+    """Solve Empty pose from shared 3D ↔ image 2D correspondences.
+
+    ``lock_scale=True`` (default) keeps ``s=1`` — preferred when private worlds
+    already share metric units. Free scale is a fallback when rigid PnP fails.
+    """
     if len(points_shared) < 3:
         return None
     seed = initial or SimilarityTransform()
-    params = np.concatenate(
-        [_log_rodrigues(seed.rotation), seed.translation]
-    )
+    if lock_scale:
+        seed = SimilarityTransform(
+            scale=1.0,
+            rotation=seed.rotation.copy(),
+            translation=np.asarray(seed.translation, dtype=np.float64).copy(),
+        )
+    params = _pack_similarity_pose(seed, lock_scale=lock_scale)
+    fixed_scale = float(seed.scale)
     if weights is None:
         point_weights = np.ones(len(points_shared), dtype=np.float64)
     else:
@@ -1439,10 +1494,8 @@ def _pnp_similarity(
             point_weights = np.ones(len(points_shared), dtype=np.float64)
 
     def residual(values: np.ndarray) -> np.ndarray:
-        similarity = SimilarityTransform(
-            scale=1.0,
-            rotation=_rodrigues(values[:3]),
-            translation=values[3:6].copy(),
+        similarity = _unpack_similarity_pose(
+            values, lock_scale=lock_scale, fixed_scale=fixed_scale
         )
         errors: list[float] = []
         for point_shared, image_point, weight in zip(
@@ -1497,10 +1550,8 @@ def _pnp_similarity(
         if not improved:
             break
 
-    return SimilarityTransform(
-        scale=1.0,
-        rotation=_rodrigues(params[:3]),
-        translation=params[3:6].copy(),
+    return _unpack_similarity_pose(
+        params, lock_scale=lock_scale, fixed_scale=fixed_scale
     )
 
 
@@ -2111,12 +2162,15 @@ def _apply_known_baseline_scale(
 
     best_alpha = offset_norm
     best_cost = float("inf")
+    empty_scale = max(float(similarity.scale), 1.0e-8)
     for factor in np.linspace(0.2, 5.0, 49):
         alpha = offset_norm * float(factor)
         center_b = anchor.camera_center + alpha * direction
-        translation = center_b - rotation @ other.camera_center
+        translation = center_b - empty_scale * (rotation @ other.camera_center)
         trial = SimilarityTransform(
-            scale=1.0, rotation=rotation, translation=translation
+            scale=empty_scale,
+            rotation=rotation,
+            translation=translation,
         )
         errors: list[float] = []
         for point_shared, image_point in zip(points_shared, points_image):
@@ -2141,9 +2195,9 @@ def _apply_known_baseline_scale(
 
     center_b = anchor.camera_center + best_alpha * direction
     return SimilarityTransform(
-        scale=1.0,
+        scale=float(similarity.scale),
         rotation=rotation,
-        translation=center_b - rotation @ other.camera_center,
+        translation=center_b - float(similarity.scale) * (rotation @ other.camera_center),
     )
 
 
@@ -2171,9 +2225,17 @@ def _refine_rigid_mixed(
     ]
     | None = None,
     parallel_weight: float = 0.0,
+    lock_scale: bool = True,
 ) -> SimilarityTransform:
-    """LM on Empty (R,t): free 2D↔2D ray gaps + Known 3D point/line reprojection."""
-    params = np.concatenate([_log_rodrigues(seed.rotation), seed.translation])
+    """LM on Empty pose: free 2D↔2D ray gaps + Known 3D point/line reprojection."""
+    if lock_scale:
+        seed = SimilarityTransform(
+            scale=1.0,
+            rotation=seed.rotation.copy(),
+            translation=np.asarray(seed.translation, dtype=np.float64).copy(),
+        )
+    params = _pack_similarity_pose(seed, lock_scale=lock_scale)
+    fixed_scale = float(seed.scale)
     # Ray distance (scene units) → rough pixels using focal length.
     ray_to_px = float(max(other.intrinsics.fx, other.intrinsics.fy)) / 5.0
     if point_weights is None:
@@ -2186,10 +2248,8 @@ def _refine_rigid_mixed(
     parallel_constraints = parallel_vp_constraints or []
 
     def residual(values: np.ndarray) -> np.ndarray:
-        similarity = SimilarityTransform(
-            scale=1.0,
-            rotation=_rodrigues(values[:3]),
-            translation=values[3:6].copy(),
+        similarity = _unpack_similarity_pose(
+            values, lock_scale=lock_scale, fixed_scale=fixed_scale
         )
         errors: list[float] = []
         for anchor_obs, other_obs in free_pairs:
@@ -2290,10 +2350,8 @@ def _refine_rigid_mixed(
         if not improved:
             break
 
-    return SimilarityTransform(
-        scale=1.0,
-        rotation=_rodrigues(params[:3]),
-        translation=params[3:6].copy(),
+    return _unpack_similarity_pose(
+        params, lock_scale=lock_scale, fixed_scale=fixed_scale
     )
 
 
@@ -2301,8 +2359,54 @@ def _refine_rigid_mixed(
 def _mixed_pose_seeds(
     anchor: core.Calibration,
     other: core.Calibration,
+    *,
+    include_scale_grid: bool = False,
+    dense_yaw: bool = False,
 ) -> list[SimilarityTransform]:
-    """Yaw / identity seeds for joint free-pair + Known 3D registration."""
+    """Yaw seeds (and optional scale grid) for Known 3D / mixed registration."""
+    scale_guesses = [1.0]
+    if include_scale_grid:
+        anchor_norm = float(np.linalg.norm(anchor.camera_center))
+        other_norm = float(np.linalg.norm(other.camera_center))
+        if other_norm > 1.0e-6:
+            ratio = max(anchor_norm / other_norm, 1.0e-3)
+            for factor in (0.5, 1.0, 2.0):
+                guess = ratio * factor
+                if all(
+                    abs(guess - existing) > 0.05 * max(guess, existing)
+                    for existing in scale_guesses
+                ):
+                    scale_guesses.append(guess)
+            for guess in (0.15, 0.25, 0.5, 2.0, 4.0):
+                if all(
+                    abs(guess - existing) > 0.05 * max(guess, existing)
+                    for existing in scale_guesses
+                ):
+                    scale_guesses.append(guess)
+
+    # Dense yaw (incl. ±90°/180°) for pure Known 3D PnP; keep the smaller set
+    # elsewhere so line-only registration does not fall into wrong basins.
+    if dense_yaw:
+        yaw_angles = (
+            -np.pi,
+            -2.5,
+            -2.0,
+            -0.5 * np.pi,
+            -1.2,
+            -0.8,
+            -0.4,
+            0.0,
+            0.4,
+            0.8,
+            1.2,
+            0.5 * np.pi,
+            2.0,
+            2.5,
+            np.pi,
+        )
+    else:
+        yaw_angles = (-1.2, -0.8, -0.4, 0.4, 0.8, 1.2)
+
     seeds: list[SimilarityTransform] = [
         SimilarityTransform(),
         SimilarityTransform(
@@ -2311,21 +2415,24 @@ def _mixed_pose_seeds(
             translation=anchor.camera_center - other.camera_center,
         ),
     ]
-    for yaw in (-1.2, -0.8, -0.4, 0.4, 0.8, 1.2):
-        cosine = float(np.cos(yaw))
-        sine = float(np.sin(yaw))
-        rotation_yaw = np.array(
-            ((cosine, -sine, 0.0), (sine, cosine, 0.0), (0.0, 0.0, 1.0)),
-            dtype=np.float64,
-        )
-        seeds.append(
-            SimilarityTransform(
-                scale=1.0,
-                rotation=rotation_yaw,
-                translation=anchor.camera_center
-                - rotation_yaw @ other.camera_center,
+    for scale in scale_guesses:
+        for yaw in yaw_angles:
+            if abs(yaw) < 1.0e-12 and abs(scale - 1.0) < 1.0e-12:
+                continue
+            cosine = float(np.cos(yaw))
+            sine = float(np.sin(yaw))
+            rotation_yaw = np.array(
+                ((cosine, -sine, 0.0), (sine, cosine, 0.0), (0.0, 0.0, 1.0)),
+                dtype=np.float64,
             )
-        )
+            seeds.append(
+                SimilarityTransform(
+                    scale=scale,
+                    rotation=rotation_yaw,
+                    translation=anchor.camera_center
+                    - scale * (rotation_yaw @ other.camera_center),
+                )
+            )
     return seeds
 
 
@@ -2519,25 +2626,63 @@ def _relative_pose_from_correspondences(
                 )
 
     if can_pnp_only:
-        solved = _pnp_similarity(
-            other_id,
-            np.stack(points_shared),
-            np.stack(points_image),
-            other,
-            weights=np.asarray(known_weights, dtype=np.float64),
-        )
-        if solved is not None:
-            if free_pairs or known_line_constraints:
-                solved = _refine_rigid_mixed(
+        # Multi-start: pure Known 3D has no 2D↔2D essential seed — try yaw grid.
+        # Rigid first (s=1); free-scale only if that cannot lock a pose.
+        for allow_scale in (False, True):
+            best_pnp: SimilarityTransform | None = None
+            best_pnp_rmse = float("inf")
+            seeds = _mixed_pose_seeds(
+                anchor,
+                other,
+                include_scale_grid=allow_scale,
+                dense_yaw=True,
+            )
+            for seed in seeds:
+                solved = _pnp_similarity(
+                    other_id,
+                    np.stack(points_shared),
+                    np.stack(points_image),
+                    other,
+                    initial=seed,
+                    weights=np.asarray(known_weights, dtype=np.float64),
+                    lock_scale=not allow_scale,
+                )
+                if solved is None:
+                    continue
+                if free_pairs or known_line_constraints:
+                    solved = _refine_rigid_mixed(
+                        solved,
+                        free_pairs,
+                        points_shared,
+                        points_image,
+                        anchor,
+                        other,
+                        lock_scale=not allow_scale,
+                        **mixed_kwargs,
+                    )
+                errors = _reprojection_errors_for_similarity(
                     solved,
                     free_pairs,
-                    points_shared,
-                    points_image,
                     anchor,
                     other,
-                    **mixed_kwargs,
+                    points_shared,
+                    points_image,
+                    point_weights=known_weights,
+                    weighted=True,
                 )
-            candidates.append(solved)
+                if not errors:
+                    continue
+                rmse = float(np.sqrt(np.mean(np.square(errors))))
+                if rmse < best_pnp_rmse:
+                    best_pnp_rmse = rmse
+                    best_pnp = solved
+                if best_pnp_rmse < 8.0:
+                    break
+            if best_pnp is not None and best_pnp_rmse <= 40.0:
+                candidates.append(best_pnp)
+                break
+            if best_pnp is not None:
+                candidates.append(best_pnp)
 
     if can_pnl_only:
         for seed in _mixed_pose_seeds(anchor, other):

@@ -6,6 +6,7 @@ TODOs to be done:
 - Sync: leave-one-out Diagnose / automatic outlier rejection when sync fails.
 
 Done TODOs:
+- Sync: Known 3D PnP multi-start (dense yaw) so large relative rotations lock; free scale only as fallback.
 - Sync: per-match Enable sync for current match (opt out of Solve Sync).
 - Sync: Refine Lenses — deterministic fx search with VP angular prior + sync RMSE.
 - Sync: per-landmark Use in Sync toggle (exclude from solve without deleting picks).

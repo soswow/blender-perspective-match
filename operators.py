@@ -1309,7 +1309,7 @@ class PM_OT_refine_lenses(bpy.types.Operator):
     bl_description = (
         "Search each unlocked match's focal length (re-orient from VP lines) "
         "to lower sync reprojection error, then Solve Sync. "
-        "Skips Manual FOV and 1-point matches"
+        "Skips 1-point matches and matches without enough VP lines"
     )
     bl_options = {"REGISTER", "UNDO"}
 
