@@ -1610,6 +1610,18 @@ def diagnose_sync(context: bpy.types.Context):
         known_lines=known_lines,
         parallel_pairs=parallel_pairs,
     )
+    if result.mean_reprojection_px > 8.0 or not result.success:
+        result.leave_one_out = sync_module.leave_one_out_landmark_report(
+            matches,
+            observations,
+            anchor_id=anchor.name,
+            known_world=known_world,
+            line_observations=line_observations,
+            known_lines=known_lines,
+            parallel_pairs=parallel_pairs,
+            top_k=5,
+            baseline=result if result.per_landmark_rmse_px else None,
+        )
     _apply_sync_landmark_diagnostics(context, result)
 
     parts = []
@@ -1641,6 +1653,24 @@ def diagnose_sync(context: bpy.types.Context):
             for landmark_id, rmse in ranked
         ]
         parts.append("Per-landmark: " + ", ".join(bits))
+    if result.leave_one_out:
+        helpful = [
+            f"{name} {with_rmse:.0f}→{without_rmse:.0f}px"
+            for name, with_rmse, without_rmse in result.leave_one_out[:3]
+            if without_rmse < with_rmse
+        ]
+        if helpful:
+            parts.append("Leave-one-out: " + ", ".join(helpful))
+    if result.downweighted_landmark_ids:
+        name_by_id = {
+            landmark.item_id: (landmark.name or landmark.item_id)
+            for landmark in space.landmarks
+        }
+        bits = [
+            name_by_id.get(landmark_id, landmark_id[:8])
+            for landmark_id in result.downweighted_landmark_ids[:4]
+        ]
+        parts.append("Auto-downweighted: " + ", ".join(bits))
     if result.success:
         parts.append("Pose OK to apply via Solve Sync (not applied by Diagnose)")
     space.sync_status = " | ".join(parts)

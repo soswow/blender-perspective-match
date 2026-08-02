@@ -1,9 +1,10 @@
-"""Refine per-match focal length from landmark sync + a VP angular prior.
+"""Refine per-match focal length from landmark sync + a VP line prior.
 
 Sync keeps intrinsics frozen. This outer loop varies ``fx`` (= ``fy``), rebuilds
 orientation from VP lines at each candidate (locked-focal refine), and scores
-``sync_rmse + vp_weight * Σ residual²``. Coordinate descent — one match at a
-time — keeps the search cheap without SciPy.
+``sync_rmse + vp_weight * Σ line_rms²``. Coordinate descent — one match at a
+time — is followed by a coupled polish that jointly moves landmark-sharing
+pairs (and a global relative-scale probe).
 """
 
 from __future__ import annotations
@@ -16,8 +17,14 @@ from . import core
 from . import sync as sync_module
 
 
-# Soft prior: 1° VP residual ≈ this many sync pixels in the joint cost.
-DEFAULT_VP_WEIGHT = 8.0
+# Soft prior: 1 px VP line RMS ≈ this many sync pixels in the joint cost.
+DEFAULT_VP_WEIGHT = 4.0
+# Absolute VP ceilings only used when no baseline is available.
+DEFAULT_MAX_VP_LINE_RMS = 40.0
+DEFAULT_MAX_VP_ANGLE_DEG = 10.0
+# Relative guardrails: reject trials that make VP worse than the start.
+DEFAULT_VP_LINE_SLACK_PX = 2.0
+DEFAULT_VP_ANGLE_SLACK_DEG = 1.0
 # Search window as a fraction of the starting focal length.
 DEFAULT_FX_SPAN = 0.18
 _FAILURE_COST = 1.0e6
@@ -60,6 +67,8 @@ def estimate_refine_evaluation_count(
     passes: int = 2,
     coarse_samples: int = 9,
     refine_samples: int = 7,
+    couple_pair_limit: int = 3,
+    couple_samples: int = 3,
 ) -> int:
     """Upper bound on sync evaluations (for progress bars)."""
     if free_match_count <= 0:
@@ -72,7 +81,51 @@ def estimate_refine_evaluation_count(
         1 if int(refine_samples) > 0 and int(refine_samples) % 2 == 1 else 0
     )
     per_match = coarse_evaluations + refine_evaluations
-    return 1 + max(1, int(passes)) * int(free_match_count) * per_match
+    total = 1 + max(1, int(passes)) * int(free_match_count) * per_match
+    # Coupled polish: pairwise grids + a global relative-scale probe.
+    if free_match_count >= 2:
+        pair_budget = min(
+            int(couple_pair_limit),
+            int(free_match_count) * (int(free_match_count) - 1) // 2,
+        )
+        pair_evals = pair_budget * max(int(couple_samples) * int(couple_samples) - 1, 0)
+        total += pair_evals + 2
+    return total
+
+
+def _shared_landmark_counts(
+    free_ids: list[str],
+    observations: list[sync_module.SyncObservation],
+) -> dict[tuple[str, str], int]:
+    """How many landmarks each free-match pair observes together."""
+    by_match: dict[str, set[str]] = {match_id: set() for match_id in free_ids}
+    for observation in observations:
+        if observation.match_id in by_match:
+            by_match[observation.match_id].add(observation.landmark_id)
+    counts: dict[tuple[str, str], int] = {}
+    for index, match_a in enumerate(free_ids):
+        for match_b in free_ids[index + 1 :]:
+            shared = by_match[match_a] & by_match[match_b]
+            counts[(match_a, match_b)] = len(shared)
+    return counts
+
+
+def _ranked_couple_pairs(
+    free_ids: list[str],
+    observations: list[sync_module.SyncObservation],
+    *,
+    limit: int = 3,
+) -> list[tuple[str, str]]:
+    """Prefer pairs that share landmarks; fall back to list-adjacent pairs."""
+    counts = _shared_landmark_counts(free_ids, observations)
+    ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    pairs = [pair for pair, count in ranked if count > 0][: max(0, int(limit))]
+    if pairs:
+        return pairs
+    return [
+        (free_ids[index], free_ids[index + 1])
+        for index in range(len(free_ids) - 1)
+    ][: max(0, int(limit))]
 
 
 def _sample_focals(center: float, span: float, count: int) -> list[float]:
@@ -117,21 +170,54 @@ def _sync_rmse(result: sync_module.SyncSolveResult) -> float:
     return _FAILURE_COST if not result.success else 0.0
 
 
+def _vp_terms(
+    calibrations: dict[str, core.Calibration],
+    matches: dict[str, MatchLensInput],
+) -> tuple[float, float, float]:
+    """Return (Σ line_rms², max line_rms, max angular residual)."""
+    vp_term = 0.0
+    max_line_rms = 0.0
+    max_angle = 0.0
+    for match_id, match in matches.items():
+        calibration = calibrations[match_id]
+        line_rms = core.vp_line_residual_rms(calibration, match.line_bundles)
+        angle = core.vp_angular_residual_degrees(calibration, match.line_bundles)
+        vp_term += line_rms * line_rms
+        max_line_rms = max(max_line_rms, line_rms)
+        max_angle = max(max_angle, angle)
+    return vp_term, max_line_rms, max_angle
+
+
 def _joint_cost(
     calibrations: dict[str, core.Calibration],
     matches: dict[str, MatchLensInput],
     sync_result: sync_module.SyncSolveResult,
     *,
     vp_weight: float,
+    max_vp_line_rms: float = DEFAULT_MAX_VP_LINE_RMS,
+    max_vp_angle_deg: float = DEFAULT_MAX_VP_ANGLE_DEG,
+    baseline_max_line_rms: float | None = None,
+    baseline_max_angle: float | None = None,
+    vp_line_slack_px: float = DEFAULT_VP_LINE_SLACK_PX,
+    vp_angle_slack_deg: float = DEFAULT_VP_ANGLE_SLACK_DEG,
 ) -> float:
     sync_term = _sync_rmse(sync_result)
     if sync_term >= _FAILURE_COST:
         return _FAILURE_COST
-    vp_term = 0.0
-    for match_id, match in matches.items():
-        calibration = calibrations[match_id]
-        residual = core.vp_angular_residual_degrees(calibration, match.line_bundles)
-        vp_term += residual * residual
+    vp_term, max_line_rms, max_angle = _vp_terms(calibrations, matches)
+    # Guardrails are relative to the starting lenses when available so a messy
+    # real plate (line RMS already >12px) can still be searched. Absolute
+    # ceilings only apply when there is no baseline.
+    if baseline_max_line_rms is None:
+        line_limit = float(max_vp_line_rms)
+    else:
+        line_limit = float(baseline_max_line_rms) + float(vp_line_slack_px)
+    if baseline_max_angle is None:
+        angle_limit = float(max_vp_angle_deg)
+    else:
+        angle_limit = float(baseline_max_angle) + float(vp_angle_slack_deg)
+    if max_line_rms > line_limit or max_angle > angle_limit:
+        return _FAILURE_COST
     return sync_term + float(vp_weight) * vp_term
 
 
@@ -172,14 +258,22 @@ def refine_lenses_from_landmarks(
     known_lines: dict | None = None,
     parallel_pairs: list | None = None,
     vp_weight: float = DEFAULT_VP_WEIGHT,
+    max_vp_line_rms: float = DEFAULT_MAX_VP_LINE_RMS,
+    max_vp_angle_deg: float = DEFAULT_MAX_VP_ANGLE_DEG,
     fx_span: float = DEFAULT_FX_SPAN,
     passes: int = 2,
     coarse_samples: int = 9,
     refine_samples: int = 7,
+    couple_pair_limit: int = 3,
+    couple_samples: int = 3,
     cancel_check=None,
     progress_callback=None,
 ) -> LensRefineResult:
-    """Coordinate-descent search over free focals; returns best calibrations.
+    """Search free focals with coordinate descent, then a coupled polish.
+
+    Coordinate descent moves one unlocked match at a time. The coupled polish
+    then jointly varies focals for landmark-sharing pairs (and a global
+    relative-scale probe) so multi-camera FOV error can shrink together.
 
     Frozen matches (Manual FOV / 1-point / weak VPs) keep their starting fx but
     still contribute VP residual and sync observations.
@@ -216,6 +310,8 @@ def refine_lenses_from_landmarks(
         passes=passes,
         coarse_samples=coarse_samples,
         refine_samples=refine_samples,
+        couple_pair_limit=couple_pair_limit,
+        couple_samples=couple_samples,
     )
     step = 0
 
@@ -242,7 +338,16 @@ def refine_lenses_from_landmarks(
             parallel_pairs,
             initial_similarities,
         )
-        cost = _joint_cost(cals, match_map, result, vp_weight=vp_weight)
+        cost = _joint_cost(
+            cals,
+            match_map,
+            result,
+            vp_weight=vp_weight,
+            max_vp_line_rms=max_vp_line_rms,
+            max_vp_angle_deg=max_vp_angle_deg,
+            baseline_max_line_rms=baseline_line_rms,
+            baseline_max_angle=baseline_angle,
+        )
         step += 1
         return cost, result
 
@@ -272,6 +377,12 @@ def refine_lenses_from_landmarks(
             improved=best_cost + 1.0e-3 < initial_cost,
             cancelled=True,
         )
+
+    # Baseline VP quality: relative guardrails compare against this, not a
+    # fixed 12px absolute, so messy real plates are still searchable.
+    _baseline_vp_term, baseline_line_rms, baseline_angle = _vp_terms(
+        calibrations, match_map
+    )
 
     _progress("Scoring initial lenses")
     if _cancelled():
@@ -405,6 +516,84 @@ def refine_lenses_from_landmarks(
             best_sync = local_best_sync
             best_cals = local_best_cals
 
+    # Coupled polish: move landmark-sharing pairs together, then probe a shared
+    # relative scale so multi-camera FOV bias is not stuck in coordinate descent.
+    couple_span = float(fx_span) * 0.2
+    for match_a, match_b in _ranked_couple_pairs(
+        free_ids,
+        observations,
+        limit=couple_pair_limit,
+    ):
+        if _cancelled():
+            return _cancelled_result(
+                best_cals,
+                best_sync,
+                initial_cost,
+                best_cost,
+                initial_sync,
+                start_fx,
+                free_ids,
+            )
+        center_a = float(best_cals[match_a].intrinsics.fx)
+        center_b = float(best_cals[match_b].intrinsics.fx)
+        for focal_a in _sample_focals(center_a, couple_span, couple_samples):
+            for focal_b in _sample_focals(center_b, couple_span, couple_samples):
+                if (
+                    abs(focal_a - center_a) <= 1.0e-9
+                    and abs(focal_b - center_b) <= 1.0e-9
+                ):
+                    continue
+                if _cancelled():
+                    return _cancelled_result(
+                        best_cals,
+                        best_sync,
+                        initial_cost,
+                        best_cost,
+                        initial_sync,
+                        start_fx,
+                        free_ids,
+                    )
+                _progress(
+                    f"Coupled · {match_a}/{match_b} · "
+                    f"fx {focal_a:.0f}/{focal_b:.0f}px"
+                )
+                trial = {key: value for key, value in best_cals.items()}
+                trial[match_a] = calibration_at_focal(match_map[match_a], focal_a)
+                trial[match_b] = calibration_at_focal(match_map[match_b], focal_b)
+                cost, result = evaluate(
+                    trial,
+                    initial_similarities=best_sync.similarities,
+                )
+                if cost + 1.0e-6 < best_cost:
+                    best_cost = cost
+                    best_sync = result
+                    best_cals = trial
+
+    for scale in (1.0 - couple_span, 1.0 + couple_span):
+        if _cancelled():
+            return _cancelled_result(
+                best_cals,
+                best_sync,
+                initial_cost,
+                best_cost,
+                initial_sync,
+                start_fx,
+                free_ids,
+            )
+        _progress(f"Coupled · global scale ×{scale:.3f}")
+        trial = {key: value for key, value in best_cals.items()}
+        for match_id in free_ids:
+            focal = max(float(best_cals[match_id].intrinsics.fx) * scale, 1.0)
+            trial[match_id] = calibration_at_focal(match_map[match_id], focal)
+        cost, result = evaluate(
+            trial,
+            initial_similarities=best_sync.similarities,
+        )
+        if cost + 1.0e-6 < best_cost:
+            best_cost = cost
+            best_sync = result
+            best_cals = trial
+
     fx_deltas = {
         match_id: float(best_cals[match_id].intrinsics.fx - start_fx[match_id])
         for match_id in free_ids
@@ -437,6 +626,14 @@ def refine_lenses_from_landmarks(
             f"No lens improvement · sync {final_rmse:.1f}px "
             f"(cost {initial_cost:.1f}→{best_cost:.1f})"
         )
+        if not best_sync.success or final_rmse > 40.0:
+            message += (
+                " · re-pick/exclude worst landmarks (Refine cannot fix bad picks)"
+            )
+        elif baseline_line_rms > 20.0:
+            message += (
+                f" · VP lines already noisy ({baseline_line_rms:.0f}px RMS)"
+            )
     _progress("Finished")
     return LensRefineResult(
         calibrations=best_cals,

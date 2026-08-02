@@ -3,9 +3,15 @@ TODOs to be done:
 - Move Opacity slider to top of that section. and call it "Overlay opacity"
 - No need for warning "Display only - does not affect ... "
 - Opacity should affect actively drawn VP line. right now it is only applied for already drawn ones.
-- Sync: leave-one-out Diagnose / automatic outlier rejection when sync fails.
 
 Done TODOs:
+- Sync: free-line midpoints participate in joint BA (directions fixed; parallel pass afterward).
+- Sync: stronger Cauchy robust loss in joint BA (replaces Huber taper).
+- Sync/Refine Lenses: coupled multi-camera focal search (vs coordinate descent).
+- Sync: analytic/block Jacobians for BA (currently finite differences).
+- Sync: leave-one-out Diagnose / automatic outlier rejection when sync fails.
+- Sync: joint BA after pairwise registration (poses + landmarks, robust loss, free-line constraints).
+- Sync/Refine Lenses: per-line VP residuals + hard VP guardrails.
 - Sync: Known 3D PnP multi-start (dense yaw) so large relative rotations lock; free scale only as fallback.
 - Sync: per-match Enable sync for current match (opt out of Solve Sync).
 - Sync: Refine Lenses — deterministic fx search with VP angular prior + sync RMSE.

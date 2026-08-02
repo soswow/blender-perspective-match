@@ -558,6 +558,53 @@ def vp_angular_residual_degrees(
     return max(errors, default=0.0)
 
 
+def vp_line_residual_rms(
+    calibration: Calibration,
+    line_bundles: dict[AxisId, list[LineSegment]],
+) -> float:
+    """Length-weighted RMS of line-to-VP distances against the solved axes.
+
+    Projects each rotation column back to an ideal vanishing point, then
+    measures how far the undistorted VP segments miss those points. Prefer
+    this over the max angular residual when scoring lens trials — it keeps
+    every drawn segment honest, not just the worst axis direction.
+    """
+    working_lines = undistort_line_bundles(
+        line_bundles,
+        calibration.intrinsics,
+        calibration.division_lambda,
+    )
+    axis_columns = {"x": 0, "z": 1, "y": 2}
+    weighted_sse = 0.0
+    weight_sum = 0.0
+    for axis, segments in working_lines.items():
+        if not segments or axis not in axis_columns:
+            continue
+        vanishing = vanishing_from_camera_direction(
+            calibration.rotation_w2c[:, axis_columns[axis]],
+            calibration.intrinsics,
+        )
+        if abs(float(vanishing[2])) < 1.0e-10:
+            point = np.array([vanishing[0], vanishing[1], 0.0], dtype=np.float64)
+        else:
+            point = np.array(
+                [
+                    vanishing[0] / vanishing[2],
+                    vanishing[1] / vanishing[2],
+                    1.0,
+                ],
+                dtype=np.float64,
+            )
+        for segment in segments:
+            weight = max(segment_length(segment), 1.0)
+            residual = float(_line_homogeneous(segment) @ point)
+            weighted_sse += weight * residual * residual
+            weight_sum += weight
+    if weight_sum < 1.0e-12:
+        return 180.0
+    return float(np.sqrt(weighted_sse / weight_sum))
+
+
 def default_camera_center(rotation_w2c: np.ndarray, *, height: float = 1.7) -> np.ndarray:
     """Place the camera above Z=0 with its principal ray near the world origin."""
     forward = rotation_w2c.T @ np.array([0.0, 0.0, 1.0])
