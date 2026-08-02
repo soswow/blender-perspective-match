@@ -459,6 +459,11 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             icon="SORTALPHA",
             toggle=True,
         )
+        list_column.operator(
+            "perspective_match.duplicate_landmark",
+            text="",
+            icon="DUPLICATE",
+        )
 
         landmark = scene.active_landmark(context)
         if landmark is not None:

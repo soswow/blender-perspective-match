@@ -1328,6 +1328,57 @@ class PM_OT_remove_landmark(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class PM_OT_duplicate_landmark(bpy.types.Operator):
+    """Duplicate the active landmark without picks, Known 3D links, or solved positions."""
+
+    bl_idname = "perspective_match.duplicate_landmark"
+    bl_label = "Duplicate Landmark"
+    bl_description = (
+        "Duplicate the active landmark (keeps type, On Ground, Use in Sync). "
+        "Clears picks, Known 3D links, parallel links, and solved positions. "
+        "Sets Pick Confidence from the source landmark's picks when available"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        space = _workspace(context)
+        return 0 <= space.active_landmark_index < len(space.landmarks)
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        space = _workspace(context)
+        source = scene.active_landmark(context)
+        if source is None:
+            return {"CANCELLED"}
+
+        # Prefer confidence from the active match pick, else any set pick.
+        pick_confidence = None
+        active_root = properties.active_root(context)
+        for observation in source.observations:
+            if not observation.is_set:
+                continue
+            if active_root is not None and observation.match_root == active_root:
+                pick_confidence = observation.confidence
+                break
+            if pick_confidence is None:
+                pick_confidence = observation.confidence
+
+        duplicate = space.landmarks.add()
+        duplicate.item_id = f"landmark-{uuid4().hex}"
+        duplicate.name = f"{source.name} copy"
+        duplicate.kind = source.kind
+        duplicate.on_ground = bool(source.on_ground)
+        duplicate.use_in_sync = bool(source.use_in_sync)
+        # Intentionally leave Known 3D / parallel / observations / positions empty.
+        properties.ensure_landmark_creation_indices(space)
+        space.active_landmark_index = len(space.landmarks) - 1
+        if pick_confidence is not None:
+            space.landmark_pick_confidence = pick_confidence
+        properties.tag_viewport_redraw(context)
+        self.report({"INFO"}, f"Duplicated '{source.name}' → '{duplicate.name}'")
+        return {"FINISHED"}
+
+
 class PM_OT_clear_landmark_observation(bpy.types.Operator):
     """Clear the active match's pick on the active landmark."""
 
@@ -1490,6 +1541,7 @@ CLASSES = (
     PM_OT_landmark_use_selected,
     PM_OT_landmark_clear_known,
     PM_OT_remove_landmark,
+    PM_OT_duplicate_landmark,
     PM_OT_clear_landmark_observation,
     PM_OT_solve_sync,
     PM_OT_diagnose_sync,
