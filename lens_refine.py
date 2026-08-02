@@ -64,8 +64,14 @@ def estimate_refine_evaluation_count(
     """Upper bound on sync evaluations (for progress bars)."""
     if free_match_count <= 0:
         return 1
-    # Initial score + per free match: coarse (+ optional current fx) + fine.
-    per_match = (coarse_samples + 1) + refine_samples
+    # The current focal and fine-grid center already have known scores.
+    coarse_evaluations = max(int(coarse_samples), 0) - (
+        1 if int(coarse_samples) > 0 and int(coarse_samples) % 2 == 1 else 0
+    )
+    refine_evaluations = max(int(refine_samples), 0) - (
+        1 if int(refine_samples) > 0 and int(refine_samples) % 2 == 1 else 0
+    )
+    per_match = coarse_evaluations + refine_evaluations
     return 1 + max(1, int(passes)) * int(free_match_count) * per_match
 
 
@@ -138,6 +144,7 @@ def _run_sync(
     known_world: dict,
     known_lines: dict,
     parallel_pairs: list,
+    initial_similarities: dict[str, sync_module.SimilarityTransform] | None = None,
 ) -> sync_module.SyncSolveResult:
     sync_matches = [
         sync_module.SyncMatchInput(match_id=match_id, calibration=calibrations[match_id])
@@ -151,6 +158,7 @@ def _run_sync(
         line_observations=line_observations,
         known_lines=known_lines,
         parallel_pairs=parallel_pairs,
+        initial_similarities=initial_similarities,
     )
 
 
@@ -218,7 +226,10 @@ def refine_lenses_from_landmarks(
         if progress_callback is not None:
             progress_callback(min(step, total_steps), total_steps, label)
 
-    def evaluate(cals: dict[str, core.Calibration]):
+    def evaluate(
+        cals: dict[str, core.Calibration],
+        initial_similarities: dict[str, sync_module.SimilarityTransform] | None = None,
+    ):
         nonlocal step
         result = _run_sync(
             cals,
@@ -229,6 +240,7 @@ def refine_lenses_from_landmarks(
             known_world,
             known_lines,
             parallel_pairs,
+            initial_similarities,
         )
         cost = _joint_cost(cals, match_map, result, vp_weight=vp_weight)
         step += 1
@@ -327,6 +339,10 @@ def refine_lenses_from_landmarks(
             local_best_cals = best_cals
 
             for focal in candidates:
+                # The current complete focal vector was scored before this
+                # coordinate step; do not run the same global sync again.
+                if abs(focal - current_fx) <= 1.0e-9:
+                    continue
                 if _cancelled():
                     return _cancelled_result(
                         best_cals,
@@ -343,7 +359,10 @@ def refine_lenses_from_landmarks(
                 )
                 trial = {key: value for key, value in local_best_cals.items()}
                 trial[match_id] = calibration_at_focal(match_map[match_id], focal)
-                cost, result = evaluate(trial)
+                cost, result = evaluate(
+                    trial,
+                    initial_similarities=local_best_sync.similarities,
+                )
                 if cost + 1.0e-6 < local_best_cost:
                     local_best_cost = cost
                     local_best_sync = result
@@ -352,7 +371,11 @@ def refine_lenses_from_landmarks(
 
             # Fine pass around the coarse winner.
             fine_span = fx_span * 0.25
+            fine_center_fx = local_best_fx
             for focal in _sample_focals(local_best_fx, fine_span, refine_samples):
+                # The coarse winner already owns local_best_cost/local_best_sync.
+                if abs(focal - fine_center_fx) <= 1.0e-9:
+                    continue
                 if _cancelled():
                     return _cancelled_result(
                         local_best_cals,
@@ -369,7 +392,10 @@ def refine_lenses_from_landmarks(
                 )
                 trial = {key: value for key, value in local_best_cals.items()}
                 trial[match_id] = calibration_at_focal(match_map[match_id], focal)
-                cost, result = evaluate(trial)
+                cost, result = evaluate(
+                    trial,
+                    initial_similarities=local_best_sync.similarities,
+                )
                 if cost + 1.0e-6 < local_best_cost:
                     local_best_cost = cost
                     local_best_sync = result
@@ -392,9 +418,18 @@ def refine_lenses_from_landmarks(
         if abs(delta) > 0.5
     ]
     if improved:
-        message = (
-            f"Lenses refined · sync {initial_rmse:.1f}→{final_rmse:.1f}px"
-        )
+        if final_rmse <= initial_rmse + 1.0e-3:
+            message = (
+                f"Lenses refined · sync {initial_rmse:.1f}→{final_rmse:.1f}px"
+            )
+        else:
+            # Joint cost can improve by preserving VP agreement even when the
+            # landmark-only RMSE rises slightly; make that tradeoff explicit.
+            message = (
+                f"Lens/VP fit improved · sync {initial_rmse:.1f}→"
+                f"{final_rmse:.1f}px · joint cost {initial_cost:.1f}→"
+                f"{best_cost:.1f}"
+            )
         if changed:
             message += " · " + ", ".join(changed[:4])
     else:

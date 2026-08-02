@@ -221,6 +221,43 @@ def project_private_point(
     return distorted
 
 
+def _project_shared_points(
+    points_shared: np.ndarray,
+    calibration: core.Calibration,
+    similarity: SimilarityTransform,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Project a batch of shared-world points through one match.
+
+    Lens refinement evaluates the same landmark set thousands of times while
+    building numerical Jacobians. Keeping this path in NumPy avoids one Python
+    call and several temporary arrays per landmark per evaluation.
+    """
+    points = np.asarray(points_shared, dtype=np.float64).reshape(-1, 3)
+    private = (
+        (points - similarity.translation) / max(float(similarity.scale), 1.0e-12)
+    ) @ similarity.rotation
+    camera = (private - calibration.camera_center) @ calibration.rotation_w2c.T
+    depths = camera[:, 2]
+    valid = depths > 1.0e-8
+    safe_depths = np.where(valid, depths, 1.0)
+    intrinsics = calibration.intrinsics
+    ideal = np.column_stack(
+        (
+            intrinsics.fx * camera[:, 0] / safe_depths + intrinsics.cx,
+            intrinsics.fy * camera[:, 1] / safe_depths + intrinsics.cy,
+        )
+    )
+    projected = core.distort_points(
+        ideal,
+        intrinsics.fx,
+        intrinsics.fy,
+        intrinsics.cx,
+        intrinsics.cy,
+        calibration.division_lambda,
+    )
+    return projected, valid
+
+
 def camera_ray_private(
     u_coordinate: float,
     v_coordinate: float,
@@ -1493,23 +1530,20 @@ def _pnp_similarity(
         if point_weights.size != len(points_shared):
             point_weights = np.ones(len(points_shared), dtype=np.float64)
 
+    shared_array = np.asarray(points_shared, dtype=np.float64).reshape(-1, 3)
+    image_array = np.asarray(points_image, dtype=np.float64).reshape(-1, 2)
+    residual_scales = np.sqrt(np.maximum(point_weights, 1.0e-12))[:, None]
+
     def residual(values: np.ndarray) -> np.ndarray:
         similarity = _unpack_similarity_pose(
             values, lock_scale=lock_scale, fixed_scale=fixed_scale
         )
-        errors: list[float] = []
-        for point_shared, image_point, weight in zip(
-            points_shared, points_image, point_weights
-        ):
-            scale = float(np.sqrt(max(float(weight), 1.0e-12)))
-            point_private = similarity.inverse_point(point_shared)
-            projected = project_private_point(point_private, calibration)
-            if projected is None:
-                errors.extend((scale * 1.0e3, scale * 1.0e3))
-                continue
-            errors.append(scale * float(projected[0] - image_point[0]))
-            errors.append(scale * float(projected[1] - image_point[1]))
-        return np.asarray(errors, dtype=np.float64)
+        projected, valid = _project_shared_points(
+            shared_array, calibration, similarity
+        )
+        errors = residual_scales * (projected - image_array)
+        errors[~valid] = residual_scales[~valid] * 1.0e3
+        return errors.reshape(-1)
 
     damping = 1.0e-3
     previous_cost = float("inf")
@@ -1683,6 +1717,24 @@ def _refine_rigid_from_rays(
 ) -> SimilarityTransform:
     """Levenberg–Marquardt on Empty (R, t) minimizing ray–ray distances."""
     params = np.concatenate([_log_rodrigues(seed.rotation), seed.translation])
+    anchor_directions: list[np.ndarray] = []
+    other_directions: list[np.ndarray] = []
+    pair_scales: list[float] = []
+    for anchor_obs, other_obs in pairs:
+        _origin_a, direction_a = camera_ray_private(
+            anchor_obs.u, anchor_obs.v, anchor
+        )
+        _origin_b, direction_b = camera_ray_private(
+            other_obs.u, other_obs.v, other
+        )
+        anchor_directions.append(direction_a)
+        other_directions.append(direction_b)
+        pair_scales.append(_pair_scale(anchor_obs, other_obs))
+    anchor_direction_array = np.stack(anchor_directions)
+    other_direction_array = np.stack(other_directions)
+    pair_scale_array = np.asarray(pair_scales, dtype=np.float64)
+    origin_a = anchor.camera_center
+    origin_b_private = other.camera_center
 
     def residual(values: np.ndarray) -> np.ndarray:
         similarity = SimilarityTransform(
@@ -1690,25 +1742,22 @@ def _refine_rigid_from_rays(
             rotation=_rodrigues(values[:3]),
             translation=values[3:6].copy(),
         )
-        errors: list[float] = []
-        for anchor_obs, other_obs in pairs:
-            scale = _pair_scale(anchor_obs, other_obs)
-            origin_a, direction_a = camera_ray_private(
-                anchor_obs.u, anchor_obs.v, anchor
+        origin_b = similarity.transform_point(origin_b_private)
+        direction_b = other_direction_array @ similarity.rotation.T
+        normals = np.cross(anchor_direction_array, direction_b)
+        normal_norms = np.linalg.norm(normals, axis=1)
+        offset = origin_a - origin_b
+        distances = np.empty(len(pairs), dtype=np.float64)
+        regular = normal_norms >= 1.0e-10
+        distances[regular] = (
+            np.abs(normals[regular] @ offset) / normal_norms[regular]
+        )
+        if np.any(~regular):
+            distances[~regular] = np.linalg.norm(
+                np.cross(offset, direction_b[~regular]),
+                axis=1,
             )
-            origin_b_priv, direction_b_priv = camera_ray_private(
-                other_obs.u, other_obs.v, other
-            )
-            origin_b = similarity.transform_point(origin_b_priv)
-            direction_b = similarity.rotation @ direction_b_priv
-            direction_b = direction_b / max(
-                float(np.linalg.norm(direction_b)), 1.0e-12
-            )
-            errors.append(
-                scale
-                * _skew_lines_distance(origin_a, direction_a, origin_b, direction_b)
-            )
-        return np.asarray(errors, dtype=np.float64)
+        return pair_scale_array * distances
 
     damping = 1.0e-2
     previous_cost = float("inf")
@@ -2246,42 +2295,69 @@ def _refine_rigid_mixed(
             known_weights = [1.0] * len(points_shared)
     line_constraints = known_line_constraints or []
     parallel_constraints = parallel_vp_constraints or []
+    anchor_directions: list[np.ndarray] = []
+    other_directions: list[np.ndarray] = []
+    pair_scales: list[float] = []
+    for anchor_obs, other_obs in free_pairs:
+        _origin_a, direction_a = camera_ray_private(
+            anchor_obs.u, anchor_obs.v, anchor
+        )
+        _origin_b, direction_b = camera_ray_private(
+            other_obs.u, other_obs.v, other
+        )
+        anchor_directions.append(direction_a)
+        other_directions.append(direction_b)
+        pair_scales.append(_pair_scale(anchor_obs, other_obs))
+    anchor_direction_array = (
+        np.stack(anchor_directions)
+        if anchor_directions
+        else np.empty((0, 3), dtype=np.float64)
+    )
+    other_direction_array = (
+        np.stack(other_directions)
+        if other_directions
+        else np.empty((0, 3), dtype=np.float64)
+    )
+    pair_scale_array = np.asarray(pair_scales, dtype=np.float64)
+    origin_a = anchor.camera_center
+    origin_b_private = other.camera_center
+    shared_array = np.asarray(points_shared, dtype=np.float64).reshape(-1, 3)
+    image_array = np.asarray(points_image, dtype=np.float64).reshape(-1, 2)
+    known_scale_array = np.sqrt(
+        np.maximum(np.asarray(known_weights, dtype=np.float64), 1.0e-12)
+    )[:, None]
 
     def residual(values: np.ndarray) -> np.ndarray:
         similarity = _unpack_similarity_pose(
             values, lock_scale=lock_scale, fixed_scale=fixed_scale
         )
         errors: list[float] = []
-        for anchor_obs, other_obs in free_pairs:
-            scale = _pair_scale(anchor_obs, other_obs)
-            origin_a, direction_a = camera_ray_private(
-                anchor_obs.u, anchor_obs.v, anchor
+        if len(free_pairs):
+            origin_b = similarity.transform_point(origin_b_private)
+            direction_b = other_direction_array @ similarity.rotation.T
+            normals = np.cross(anchor_direction_array, direction_b)
+            normal_norms = np.linalg.norm(normals, axis=1)
+            offset = origin_a - origin_b
+            distances = np.empty(len(free_pairs), dtype=np.float64)
+            regular = normal_norms >= 1.0e-10
+            distances[regular] = (
+                np.abs(normals[regular] @ offset) / normal_norms[regular]
             )
-            origin_b_priv, direction_b_priv = camera_ray_private(
-                other_obs.u, other_obs.v, other
+            if np.any(~regular):
+                distances[~regular] = np.linalg.norm(
+                    np.cross(offset, direction_b[~regular]),
+                    axis=1,
+                )
+            errors.extend(
+                (pair_scale_array * ray_to_px * distances).tolist()
             )
-            origin_b = similarity.transform_point(origin_b_priv)
-            direction_b = similarity.rotation @ direction_b_priv
-            direction_b = direction_b / max(
-                float(np.linalg.norm(direction_b)), 1.0e-12
+        if len(shared_array):
+            projected, valid = _project_shared_points(
+                shared_array, other, similarity
             )
-            errors.append(
-                scale
-                * ray_to_px
-                * _skew_lines_distance(origin_a, direction_a, origin_b, direction_b)
-            )
-        for point_shared, image_point, weight in zip(
-            points_shared, points_image, known_weights
-        ):
-            scale = float(np.sqrt(max(float(weight), 1.0e-12)))
-            projected = project_private_point(
-                similarity.inverse_point(point_shared), other
-            )
-            if projected is None:
-                errors.extend((scale * 1.0e3, scale * 1.0e3))
-                continue
-            errors.append(scale * float(projected[0] - image_point[0]))
-            errors.append(scale * float(projected[1] - image_point[1]))
+            point_errors = known_scale_array * (projected - image_array)
+            point_errors[~valid] = known_scale_array[~valid] * 1.0e3
+            errors.extend(point_errors.reshape(-1).tolist())
         for point_a, point_b, line_obs in line_constraints:
             errors.extend(
                 _known_line_reprojection_errors(
@@ -2446,6 +2522,7 @@ def _relative_pose_from_correspondences(
     line_observations_by_landmark: dict[str, list[SyncLineObservation]]
     | None = None,
     parallel_pairs: list[tuple[str, str]] | None = None,
+    initial_similarity: SimilarityTransform | None = None,
 ) -> tuple[SimilarityTransform | None, str]:
     """Register other from free 2D↔2D and/or Known 3D points/lines.
 
@@ -2541,12 +2618,58 @@ def _relative_pose_from_correspondences(
             "Known 3D points, or ≥3 Known 3D line landmarks",
         )
 
+    # Lens trials only perturb one focal at a time, so the previous accepted
+    # metric pose is normally in the same basin. Try one local mixed solve
+    # before repeating the expensive global yaw/essential multi-start search.
+    # Pure 2D↔2D problems keep the global path because their baseline scale is
+    # unobservable and a local ray-distance solve can collapse translation.
+    if initial_similarity is not None and (
+        points_shared or known_line_constraints
+    ):
+        lock_warm_scale = abs(float(initial_similarity.scale) - 1.0) < 1.0e-6
+        warm = _refine_rigid_mixed(
+            initial_similarity,
+            free_pairs,
+            points_shared,
+            points_image,
+            anchor,
+            other,
+            point_weights=known_weights,
+            known_line_constraints=known_line_constraints,
+            lock_scale=lock_warm_scale,
+        )
+        warm_errors = _reprojection_errors_for_similarity(
+            warm,
+            free_pairs,
+            anchor,
+            other,
+            points_shared,
+            points_image,
+            point_weights=known_weights,
+            weighted=True,
+        )
+        for point_a, point_b, line_obs in known_line_constraints:
+            warm_errors.extend(
+                _known_line_reprojection_errors(
+                    point_a,
+                    point_b,
+                    line_obs,
+                    other,
+                    warm,
+                )
+            )
+        if warm_errors:
+            warm_rmse = float(np.sqrt(np.mean(np.square(warm_errors))))
+            if warm_rmse <= 40.0:
+                return warm, ""
+
     candidates: list[SimilarityTransform] = []
     mixed_kwargs = {
         "point_weights": known_weights,
         "known_line_constraints": known_line_constraints,
     }
 
+    relative: SimilarityTransform | None = None
     if can_pairs_only:
         relative = _solve_relative_from_pairs(free_pairs, anchor, other)
         if relative is not None:
@@ -2610,20 +2733,18 @@ def _relative_pose_from_correspondences(
                     **mixed_kwargs,
                 )
             )
-        if can_pairs_only:
-            relative = _solve_relative_from_pairs(free_pairs, anchor, other)
-            if relative is not None:
-                candidates.append(
-                    _refine_rigid_mixed(
-                        relative,
-                        free_pairs,
-                        points_shared,
-                        points_image,
-                        anchor,
-                        other,
-                        **mixed_kwargs,
-                    )
+        if relative is not None:
+            candidates.append(
+                _refine_rigid_mixed(
+                    relative,
+                    free_pairs,
+                    points_shared,
+                    points_image,
+                    anchor,
+                    other,
+                    **mixed_kwargs,
                 )
+            )
 
     if can_pnp_only:
         # Multi-start: pure Known 3D has no 2D↔2D essential seed — try yaw grid.
@@ -2813,6 +2934,7 @@ def _register_from_relative_pose(
     line_observations_by_landmark: dict[str, list[SyncLineObservation]]
     | None = None,
     parallel_pairs: list[tuple[str, str]] | None = None,
+    initial_similarities: dict[str, SimilarityTransform] | None = None,
 ) -> tuple[dict[str, SimilarityTransform] | None, str]:
     """Register free matches vs anchor, then bridge via triangulated landmarks."""
     similarities: dict[str, SimilarityTransform] = {
@@ -2831,6 +2953,7 @@ def _register_from_relative_pose(
             known_lines=known_lines,
             line_observations_by_landmark=line_observations_by_landmark,
             parallel_pairs=parallel_pairs,
+            initial_similarity=(initial_similarities or {}).get(match_id),
         )
         if solved is None:
             if detail:
@@ -2974,6 +3097,7 @@ def solve_landmark_sync(
     line_observations: list[SyncLineObservation] | None = None,
     known_lines: dict[str, tuple[np.ndarray, np.ndarray]] | None = None,
     parallel_pairs: list[tuple[str, str]] | None = None,
+    initial_similarities: dict[str, SimilarityTransform] | None = None,
 ) -> SyncSolveResult:
     """Register non-anchor matches from 2D correspondences and/or known 3D.
 
@@ -3142,6 +3266,7 @@ def solve_landmark_sync(
         known_lines=known_lines,
         line_observations_by_landmark=line_observations_by_landmark,
         parallel_pairs=parallel_pairs,
+        initial_similarities=initial_similarities,
     )
     if similarities is None:
         return SyncSolveResult(
@@ -3263,6 +3388,9 @@ def solve_landmark_sync(
     # Pose quality = point residuals only. Line px (esp. after Parallel lock)
     # is diagnostic and must not reject a good camera solve.
     point_sse = [value for values in per_match_sse.values() for value in values]
+    per_match_point_sse = {
+        match_id: list(values) for match_id, values in per_match_sse.items()
+    }
     weighted_point_sse = (
         list(np.square(weighted_residuals)) if weighted_residuals.size else []
     )
@@ -3356,8 +3484,12 @@ def solve_landmark_sync(
             return 0.0
         return float(np.sqrt(np.mean(values)))
 
+    # Keep the camera-level number consistent with pose acceptance and the
+    # headline RMSE. A badly drawn free line remains visible on that landmark,
+    # but no longer makes an otherwise good camera report hundreds of pixels.
+    per_match_source = per_match_point_sse if point_sse else per_match_sse
     per_match_rmse = {
-        match_id: _rmse(values) for match_id, values in per_match_sse.items()
+        match_id: _rmse(values) for match_id, values in per_match_source.items()
     }
     per_landmark_rmse = {
         landmark_id: _rmse(values) for landmark_id, values in per_landmark_sse.items()

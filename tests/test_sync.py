@@ -131,6 +131,35 @@ class LandmarkSyncTests(unittest.TestCase):
         recovered = transform.inverse_point(shared)
         self.assertTrue(np.allclose(point, recovered, atol=1.0e-9))
 
+    def test_batched_shared_projection_matches_scalar_projection(self) -> None:
+        """The optimized projection path must preserve scalar solver geometry."""
+        matches, _observations, true_sim, _center, _shared = _synthetic_scene(
+            with_ground=False
+        )
+        calibration = matches[1].calibration
+        points = np.array(
+            (
+                (0.0, 0.0, 0.0),
+                (2.0, 0.5, 0.2),
+                (0.5, 1.5, 1.8),
+                (-0.4, 0.8, 0.7),
+            ),
+            dtype=np.float64,
+        )
+        projected, valid = sync._project_shared_points(
+            points,
+            calibration,
+            true_sim,
+        )
+        self.assertTrue(valid.all())
+        for index, point in enumerate(points):
+            expected = sync.project_private_point(
+                true_sim.inverse_point(point),
+                calibration,
+            )
+            self.assertIsNotNone(expected)
+            self.assertTrue(np.allclose(projected[index], expected, atol=1.0e-9))
+
     def test_correspondences_recover_relative_pose(self) -> None:
         """Enough 2D↔2D picks solve orientation + baseline direction (no ground)."""
         matches, observations, true_sim, center_private, shared_center = _synthetic_scene(
@@ -177,6 +206,33 @@ class LandmarkSyncTests(unittest.TestCase):
 
         recovered_center = recovered.transform_point(center_private)
         self.assertTrue(np.allclose(recovered_center, shared_center, atol=0.2))
+
+    def test_metric_sync_can_warm_start_from_previous_pose(self) -> None:
+        """Nearby lens trials can reuse a solved metric pose without global search."""
+        matches, observations, _true_sim, _center_private, _shared_center = (
+            _synthetic_scene(with_ground=True)
+        )
+        initial = sync.solve_landmark_sync(
+            matches,
+            observations,
+            anchor_id="anchor",
+        )
+        self.assertTrue(initial.success, initial.message)
+        repeated = sync.solve_landmark_sync(
+            matches,
+            observations,
+            anchor_id="anchor",
+            initial_similarities=initial.similarities,
+        )
+        self.assertTrue(repeated.success, repeated.message)
+        self.assertLess(repeated.mean_reprojection_px, 1.0)
+        self.assertTrue(
+            np.allclose(
+                repeated.similarities["other"].matrix(),
+                initial.similarities["other"].matrix(),
+                atol=1.0e-4,
+            )
+        )
 
     def test_collinear_landmarks_fail_with_clear_message(self) -> None:
         """Nearly collinear 2D picks must not KeyError — report geometry instead."""

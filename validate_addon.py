@@ -256,9 +256,11 @@ def main() -> None:
             # Surfaces from the project must not be created.
             assert not hasattr(reloaded, "surfaces") or len(getattr(reloaded, "surfaces", [])) == 0
 
-            reloaded.division_lambda = 0.12
             reloaded.lock_focal = True
             reloaded.estimate_distortion = False
+            # Turning estimation off intentionally clears λ; set the synthetic
+            # stored value afterward to test locked-focal preservation itself.
+            reloaded.division_lambda = 0.12
             manual_result = scene.refine_match(bpy.context)
             assert abs(manual_result.division_lambda - 0.12) < 1.0e-6, (
                 manual_result.division_lambda,

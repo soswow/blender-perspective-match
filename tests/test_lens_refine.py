@@ -45,6 +45,16 @@ class VpResidualTests(unittest.TestCase):
 
 
 class LensRefinePlumbingTests(unittest.TestCase):
+    def test_evaluation_count_excludes_already_scored_grid_centers(self) -> None:
+        self.assertEqual(
+            lens_refine.estimate_refine_evaluation_count(1),
+            29,
+        )
+        self.assertEqual(
+            lens_refine.estimate_refine_evaluation_count(4),
+            113,
+        )
+
     def test_calibration_at_focal_changes_fx(self) -> None:
         bundles = {
             "x": [

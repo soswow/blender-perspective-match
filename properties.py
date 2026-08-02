@@ -146,11 +146,15 @@ def ensure_landmark_creation_indices(space: PMWorkspace | None = None) -> None:
     as the restored “original” order when Sort A–Z is off.
 
     Must not be called from UI draw / UIList.filter_items (Scene ID is frozen).
-    Safe from operators, load_post, and register().
+    Safe from operators and load_post. During early add-on registration Blender
+    may expose restricted data; migration is then deferred to load_post.
     """
     target = space
     if target is None:
-        for scene in bpy.data.scenes:
+        scenes = getattr(bpy.data, "scenes", None)
+        if scenes is None:
+            return
+        for scene in scenes:
             if hasattr(scene, "match_perspective"):
                 ensure_landmark_creation_indices(scene.match_perspective)
         return
