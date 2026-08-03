@@ -1,0 +1,4 @@
+numpy>=1.26
+plotly>=5.18
+# Optional: only needed for --out something.png
+# kaleido>=0.2
