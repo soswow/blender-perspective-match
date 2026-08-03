@@ -197,8 +197,15 @@ def apply_view_lighting(context: bpy.types.Context) -> bpy.types.Image:
     settings = properties.active_session(context)
     if settings is None:
         raise ValueError("Create or activate a match camera first")
+    # Always bake from the solver source still — never from a previous view plate.
+    scene.ensure_session_image(settings)
     if settings.image is None:
         raise ValueError("Load a reference image first")
+    if scene._is_derived_display_image(settings, settings.image):
+        raise ValueError(
+            "Reference image pointer points at a view/undistorted plate — "
+            "re-open the original still"
+        )
     if not settings.image_path:
         raise ValueError("Reference image has no file path to write a view plate beside")
 

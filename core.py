@@ -558,6 +558,51 @@ def vp_angular_residual_degrees(
     return max(errors, default=0.0)
 
 
+# World-axis id → column in rotation_w2c (X, Z/UI-Y, Y/UI-Z).
+_AXIS_ROTATION_COLUMNS = {"x": 0, "z": 1, "y": 2}
+
+
+def _homogeneous_image_point(vanishing: np.ndarray) -> np.ndarray:
+    """Normalize a homogeneous VP to (x, y, 1) or a line-at-infinity (x, y, 0)."""
+    if abs(float(vanishing[2])) < 1.0e-10:
+        return np.array([vanishing[0], vanishing[1], 0.0], dtype=np.float64)
+    return np.array(
+        [
+            vanishing[0] / vanishing[2],
+            vanishing[1] / vanishing[2],
+            1.0,
+        ],
+        dtype=np.float64,
+    )
+
+
+def ideal_axis_vanishing_point(
+    calibration: Calibration,
+    axis: AxisId,
+) -> np.ndarray | None:
+    """Project a solved camera axis to its ideal homogeneous vanishing point."""
+    column = _AXIS_ROTATION_COLUMNS.get(axis)
+    if column is None:
+        return None
+    return vanishing_from_camera_direction(
+        calibration.rotation_w2c[:, column],
+        calibration.intrinsics,
+    )
+
+
+def vp_ideal_segment_residual_px(
+    calibration: Calibration,
+    axis: AxisId,
+    ideal_segment: LineSegment,
+) -> float | None:
+    """Perpendicular distance (px) of an already-undistorted segment to the ideal VP."""
+    vanishing = ideal_axis_vanishing_point(calibration, axis)
+    if vanishing is None:
+        return None
+    point = _homogeneous_image_point(vanishing)
+    return abs(float(_line_homogeneous(ideal_segment) @ point))
+
+
 def vp_line_residual_rms(
     calibration: Calibration,
     line_bundles: dict[AxisId, list[LineSegment]],
@@ -574,27 +619,15 @@ def vp_line_residual_rms(
         calibration.intrinsics,
         calibration.division_lambda,
     )
-    axis_columns = {"x": 0, "z": 1, "y": 2}
     weighted_sse = 0.0
     weight_sum = 0.0
     for axis, segments in working_lines.items():
-        if not segments or axis not in axis_columns:
+        if not segments or axis not in _AXIS_ROTATION_COLUMNS:
             continue
-        vanishing = vanishing_from_camera_direction(
-            calibration.rotation_w2c[:, axis_columns[axis]],
-            calibration.intrinsics,
-        )
-        if abs(float(vanishing[2])) < 1.0e-10:
-            point = np.array([vanishing[0], vanishing[1], 0.0], dtype=np.float64)
-        else:
-            point = np.array(
-                [
-                    vanishing[0] / vanishing[2],
-                    vanishing[1] / vanishing[2],
-                    1.0,
-                ],
-                dtype=np.float64,
-            )
+        vanishing = ideal_axis_vanishing_point(calibration, axis)
+        if vanishing is None:
+            continue
+        point = _homogeneous_image_point(vanishing)
         for segment in segments:
             weight = max(segment_length(segment), 1.0)
             residual = float(_line_homogeneous(segment) @ point)

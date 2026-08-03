@@ -12,6 +12,7 @@ The extension is a native port of the manual workflow from Perspective Match Stu
 - Load a still directly as a Blender camera background on the active match only.
 - Choose 1-, 2-, or 3-point perspective.
 - Draw, select, edit, and delete axis-colored VP segments in camera view.
+- Optionally label each VP segment with its residual (px) to the current camera.
 - Extend VP guides, horizon, and VP markers past the plate to finite vanishing points (capped when lines are nearly parallel).
 - Derive a missing horizontal VP from an orthogonal pair so the horizon still draws with only one explicit horizontal bundle.
 - Draw VP continuations as axis-colored dashes, and the horizon as red / empty / green / empty dashes.
@@ -19,7 +20,7 @@ The extension is a native port of the manual workflow from Perspective Match Stu
 - Solve camera orientation and, when constrained, focal length from orthogonal VPs.
 - Lock and edit horizontal FOV manually, including underconstrained 1-point shots.
 - Solve an off-center principal point from three finite orthogonal VPs, or set it with **Manual PP Offset** (violet crosshair when off-center).
-- Show per-plane FOV estimates and angular consistency diagnostics.
+- Show per-plane FOV estimates, angular consistency, and VP-line RMSE diagnostics.
 - Pick a ground origin so the matched camera sits relative to world origin.
 - Synchronise multiple matched cameras into one shared world with a landmark graph: 2D↔2D picks and/or **Known 3D** Blender objects (Empties at verts on a modeled edge), optional On Ground, choose an anchor, solve similarities onto match root Empties.
 - Estimate Fitzgibbon one-parameter radial distortion from three or more concurrent segments.
@@ -121,7 +122,7 @@ Axis mapping matches Blender’s gizmos:
 ### 3. Draw VP lines
 
 1. Choose the colored axis.
-2. Click **Draw / Edit Lines**.
+2. Click **Draw / Edit Lines**. Optional: enable **Show Error Label** to see each segment’s residual (px) beside the stroke.
 3. Drag over straight edges that belong to that axis (clicks must land inside the camera frame).
 4. Click a line to select it; drag either endpoint handle to edit.
 5. Press **Delete/Backspace** to remove the selected line.

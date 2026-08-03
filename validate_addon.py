@@ -286,6 +286,19 @@ def main() -> None:
             assert view_path.exists()
             assert reloaded.view_lighting_applied
             assert reloaded.camera_object.data.background_images[0].image == view_image
+            source_image = reloaded.image
+            source_path = reloaded.image_path
+
+            # Simulate a lost source pointer that left the lit plate on the camera
+            # background — recovery must not adopt *-pm-view as the solver still.
+            reloaded.image = view_image
+            assert scene._is_derived_display_image(reloaded, reloaded.image)
+            assert scene.ensure_session_image(reloaded)
+            assert reloaded.image == source_image
+            assert not scene._is_derived_display_image(reloaded, reloaded.image)
+            assert reloaded.image_path == source_path
+            assert scene.ensure_match_ready(bpy.context)
+            assert reloaded.camera_object.data.background_images[0].image == view_image
 
             undistorted_path = temporary_path / "reference-undistorted.png"
             undistorted = distortion.generate_undistorted_plate(

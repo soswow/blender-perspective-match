@@ -488,7 +488,7 @@ def _update_diagnostics(
     line_bundles: dict[core.AxisId, list[core.LineSegment]],
     calibration: core.Calibration,
 ) -> None:
-    """Update compact plane-FOV and angular-residual panel diagnostics."""
+    """Update compact plane-FOV and VP residual panel diagnostics."""
     working_lines = core.undistort_line_bundles(
         line_bundles,
         calibration.intrinsics,
@@ -519,6 +519,12 @@ def _update_diagnostics(
         calibration,
         line_bundles,
     )
+    has_segments = any(segments for segments in line_bundles.values())
+    settings.vp_line_rms_px = (
+        core.vp_line_residual_rms(calibration, line_bundles)
+        if has_segments
+        else -1.0
+    )
 
 
 def apply_manual_fov(context: bpy.types.Context) -> None:
@@ -535,6 +541,9 @@ def apply_manual_fov(context: bpy.types.Context) -> None:
     if abs(previous_focal - focal) > 1.0e-6:
         invalidate_undistorted_cache(settings)
     apply_camera(context.scene, settings, calibration)
+    line_bundles = line_bundles_from_settings(settings)
+    if any(segments for segments in line_bundles.values()):
+        _update_diagnostics(settings, line_bundles, calibration)
     if settings.origin_is_set:
         reapply_placement(context)
     settings.status = f"Manual HFOV {settings.hfov_degrees:.2f}°"
@@ -807,19 +816,91 @@ def capture_active_match_framing(context: bpy.types.Context | None = None) -> bo
     return capture_camera_view_framing(blender_context)
 
 
+def _is_derived_display_image(
+    settings: properties.PMSession,
+    image: bpy.types.Image | None,
+) -> bool:
+    """True when ``image`` is a lit/undistorted plate, not the solver source still."""
+    if image is None:
+        return False
+    if settings.view_image is not None and image == settings.view_image:
+        return True
+    if settings.undistorted_image is not None and image == settings.undistorted_image:
+        return True
+    name = (image.name or "").lower()
+    if (
+        name.endswith(".pm-view")
+        or ".pm-view." in name
+        or name.endswith(".undistorted")
+        or ".undistorted." in name
+    ):
+        return True
+    filepath = getattr(image, "filepath", "") or getattr(image, "filepath_raw", "") or ""
+    if not filepath:
+        return False
+    try:
+        resolved = str(
+            Path(bpy.path.abspath(filepath)).expanduser().resolve()
+        ).lower()
+    except Exception:
+        return False
+    return resolved.endswith("-pm-view.png") or resolved.endswith(".undistorted.png")
+
+
+def _resolved_source_image_path(settings: properties.PMSession) -> str | None:
+    """Return the on-disk original still path, or None if missing/unusable."""
+    if not settings.image_path:
+        return None
+    try:
+        absolute_path = str(
+            Path(bpy.path.abspath(settings.image_path)).expanduser().resolve()
+        )
+    except Exception:
+        return None
+    lower = absolute_path.lower()
+    # Never treat a baked view/undistorted sibling as the solver source.
+    if lower.endswith("-pm-view.png") or lower.endswith(".undistorted.png"):
+        return None
+    if not Path(absolute_path).is_file():
+        return None
+    return absolute_path
+
+
 def ensure_session_image(settings: properties.PMSession) -> bool:
     """Restore the reference Image pointer after .blend load if it was lost.
 
-    Camera background images often survive even when the session PointerProperty
-    does not; fall back to that, then to image_path on disk.
+    Prefer ``image_path`` on disk. Camera backgrounds often still hold the lit
+    ``*-pm-view`` plate after a pointer loss — never adopt those as the source
+    still, or Apply Lighting / match switching will double-expose.
     """
     image = settings.image
-    if image is not None and image.name in bpy.data.images:
+    if (
+        image is not None
+        and image.name in bpy.data.images
+        and not _is_derived_display_image(settings, image)
+    ):
         if settings.image_width <= 0 or settings.image_height <= 0:
             settings.image_width = int(image.size[0])
             settings.image_height = int(image.size[1])
             if settings.source_image_width <= 0:
                 settings.source_image_width = settings.image_width
+        return True
+
+    # Pointer missing or pointing at a derived plate — clear and recover.
+    if _is_derived_display_image(settings, image):
+        settings.image = None
+
+    absolute_path = _resolved_source_image_path(settings)
+    if absolute_path is not None:
+        loaded = bpy.data.images.load(absolute_path, check_existing=True)
+        settings.image = loaded
+        settings.image_width = int(loaded.size[0])
+        settings.image_height = int(loaded.size[1])
+        if settings.source_image_width <= 0:
+            settings.source_image_width = settings.image_width
+        settings.image_path = absolute_path
+        # Leave the camera background alone; ensure_match_ready → apply_camera
+        # selects original / lit / undistorted from session flags.
         return True
 
     camera = settings.camera_object
@@ -828,36 +909,23 @@ def ensure_session_image(settings: properties.PMSession) -> bool:
             candidate = background.image
             if candidate is None or candidate.name not in bpy.data.images:
                 continue
+            if _is_derived_display_image(settings, candidate):
+                continue
             settings.image = candidate
             settings.image_width = int(candidate.size[0])
             settings.image_height = int(candidate.size[1])
             if settings.source_image_width <= 0:
                 settings.source_image_width = settings.image_width
             if not settings.image_path and candidate.filepath:
-                settings.image_path = str(
+                candidate_path = str(
                     Path(bpy.path.abspath(candidate.filepath)).expanduser().resolve()
                 )
-            return True
-
-    if settings.image_path:
-        absolute_path = str(
-            Path(bpy.path.abspath(settings.image_path)).expanduser().resolve()
-        )
-        if Path(absolute_path).is_file():
-            loaded = bpy.data.images.load(absolute_path, check_existing=True)
-            settings.image = loaded
-            settings.image_width = int(loaded.size[0])
-            settings.image_height = int(loaded.size[1])
-            if settings.source_image_width <= 0:
-                settings.source_image_width = settings.image_width
-            settings.image_path = absolute_path
-            if camera is not None and camera.type == "CAMERA":
-                camera_data = camera.data
-                camera_data.show_background_images = True
-                if len(camera_data.background_images) == 0:
-                    camera_data.background_images.new()
-                camera_data.background_images[0].image = loaded
-                camera_data.background_images[0].show_background_image = True
+                lower = candidate_path.lower()
+                if not (
+                    lower.endswith("-pm-view.png")
+                    or lower.endswith(".undistorted.png")
+                ):
+                    settings.image_path = candidate_path
             return True
     return False
 
@@ -874,6 +942,13 @@ def ensure_match_ready(context: bpy.types.Context) -> bool:
     ensure_session_image(settings)
     if settings.image is None:
         return False
+    # Drop a dangling lit-plate pointer so apply_camera falls back cleanly.
+    if settings.view_lighting_applied and (
+        settings.view_image is None
+        or settings.view_image.name not in bpy.data.images
+    ):
+        settings.view_lighting_applied = False
+        settings.view_image = None
     if settings.image_width <= 0 or settings.image_height <= 0:
         settings.image_width = max(int(settings.image.size[0]), 1)
         settings.image_height = max(int(settings.image.size[1]), 1)

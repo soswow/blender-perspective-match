@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 
+import blf
 import bpy
 import gpu
 import numpy as np
@@ -29,6 +30,10 @@ _GUIDE_DASH_LENGTH = 9.0
 _GUIDE_GAP_LENGTH = 7.0
 _HORIZON_SLOT_LENGTH = 8.0
 _GUIDE_LINE_THICKNESS = 0.9
+# Residual labels sit near the preferred endpoint, offset off the stroke.
+_ERROR_LABEL_INSET = 0.12
+_ERROR_LABEL_OFFSET_PX = 8.0
+_ERROR_LABEL_FONT_SIZE = 11.0
 
 _draw_handle = None
 _preview: dict[str, object] = {
@@ -409,6 +414,91 @@ def _draw_crosshair(shader, center: Vector | None, color, radius: float = 8.0) -
     _draw_line(center + Vector((0.0, -radius - 4.0)), center + Vector((0.0, radius + 4.0)), color)
 
 
+def _error_label_anchor(point_a: Vector, point_b: Vector) -> Vector:
+    """Prefer the right end on horizontal strokes, the top end on vertical ones."""
+    delta_x = point_b.x - point_a.x
+    delta_y = point_b.y - point_a.y
+    if abs(delta_x) >= abs(delta_y):
+        preferred = point_a if point_a.x >= point_b.x else point_b
+        other = point_b if preferred is point_a else point_a
+    else:
+        preferred = point_a if point_a.y >= point_b.y else point_b
+        other = point_b if preferred is point_a else point_a
+    # Sit slightly inset from the preferred endpoint so handles stay clear.
+    anchor = preferred.lerp(other, _ERROR_LABEL_INSET)
+    tangent = other - preferred
+    length = float(tangent.length)
+    if length < 1.0e-6:
+        return preferred + Vector((0.0, _ERROR_LABEL_OFFSET_PX))
+    tangent /= length
+    # Screen-upward offset keeps the number "above" / beside the stroke.
+    normal = Vector((-tangent.y, tangent.x))
+    if normal.y < 0.0:
+        normal = -normal
+    return anchor + normal * _ERROR_LABEL_OFFSET_PX
+
+
+def _draw_error_label(position: Vector, text: str, opacity: float) -> None:
+    """Draw a small shadowed residual number in POST_PIXEL space."""
+    font_id = 0
+    blf.size(font_id, _ERROR_LABEL_FONT_SIZE)
+    width, height = blf.dimensions(font_id, text)
+    blf.position(
+        font_id,
+        float(position.x) - width * 0.5,
+        float(position.y) - height * 0.35,
+        0.0,
+    )
+    blf.color(font_id, 1.0, 1.0, 1.0, max(0.15, min(1.0, opacity)))
+    blf.enable(font_id, blf.SHADOW)
+    blf.shadow(font_id, 3, 0.0, 0.0, 0.0, 0.85)
+    blf.shadow_offset(font_id, 1, -1)
+    blf.draw(font_id, text)
+    blf.disable(font_id, blf.SHADOW)
+
+
+def _draw_vp_error_labels(context: bpy.types.Context, settings) -> None:
+    """Per-segment residual labels against the current camera's ideal VPs."""
+    if not settings.show_vp_error_labels:
+        return
+    region_bounds = _region_bounds(context)
+    if region_bounds is None:
+        return
+    calibration = scene.calibration_from_settings(settings)
+    opacity = settings.overlay_opacity
+    for line in settings.lines:
+        point_a = scene.image_to_region(context, line.x1, line.y1)
+        point_b = scene.image_to_region(context, line.x2, line.y2)
+        if point_a is None or point_b is None:
+            continue
+        ideal_endpoints = core.undistort_points(
+            np.array([[line.x1, line.y1], [line.x2, line.y2]], dtype=np.float64),
+            calibration.intrinsics.fx,
+            calibration.intrinsics.fy,
+            calibration.intrinsics.cx,
+            calibration.intrinsics.cy,
+            calibration.division_lambda,
+        )
+        residual = core.vp_ideal_segment_residual_px(
+            calibration,
+            line.axis,
+            core.LineSegment(
+                float(ideal_endpoints[0][0]),
+                float(ideal_endpoints[0][1]),
+                float(ideal_endpoints[1][0]),
+                float(ideal_endpoints[1][1]),
+            ),
+        )
+        if residual is None:
+            continue
+        anchor = _error_label_anchor(point_a, point_b)
+        if not _point_in_bounds(anchor, region_bounds):
+            continue
+        _draw_error_label(anchor, f"{residual:.1f}", opacity)
+    # blf leaves blend/shader state dirty; restore so later GPU draws keep alpha.
+    gpu.state.blend_set("ALPHA")
+
+
 def _draw_vp_geometry(context: bpy.types.Context, fill_shader, settings) -> None:
     if not settings.show_vp_overlay:
         return
@@ -653,6 +743,8 @@ def _draw_callback() -> None:
         _draw_placement(context, fill_shader, settings)
         _draw_landmarks(context, fill_shader, settings)
         _draw_preview(context, settings)
+        # After GPU geometry so blf cannot wipe landmark alpha blending.
+        _draw_vp_error_labels(context, settings)
     except Exception:
         # Keep the handler alive — an uncaught error can stop POST_PIXEL draws.
         import traceback

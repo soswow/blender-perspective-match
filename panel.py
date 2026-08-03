@@ -252,6 +252,7 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             operator.mode = "LINE"
             row.operator("perspective_match.delete_selected", text="", icon="TRASH")
             row.operator("perspective_match.clear_axis", text="", icon="X")
+            line_body.prop(settings, "show_vp_error_labels")
             if workspace.is_modal and workspace.work_mode == "LINE":
                 line_body.label(text="Line tool active — Esc exits", icon="MOUSE_LMB")
             if not _panel_lines_ready(settings):
@@ -297,15 +298,26 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
 
             if settings.fov_xy > 0.0 or settings.fov_zy > 0.0 or settings.fov_zx > 0.0:
                 diagnostics = camera.column(align=True)
-                diagnostics.label(text="HFOV by VP pair:")
+                pair_parts = []
                 if settings.fov_xy > 0.0:
-                    diagnostics.label(text=f"XY: {settings.fov_xy:.2f}°")
+                    pair_parts.append(f"XY: {settings.fov_xy:.2f}°")
                 if settings.fov_zy > 0.0:
-                    diagnostics.label(text=f"ZY: {settings.fov_zy:.2f}°")
+                    pair_parts.append(f"ZY: {settings.fov_zy:.2f}°")
                 if settings.fov_zx > 0.0:
-                    diagnostics.label(text=f"ZX: {settings.fov_zx:.2f}°")
+                    pair_parts.append(f"ZX: {settings.fov_zx:.2f}°")
+                diagnostics.label(
+                    text="HFOV by VP pair: " + ", ".join(pair_parts)
+                )
                 diagnostics.label(
                     text=f"Axis residual: {settings.residual_degrees:.2f}°"
+                )
+                if settings.vp_line_rms_px >= 0.0:
+                    diagnostics.label(
+                        text=f"VP line RMSE: {settings.vp_line_rms_px:.2f} px"
+                    )
+            elif settings.vp_line_rms_px >= 0.0:
+                camera.label(
+                    text=f"VP line RMSE: {settings.vp_line_rms_px:.2f} px"
                 )
             if (
                 settings.camera_object is not None
