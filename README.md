@@ -176,7 +176,7 @@ Why not “any corresponding points”? Photogrammetry / SfM does solve relative
 
 ## Lens distortion
 
-Enable **Estimate Distortion** in the **Camera** section (Manual FOV must be off). After a successful VP refine with ≥3 concurrent segments on one axis, the solver estimates Fitzgibbon λ and **automatically** generates/switches to an undistorted plate. **Original Plate** turns estimation off, clears λ, re-solves, and restores the source still. Plate file paths are logged to the console, not the sidebar status line.
+Enable **Estimate Distortion** in the **Camera** section. After a successful VP refine with ≥3 concurrent segments on one axis, the solver estimates Fitzgibbon λ and **automatically** generates/switches to an undistorted plate. Works with **Manual FOV** (λ is estimated at the locked focal so you can compare VP-line RMSE with/without distortion). **Original Plate** turns estimation off, clears λ, re-solves, and restores the source still. Plate file paths are logged to the console, not the sidebar status line.
 
 ## Project compatibility
 
@@ -204,7 +204,7 @@ The referenced image remains external. Relative image paths are resolved from th
 - Sync solves relative pose from 2D↔2D and/or Known 3D Blender objects. Absolute baseline vs the metric anchor world needs Known 3D, On Ground, or the depth heuristic.
 - Sync **Solve Sync** seeds pairwise pose then runs joint BA over Empty transforms + landmarks + free-line midpoints (Cauchy + line constraints) with block-analytic Jacobians; use **Refine Lenses** afterward to adjust unlocked focals against landmarks + a per-line VP prior with hard guardrails and a coupled multi-camera polish.
 - **Diagnose** can leave-one-out the worst landmarks when sync error is high.
-- Display-only exposure and contrast controls from the desktop app are not reproduced; use Blender's image/color-management tools.
+- View lighting bakes per match into ``<stem>-<camera>-pm-view.png``; matches that share one still do not share one plate. Reload the add-on after updating so activate restores a lost plate instead of the bright original.
 - Projects are import-only; there is no Save Project or camera JSON export.
 
 ## Project layout

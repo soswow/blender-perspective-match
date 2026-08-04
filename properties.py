@@ -482,7 +482,8 @@ class PMSession(bpy.types.PropertyGroup):
         name="Estimate Distortion",
         description=(
             "Estimate division λ from VP lines (≥3 concurrent segments on one axis), "
-            "then generate and show an undistorted plate. Turn off via Original Plate"
+            "then generate and show an undistorted plate. Works with Manual FOV "
+            "(λ at the locked focal). Turn off via Original Plate"
         ),
         default=False,
         update=_update_estimate_distortion,
@@ -555,6 +556,9 @@ class PMSession(bpy.types.PropertyGroup):
     view_lighting_applied: bpy.props.BoolProperty(default=False, options={"HIDDEN"})
     view_image: bpy.props.PointerProperty(type=bpy.types.Image)
     view_path: bpy.props.StringProperty(subtype="FILE_PATH")
+    # Last values actually baked into view_image (sliders may differ until Apply).
+    view_baked_exposure: bpy.props.FloatProperty(default=0.0, options={"HIDDEN"})
+    view_baked_contrast: bpy.props.FloatProperty(default=1.0, options={"HIDDEN"})
 
     view_undistorted: bpy.props.BoolProperty(default=False, options={"HIDDEN"})
     undistorted_image: bpy.props.PointerProperty(type=bpy.types.Image)

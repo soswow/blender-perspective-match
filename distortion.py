@@ -151,16 +151,36 @@ def remap_rgba(
     return output
 
 
-def default_view_path(source_path: str) -> str:
-    """Return the sibling display plate path: ``<stem>-pm-view.png``."""
+def default_view_path(source_path: str, match_key: str = "") -> str:
+    """Return the sibling display plate path: ``<stem>[-match]-pm-view.png``."""
     path = Path(source_path)
+    token = "".join(
+        character if character.isalnum() or character in "-_" else "_"
+        for character in match_key
+    ).strip("_")[:48]
+    if token:
+        return str(path.with_name(f"{path.stem}-{token}-pm-view.png"))
     return str(path.with_name(f"{path.stem}-pm-view.png"))
 
 
-def default_output_path(source_path: str) -> str:
-    """Return the conventional cached PNG path beside the source image."""
+def default_output_path(source_path: str, match_key: str = "") -> str:
+    """Return the conventional cached undistorted PNG path beside the source image."""
     path = Path(source_path)
+    token = "".join(
+        character if character.isalnum() or character in "-_" else "_"
+        for character in match_key
+    ).strip("_")[:48]
+    if token:
+        return str(path.with_name(f"{path.stem}-{token}.undistorted.png"))
     return str(path.with_name(f"{path.stem}.undistorted.png"))
+
+
+def _plate_key(settings: properties.PMSession) -> str:
+    """Stable per-match token so view/undistorted plates are never shared."""
+    camera = settings.camera_object
+    if camera is not None and camera.name:
+        return camera.name
+    return "PM_orphan"
 
 
 def apply_exposure_contrast(
@@ -213,8 +233,12 @@ def apply_view_lighting(context: bpy.types.Context) -> bpy.types.Image:
     lit = apply_exposure_contrast(source, settings.view_exposure, settings.view_contrast)
     height, width = lit.shape[:2]
 
-    resolved_path = str(Path(default_view_path(settings.image_path)).expanduser().resolve())
-    image_name = f"{settings.image.name}.pm-view"
+    plate_key = _plate_key(settings)
+    resolved_path = str(
+        Path(default_view_path(settings.image_path, plate_key)).expanduser().resolve()
+    )
+    # Per-match datablock name — shared source stills must not share one view plate.
+    image_name = f"{plate_key}.pm-view"
     existing = bpy.data.images.get(image_name)
     if existing is not None and tuple(existing.size) != (width, height):
         bpy.data.images.remove(existing)
@@ -232,6 +256,9 @@ def apply_view_lighting(context: bpy.types.Context) -> bpy.types.Image:
         output_image.colorspace_settings.name = "sRGB"
     except TypeError:
         pass
+    # Baked display plate must not pick up the scene view transform on top of EV.
+    if hasattr(output_image, "use_view_as_render"):
+        output_image.use_view_as_render = False
     _write_image_pixels(output_image, lit)
     output_image.filepath_raw = resolved_path
     output_image.file_format = "PNG"
@@ -246,9 +273,13 @@ def apply_view_lighting(context: bpy.types.Context) -> bpy.types.Image:
     except RuntimeError:
         pass
 
+    # Keep the plate alive across match switches even if no background references it.
+    output_image.use_fake_user = True
     settings.view_image = output_image
     settings.view_path = resolved_path
     settings.view_lighting_applied = True
+    settings.view_baked_exposure = float(settings.view_exposure)
+    settings.view_baked_contrast = float(settings.view_contrast)
 
     # Undistorted cache must follow the same re-lit plate when active.
     if settings.view_undistorted and abs(settings.division_lambda) > 1.0e-8:
@@ -274,6 +305,75 @@ def apply_view_lighting(context: bpy.types.Context) -> bpy.types.Image:
     return output_image
 
 
+def _view_plate_is_alive(image: bpy.types.Image | None) -> bool:
+    """Return whether a view-plate Image pointer still resolves in bpy.data."""
+    if image is None:
+        return False
+    try:
+        name = image.name
+    except ReferenceError:
+        return False
+    return name in bpy.data.images
+
+
+def _load_view_plate_from_path(
+    settings: properties.PMSession,
+    expected_name: str,
+) -> bpy.types.Image | None:
+    """Reload a previously baked view plate from ``view_path`` when the pointer died."""
+    if not settings.view_path:
+        return None
+    try:
+        absolute_path = str(
+            Path(bpy.path.abspath(settings.view_path)).expanduser().resolve()
+        )
+    except Exception:
+        return None
+    if not Path(absolute_path).is_file():
+        return None
+    loaded = bpy.data.images.load(absolute_path, check_existing=True)
+    # Prefer the stable per-match datablock name even if Blender reused another ID.
+    if loaded.name != expected_name:
+        existing = bpy.data.images.get(expected_name)
+        if existing is not None and existing != loaded:
+            loaded = existing
+        else:
+            loaded.name = expected_name
+    if hasattr(loaded, "use_view_as_render"):
+        loaded.use_view_as_render = False
+    loaded.use_fake_user = True
+    return loaded
+
+
+def ensure_match_view_plate(context: bpy.types.Context) -> None:
+    """Make sure this match owns a private view plate for its baked lighting.
+
+    Matches that share one source still used to share one ``*.pm-view`` image, so
+    Apply on match B quietly overwrote match A's exposure. On activate, restore or
+    rebuild when the plate pointer is missing or still uses the old shared name.
+    """
+    settings = properties.active_session(context)
+    if settings is None or not settings.view_lighting_applied:
+        return
+    expected_name = f"{_plate_key(settings)}.pm-view"
+    view_image = settings.view_image if _view_plate_is_alive(settings.view_image) else None
+
+    if view_image is None:
+        view_image = _load_view_plate_from_path(settings, expected_name)
+        if view_image is not None:
+            settings.view_image = view_image
+
+    if view_image is not None and view_image.name == expected_name:
+        if hasattr(view_image, "use_view_as_render"):
+            view_image.use_view_as_render = False
+        view_image.use_fake_user = True
+        settings.view_image = view_image
+        return
+
+    # Missing, legacy shared name, or renamed — rebake a private per-match plate.
+    apply_view_lighting(context)
+
+
 def reset_view_lighting(context: bpy.types.Context) -> None:
     """Stop using the view plate and restore the original still (and undistorted)."""
     settings = properties.active_session(context)
@@ -286,6 +386,8 @@ def reset_view_lighting(context: bpy.types.Context) -> None:
     settings.view_path = ""
     settings.view_exposure = 0.0
     settings.view_contrast = 1.0
+    settings.view_baked_exposure = 0.0
+    settings.view_baked_contrast = 1.0
     if cached is not None and cached.users == 0:
         bpy.data.images.remove(cached)
 
@@ -349,7 +451,7 @@ def generate_undistorted_plate(
     if float(np.mean(remapped[:, :, 3])) < 0.01:
         raise ValueError("Undistorted plate is empty (near-zero alpha)")
 
-    image_name = f"{source_image.name}.undistorted"
+    image_name = f"{_plate_key(settings)}.undistorted"
     existing = bpy.data.images.get(image_name)
     if existing is not None and tuple(existing.size) != (output_width, output_height):
         bpy.data.images.remove(existing)
@@ -368,10 +470,15 @@ def generate_undistorted_plate(
         output_image.colorspace_settings.name = "sRGB"
     except TypeError:
         pass
+    if hasattr(output_image, "use_view_as_render"):
+        output_image.use_view_as_render = False
     _write_image_pixels(output_image, remapped)
 
     resolved_path = str(
-        Path(output_path or default_output_path(settings.image_path)).expanduser().resolve()
+        Path(
+            output_path
+            or default_output_path(settings.image_path, _plate_key(settings))
+        ).expanduser().resolve()
     )
     if Path(resolved_path).suffix.lower() != ".png":
         resolved_path = str(Path(resolved_path).with_suffix(".png"))
@@ -414,7 +521,6 @@ def sync_undistorted_plate_after_refine(context: bpy.types.Context) -> None:
         return
     if (
         settings.estimate_distortion
-        and not settings.lock_focal
         and abs(settings.division_lambda) > 1.0e-8
         and not settings.lambda_saturated
     ):
@@ -469,12 +575,16 @@ def on_estimate_distortion_toggled(context: bpy.types.Context) -> None:
     if not settings.estimate_distortion:
         revert_to_original_plate(context)
         return
-    # Enabling: unlock FOV so λ can be estimated, refine if lines allow, then plate.
-    settings.lock_focal = False
+    # Keep Manual FOV if set — λ is estimated at the locked focal.
     line_bundles = scene.line_bundles_from_settings(settings)
     ready_axes = sum(1 for segments in line_bundles.values() if len(segments) >= 2)
     if ready_axes < 2:
-        settings.status = "Estimate Distortion on — draw VP lines, then Auto from VPs"
+        tip = (
+            "draw VP lines, then Apply Manual FOV / Auto from VPs"
+            if settings.lock_focal or settings.vp_mode == "1"
+            else "draw VP lines, then Auto from VPs"
+        )
+        settings.status = f"Estimate Distortion on — {tip}"
         return
     scene.refine_match(context)
     sync_undistorted_plate_after_refine(context)

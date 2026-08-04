@@ -166,6 +166,8 @@ def create_match_camera(context: bpy.types.Context) -> bpy.types.Object:
     session.view_path = ""
     session.view_exposure = 0.0
     session.view_contrast = 1.0
+    session.view_baked_exposure = 0.0
+    session.view_baked_contrast = 1.0
     session.error = ""
     session.status = "Load a reference image or project"
 
@@ -282,6 +284,8 @@ def _reset_session_edit_state(session: properties.PMSession) -> None:
     session.view_path = ""
     session.view_exposure = 0.0
     session.view_contrast = 1.0
+    session.view_baked_exposure = 0.0
+    session.view_baked_contrast = 1.0
     if cached_view is not None and cached_view.users == 0:
         bpy.data.images.remove(cached_view)
     session.error = ""
@@ -453,7 +457,8 @@ def refine_match(context: bpy.types.Context) -> core.Calibration:
         intrinsics,
         lock_focal=settings.lock_focal or settings.vp_mode == "1",
         estimate_principal_point=settings.vp_mode == "3" and not settings.lock_focal,
-        estimate_distortion=settings.estimate_distortion and not settings.lock_focal,
+        # λ can be estimated at a locked Manual FOV; only PP stays auto-only.
+        estimate_distortion=settings.estimate_distortion,
         initial_division_lambda=previous_calibration.division_lambda,
     )
 
@@ -532,6 +537,21 @@ def apply_manual_fov(context: bpy.types.Context) -> None:
     settings = properties.active_session(context)
     if settings is None:
         raise ValueError("Create or activate a match camera first")
+    settings.lock_focal = True
+    line_bundles = line_bundles_from_settings(settings)
+    ready_axes = sum(1 for segments in line_bundles.values() if len(segments) >= 2)
+    # With enough lines, re-orient (and re-estimate λ if distortion is on) at the locked FOV.
+    if ready_axes >= 2:
+        refine_match(context)
+        if settings.estimate_distortion:
+            from . import distortion
+
+            distortion.sync_undistorted_plate_after_refine(context)
+        elif settings.view_undistorted or settings.undistorted_image is not None:
+            # Manual FOV changed: drop a stale undistorted plate when not regenerating.
+            invalidate_undistorted_cache(settings)
+            refresh_background_projection(context)
+        return
     calibration = calibration_from_settings(settings)
     previous_focal = calibration.intrinsics.fx
     width = max(settings.image_width, 1)
@@ -541,7 +561,6 @@ def apply_manual_fov(context: bpy.types.Context) -> None:
     if abs(previous_focal - focal) > 1.0e-6:
         invalidate_undistorted_cache(settings)
     apply_camera(context.scene, settings, calibration)
-    line_bundles = line_bundles_from_settings(settings)
     if any(segments for segments in line_bundles.values()):
         _update_diagnostics(settings, line_bundles, calibration)
     if settings.origin_is_set:
@@ -942,13 +961,19 @@ def ensure_match_ready(context: bpy.types.Context) -> bool:
     ensure_session_image(settings)
     if settings.image is None:
         return False
-    # Drop a dangling lit-plate pointer so apply_camera falls back cleanly.
-    if settings.view_lighting_applied and (
-        settings.view_image is None
-        or settings.view_image.name not in bpy.data.images
-    ):
-        settings.view_lighting_applied = False
-        settings.view_image = None
+    # Restore / rebuild the lit plate before falling back to the original still.
+    # Clearing view_lighting_applied too early left the EV slider intact while the
+    # camera background snapped back to the bright source on match switch.
+    if settings.view_lighting_applied:
+        from . import distortion as distortion_module
+
+        try:
+            distortion_module.ensure_match_view_plate(context)
+        except Exception:
+            pass
+        if settings.view_image is None or settings.view_image.name not in bpy.data.images:
+            settings.view_lighting_applied = False
+            settings.view_image = None
     if settings.image_width <= 0 or settings.image_height <= 0:
         settings.image_width = max(int(settings.image.size[0]), 1)
         settings.image_height = max(int(settings.image.size[1]), 1)

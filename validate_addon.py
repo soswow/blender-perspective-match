@@ -282,12 +282,17 @@ def main() -> None:
             reloaded.view_exposure = 1.0
             reloaded.view_contrast = 1.25
             view_image = distortion.apply_view_lighting(bpy.context)
-            view_path = Path(distortion.default_view_path(reloaded.image_path))
+            view_path = Path(distortion.default_view_path(
+                reloaded.image_path,
+                distortion._plate_key(reloaded),
+            ))
             assert view_path.exists()
             assert reloaded.view_lighting_applied
             assert reloaded.camera_object.data.background_images[0].image == view_image
+            assert view_image.name == f"{reloaded.camera_object.name}.pm-view"
             source_image = reloaded.image
             source_path = reloaded.image_path
+            first_root = properties.active_root(bpy.context)
 
             # Simulate a lost source pointer that left the lit plate on the camera
             # background — recovery must not adopt *-pm-view as the solver still.
@@ -299,6 +304,71 @@ def main() -> None:
             assert reloaded.image_path == source_path
             assert scene.ensure_match_ready(bpy.context)
             assert reloaded.camera_object.data.background_images[0].image == view_image
+
+            # Two matches on the same still must not share one view plate.
+            scene.create_match_camera(bpy.context)
+            scene.bind_reference_image(bpy.context, source_path)
+            other = properties.active_session(bpy.context)
+            other.view_exposure = 0.0
+            other.view_contrast = 1.0
+            other_view = distortion.apply_view_lighting(bpy.context)
+            assert other_view != view_image
+            assert other_view.name == f"{other.camera_object.name}.pm-view"
+            other_buf = np.empty(
+                int(other_view.size[0]) * int(other_view.size[1]) * 4,
+                dtype=np.float32,
+            )
+            other_view.pixels.foreach_get(other_buf)
+            other_mean = float(other_buf[0::4].mean())
+            # Switch back to the first match — its plate must stay at +1 EV bake.
+            scene.set_active_match(bpy.context, first_root)
+            reloaded = properties.active_session(bpy.context)
+            bg = reloaded.camera_object.data.background_images[0].image
+            assert bg == reloaded.view_image
+            assert bg.name == f"{reloaded.camera_object.name}.pm-view"
+            buf = np.empty(int(bg.size[0]) * int(bg.size[1]) * 4, dtype=np.float32)
+            bg.pixels.foreach_get(buf)
+            first_mean = float(buf[0::4].mean())
+            # First match baked +1 EV / 1.25 contrast; second baked 0 EV. They must differ.
+            assert first_mean > other_mean + 0.05, (first_mean, other_mean)
+
+            # Lost view-plate pointer must restore on activate — not snap to the bright source.
+            saved_view_path = reloaded.view_path
+            reloaded.view_image = None
+            assert reloaded.view_lighting_applied
+            scene.set_active_match(bpy.context, first_root)
+            reloaded = properties.active_session(bpy.context)
+            restored_bg = reloaded.camera_object.data.background_images[0].image
+            assert reloaded.view_lighting_applied
+            assert restored_bg is not None
+            assert restored_bg.name == f"{reloaded.camera_object.name}.pm-view"
+            restored_buf = np.empty(
+                int(restored_bg.size[0]) * int(restored_bg.size[1]) * 4,
+                dtype=np.float32,
+            )
+            restored_bg.pixels.foreach_get(restored_buf)
+            assert abs(float(restored_buf[0::4].mean()) - first_mean) < 0.05
+            assert saved_view_path == reloaded.view_path or reloaded.view_path != ""
+
+            # Drop the extra match so later smoke steps stay on a single session.
+            other_root = None
+            for root in list(properties.iter_match_roots()):
+                if root != first_root:
+                    other_root = root
+                    break
+            if other_root is not None:
+                other_camera = other_root.pm_session.camera_object
+                other_collection = other_root.pm_session.match_collection
+                if other_camera is not None:
+                    camera_data = other_camera.data
+                    bpy.data.objects.remove(other_camera, do_unlink=True)
+                    if camera_data is not None and camera_data.users == 0:
+                        bpy.data.cameras.remove(camera_data)
+                bpy.data.objects.remove(other_root, do_unlink=True)
+                if other_collection is not None and len(other_collection.objects) == 0:
+                    bpy.data.collections.remove(other_collection)
+            scene.set_active_match(bpy.context, first_root)
+            reloaded = properties.active_session(bpy.context)
 
             undistorted_path = temporary_path / "reference-undistorted.png"
             undistorted = distortion.generate_undistorted_plate(
