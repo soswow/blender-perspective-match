@@ -19,7 +19,7 @@ The extension is a native port of the manual workflow from Perspective Match Stu
 - Robust length-weighted VP fitting with Huber outlier reduction.
 - Solve camera orientation and, when constrained, focal length from orthogonal VPs.
 - Lock and edit horizontal FOV manually, including underconstrained 1-point shots.
-- Solve an off-center principal point from three finite orthogonal VPs, or set it with **Manual PP Offset** (violet crosshair when off-center).
+- Solve an off-center principal point from three finite orthogonal VPs, or set it with **Manual PP Offset** (drag or type offsets; violet crosshair when off-center).
 - Show per-plane FOV estimates, angular consistency, and VP-line RMSE diagnostics.
 - Pick a ground origin so the matched camera sits relative to world origin.
 - Synchronise multiple matched cameras into one shared world with a landmark graph: 2D↔2D picks and/or **Known 3D** Blender objects (Empties at verts on a modeled edge), optional On Ground, choose an anchor, solve similarities onto match root Empties.
@@ -133,7 +133,7 @@ While the tool is active, left-clicks in the 3D View belong to Perspective Match
 
 The camera refines whenever enough required lines exist. **Auto from VPs** allows orthogonal VP pairs to solve FOV. Enable **Manual FOV**, set the horizontal angle, and apply it to lock focal length while continuing to solve orientation.
 
-**Manual PP Offset** (Camera section): drag the principal point on the plate. A **violet** crosshair marks it whenever it is off-center (and always while the tool is active). While dragging, orientation is rebuilt from VP lines on a short throttle (~12 Hz) so the mesh tracks the same “snap” you get on release; release does a final rebuild. **Esc** exits like other tools (cancels an in-progress drag). **Reset Camera** recenters PP.
+**Manual PP Offset** (Camera section): drag the principal point on the plate, or click the pencil icon beside it to type **Offset X / Offset Y** in pixels from image center (same values as the PP offset readout; OK applies, Cancel discards). A **violet** crosshair marks it whenever it is off-center (and always while the drag tool is active). While dragging, orientation is rebuilt from VP lines on a short throttle (~12 Hz) so the mesh tracks the same “snap” you get on release; release does a final rebuild. **Esc** exits the drag tool like other tools (cancels an in-progress drag). **Reset Camera** recenters PP.
 
 Middle mouse and the wheel retain normal Blender navigation while a match tool is active. Sidebar sections use Blender’s native collapsible panels (**View** starts collapsed). Overlay guides only draw in **camera view** of the active match — choosing a match from the dropdown (or **View Match Camera**) rehydrates the plate/lens after opening a `.blend` and enters that view.
 

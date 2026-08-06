@@ -394,6 +394,77 @@ class PM_OT_reset_camera(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class PM_OT_edit_pp_offset(bpy.types.Operator):
+    """Type principal-point offsets in pixels from image center."""
+
+    bl_idname = "perspective_match.edit_pp_offset"
+    bl_label = "Edit PP Offset"
+    bl_description = (
+        "Enter principal-point offsets in pixels from the image center "
+        "(same values shown as PP offset X, Y)"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    offset_x: bpy.props.FloatProperty(
+        name="Offset X",
+        description="Horizontal principal-point offset from image center (pixels)",
+        default=0.0,
+        precision=1,
+        step=10,
+    )
+    offset_y: bpy.props.FloatProperty(
+        name="Offset Y",
+        description="Vertical principal-point offset from image center (pixels)",
+        default=0.0,
+        precision=1,
+        step=10,
+    )
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        settings = _session(context)
+        return settings is not None and settings.image is not None
+
+    def invoke(self, context: bpy.types.Context, _event) -> set[str]:
+        settings = _session(context)
+        if settings is None or settings.image is None:
+            return {"CANCELLED"}
+        # Prefill from the same center-relative values shown in the panel.
+        self.offset_x = float(settings.cx - settings.image_width * 0.5)
+        self.offset_y = float(settings.cy - settings.image_height * 0.5)
+        return context.window_manager.invoke_props_dialog(self, width=280)
+
+    def draw(self, _context: bpy.types.Context) -> None:
+        layout = self.layout
+        layout.use_property_split = True
+        layout.use_property_decorate = False
+        layout.prop(self, "offset_x")
+        layout.prop(self, "offset_y")
+        layout.label(text="Pixels from image center", icon="INFO")
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        settings = _session(context)
+        if settings is None or settings.image is None:
+            self.report({"ERROR"}, "Load a reference image first")
+            return {"CANCELLED"}
+        width = max(int(settings.image_width), 1)
+        height = max(int(settings.image_height), 1)
+        image_point = (
+            width * 0.5 + float(self.offset_x),
+            height * 0.5 + float(self.offset_y),
+        )
+        try:
+            scene.set_principal_point(context, image_point, finalize=True)
+            distortion.sync_undistorted_plate_after_refine(context)
+        except Exception as error:
+            return _report_exception(self, error)
+        self.report(
+            {"INFO"},
+            f"PP offset {self.offset_x:+.1f}, {self.offset_y:+.1f} px",
+        )
+        return {"FINISHED"}
+
+
 class PM_OT_clear_axis(bpy.types.Operator):
     """Delete all VP lines on the selected colored axis."""
 
@@ -1809,6 +1880,7 @@ CLASSES = (
     PM_OT_camera_view,
     PM_OT_apply_manual_fov,
     PM_OT_reset_camera,
+    PM_OT_edit_pp_offset,
     PM_OT_clear_axis,
     PM_OT_delete_selected,
     PM_OT_clear_placement,

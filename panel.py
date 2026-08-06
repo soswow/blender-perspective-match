@@ -348,13 +348,22 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
                 )
 
             pp_row = camera.row(align=True)
-            pp_row.operator_context = "INVOKE_REGION_WIN"
-            pp_operator = pp_row.operator(
+            drag_row = pp_row.row(align=True)
+            drag_row.operator_context = "INVOKE_REGION_WIN"
+            pp_operator = drag_row.operator(
                 "perspective_match.interact",
                 text="Manual PP Offset",
                 icon="PIVOT_CURSOR",
             )
             pp_operator.mode = "PP"
+            # Icon-only: type offsets instead of dragging the crosshair.
+            edit_row = pp_row.row(align=True)
+            edit_row.operator_context = "INVOKE_DEFAULT"
+            edit_row.operator(
+                "perspective_match.edit_pp_offset",
+                text="",
+                icon="GREASEPENCIL",
+            )
             if workspace.is_modal and workspace.work_mode == "PP":
                 camera.label(
                     text="PP tool active — drag violet crosshair",
