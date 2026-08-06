@@ -94,10 +94,11 @@ PM_<image>
 1. Click **New Match Camera** to create an empty match and activate it.
 2. Use **Active Match** to switch which session the sidebar edits. Switching also sets the scene camera and enters that camera view.
 3. With the **Perspective Match** sidebar tab selected, **Ctrl+Alt+NumPad 1–9** jumps to the Nth match (name-sorted). Any Draw / Pick Origin / PP / Landmark tool is cancelled first.
-4. Click **Unload** to detach the sidebar from editing without deleting objects.
-5. Delete a match by removing its Empty/camera in the Outliner; the dropdown prunes dead entries automatically.
+4. Click the rename button (font icon) next to **New** to rename the active match after it was created. Opening a still still defaults the name from the image stem; rename anytime afterward. The hierarchy stays `PM_<name>` / `PM_<name>_Origin` / `PM_<name>_Camera`.
+5. Click **Unload** to detach the sidebar from editing without deleting objects.
+6. Delete a match by removing its Empty/camera in the Outliner; the dropdown prunes dead entries automatically.
 
-Selecting objects in the viewport does **not** change the active match—only New, Unload, the dropdown, and the NumPad shortcuts do.
+Selecting objects in the viewport does **not** change the active match—only New, Rename, Unload, the dropdown, and the NumPad shortcuts do.
 
 Each match remembers its last camera-view zoom and pan. Switching matches (or Unload / save) stores the current framing; activating a match restores it.
 
@@ -105,7 +106,7 @@ Each match remembers its last camera-view zoom and pan. Switching matches (or Un
 
 With a match active, choose **Open Image** or **Import Project** (`.pmproj`). The still binds to the **active** match only; other matches stay untouched. If no match is active, Open Image / Import Project creates one first.
 
-After bind, the hierarchy is renamed from `PM_Match_###` to `PM_<image stem>` when that name is free. The camera becomes the scene camera, the still is attached with **Stretch** frame mapping, and render dimensions match the image.
+After bind, the hierarchy is renamed from `PM_Match_###` to `PM_<image stem>` when that name is free. You can rename again anytime with the rename button in **Match Cameras**. The camera becomes the scene camera, the still is attached with **Stretch** frame mapping, and render dimensions match the image.
 
 ### 2. Choose perspective
 

@@ -1154,6 +1154,52 @@ class PM_OT_unload_match(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class PM_OT_rename_match(bpy.types.Operator):
+    """Rename the active match hierarchy (collection, Origin, Camera)."""
+
+    bl_idname = "perspective_match.rename_match"
+    bl_label = "Rename Match"
+    bl_description = (
+        "Rename the active Perspective Match after it was created. "
+        "Defaults from the image stem when you open a still; change it anytime"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    new_name: bpy.props.StringProperty(
+        name="Name",
+        description="Stored as PM_<name> (collection / Origin / Camera)",
+        default="",
+    )
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        return properties.active_root(context) is not None
+
+    def invoke(self, context: bpy.types.Context, _event) -> set[str]:
+        root = properties.active_root(context)
+        prefix = scene.match_prefix(root)
+        # Prefill without the PM_ prefix so the dialog shows a short label.
+        self.new_name = prefix[3:] if prefix.startswith("PM_") else prefix
+        return context.window_manager.invoke_props_dialog(self)
+
+    def draw(self, _context: bpy.types.Context) -> None:
+        layout = self.layout
+        layout.prop(self, "new_name")
+        layout.label(text="Saved as PM_<name>_Origin", icon="INFO")
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        root = properties.active_root(context)
+        if root is None:
+            return {"CANCELLED"}
+        try:
+            renamed = scene.rename_match(context, root, self.new_name)
+        except Exception as error:
+            self.report({"ERROR"}, str(error))
+            return {"CANCELLED"}
+        self.report({"INFO"}, f"Renamed to {scene.match_prefix(renamed)}")
+        return {"FINISHED"}
+
+
 class PM_OT_reload(bpy.types.Operator):
     """Dev helper: unregister, reload modules from disk, and register again."""
 
@@ -1755,6 +1801,7 @@ class PM_OT_clear_sync(bpy.types.Operator):
 CLASSES = (
     PM_OT_new_match_camera,
     PM_OT_unload_match,
+    PM_OT_rename_match,
     PM_OT_reload,
     PM_OT_load_image,
     PM_OT_import_project,

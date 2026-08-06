@@ -164,6 +164,11 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
         if cameras is not None:
             row = cameras.row(align=True)
             row.operator("perspective_match.new_match_camera", icon="ADD")
+            rename_row = row.row(align=True)
+            rename_row.enabled = settings is not None
+            rename_row.operator(
+                "perspective_match.rename_match", text="", icon="FONT_DATA"
+            )
             row.operator("perspective_match.unload_match", text="", icon="X")
             cameras.prop(workspace, "active_match", text="")
             if settings is None:
@@ -542,12 +547,13 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             # Compact per-match pick status for the active landmark.
             for root in properties.iter_match_roots():
                 observation = scene.observation_for_match(landmark, root)
+                label = scene.match_prefix(root)
                 row = sync_body.row(align=True)
                 if observation is not None and observation.is_set:
                     if landmark.kind == "LINE":
                         row.label(
                             text=(
-                                f"{root.name}: "
+                                f"{label}: "
                                 f"({observation.x:.0f},{observation.y:.0f})–"
                                 f"({observation.x2:.0f},{observation.y2:.0f})"
                             ),
@@ -556,14 +562,14 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
                     else:
                         row.label(
                             text=(
-                                f"{root.name}: "
+                                f"{label}: "
                                 f"({observation.x:.0f}, {observation.y:.0f})"
                             ),
                             icon="CHECKMARK",
                         )
                     row.prop(observation, "confidence", text="")
                 else:
-                    row.label(text=f"{root.name}: —", icon="DOT")
+                    row.label(text=f"{label}: —", icon="DOT")
             if landmark.has_position or landmark.rmse_px > 0.5:
                 detail = f"Last sync RMSE {landmark.rmse_px:.2f} px"
                 if landmark.has_position:

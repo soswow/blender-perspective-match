@@ -242,6 +242,38 @@ def unload_match(context: bpy.types.Context) -> None:
     properties.tag_viewport_redraw(context)
 
 
+def match_prefix(root: bpy.types.Object) -> str:
+    """Collection / hierarchy prefix for a match root (``PM_*`` without ``_Origin``)."""
+    name = root.name
+    if name.endswith("_Origin"):
+        return name[: -len("_Origin")]
+    return name
+
+
+def _prefix_from_label(label: str) -> str:
+    """Build a ``PM_*`` hierarchy prefix from a user-facing rename label."""
+    cleaned = safe_identifier(label.strip())
+    # Accept either "Kitchen" or "PM_Kitchen" without doubling the prefix.
+    if cleaned.upper().startswith("PM_"):
+        cleaned = cleaned[3:] or "match"
+    return f"PM_{cleaned}"
+
+
+def _prefix_is_taken(prefix: str, root: bpy.types.Object) -> bool:
+    """True when another match already owns this collection / Origin / Camera name."""
+    session = root.pm_session
+    collection = bpy.data.collections.get(prefix)
+    if collection is not None and collection != session.match_collection:
+        return True
+    origin = bpy.data.objects.get(f"{prefix}_Origin")
+    if origin is not None and origin != root:
+        return True
+    camera = bpy.data.objects.get(f"{prefix}_Camera")
+    if camera is not None and camera != session.camera_object:
+        return True
+    return False
+
+
 def _unique_prefix(stem: str) -> str:
     base = f"PM_{safe_identifier(stem)}"
     if base not in bpy.data.collections and f"{base}_Origin" not in bpy.data.objects:
@@ -257,6 +289,19 @@ def _unique_prefix(stem: str) -> str:
         index += 1
 
 
+def _unique_prefix_for_rename(label: str, root: bpy.types.Object) -> str:
+    """Like ``_unique_prefix``, but ignores the match being renamed."""
+    base = _prefix_from_label(label)
+    if not _prefix_is_taken(base, root):
+        return base
+    index = 2
+    while True:
+        candidate = f"{base}_{index:02d}"
+        if not _prefix_is_taken(candidate, root):
+            return candidate
+        index += 1
+
+
 def _rename_match_hierarchy(root: bpy.types.Object, prefix: str) -> None:
     session = root.pm_session
     collection = session.match_collection
@@ -268,6 +313,36 @@ def _rename_match_hierarchy(root: bpy.types.Object, prefix: str) -> None:
         camera.name = f"{prefix}_Camera"
         if camera.data is not None:
             camera.data.name = f"{prefix}_Camera"
+
+
+def rename_match(
+    context: bpy.types.Context,
+    root: bpy.types.Object,
+    label: str,
+) -> bpy.types.Object:
+    """Rename an existing match hierarchy from a user label.
+
+    Updates the collection, Origin Empty, and Camera datablock names together,
+    then refreshes active/anchor dropdown identifiers. Landmark observations keep
+    working because they store Object pointers, not name strings.
+    """
+    if not properties.is_match_root(root):
+        raise ValueError("Not a Perspective Match root")
+    if not label or not label.strip():
+        raise ValueError("Match name cannot be empty")
+
+    prefix = _unique_prefix_for_rename(label, root)
+    if match_prefix(root) == prefix:
+        return root
+
+    _rename_match_hierarchy(root, prefix)
+    space = properties.workspace(context)
+    if space.active_root == root:
+        properties.sync_active_match_enum(space, root.name)
+    if space.anchor_root == root:
+        properties.sync_anchor_match_enum(space, root.name)
+    properties.tag_viewport_redraw(context)
+    return root
 
 
 def _reset_session_edit_state(session: properties.PMSession) -> None:
@@ -333,6 +408,8 @@ def bind_reference_image(context: bpy.types.Context, image_path: str) -> bpy.typ
     space = properties.workspace(context)
     if space.active_root == root:
         properties.sync_active_match_enum(space, root.name)
+    if space.anchor_root == root:
+        properties.sync_anchor_match_enum(space, root.name)
 
     calibration = _default_calibration(session.hfov_degrees, width, height)
     store_calibration(session, calibration)

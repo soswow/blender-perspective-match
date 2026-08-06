@@ -219,9 +219,14 @@ def sync_active_match_enum(space: PMWorkspace, identifier: str) -> None:
 
 def _active_match_items(self, context):
     """Dynamic enum entries for the active-match dropdown."""
+    from . import scene as scene_module
+
     items = [("NONE", "(Unloaded)", "No active Perspective Match session")]
     for root in iter_match_roots():
-        items.append((root.name, root.name, "Activate this match camera"))
+        # Show PM_<label> in the UI; identifier stays the Origin Empty name.
+        items.append(
+            (root.name, scene_module.match_prefix(root), "Activate this match camera")
+        )
     return items
 
 
@@ -262,9 +267,17 @@ def sync_anchor_match_enum(space: PMWorkspace, identifier: str) -> None:
 
 def _anchor_match_items(self, context):
     """Dynamic enum entries for the sync anchor dropdown."""
+    from . import scene as scene_module
+
     items = [("NONE", "(None)", "No sync anchor selected")]
     for root in iter_match_roots():
-        items.append((root.name, root.name, "Use this match as the shared-world anchor"))
+        items.append(
+            (
+                root.name,
+                scene_module.match_prefix(root),
+                "Use this match as the shared-world anchor",
+            )
+        )
     return items
 
 
