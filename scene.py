@@ -1255,7 +1255,12 @@ def sync_landmark_empties(context: bpy.types.Context) -> None:
                 bpy.data.meshes.remove(data)
 
     for landmark in space.landmarks:
-        if not landmark.has_position or not space.show_landmark_empties:
+        # Disabled landmarks stay out of the sync solve and out of the helper collection.
+        if (
+            not landmark.has_position
+            or not landmark.use_in_sync
+            or not space.show_landmark_empties
+        ):
             continue
         base_name = safe_identifier(landmark.name) or landmark.item_id[:8]
         object_name = f"PM_LM_{base_name}"

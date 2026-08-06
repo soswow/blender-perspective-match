@@ -57,6 +57,14 @@ def _update_estimate_distortion(self, context: bpy.types.Context) -> None:
     tag_viewport_redraw(context)
 
 
+def _update_landmark_use_in_sync(_self, context: bpy.types.Context) -> None:
+    """Rebuild helpers so disabled landmarks leave PM_Sync_Landmarks."""
+    from . import scene
+
+    scene.sync_landmark_empties(context)
+    tag_viewport_redraw(context)
+
+
 def _update_landmark_empties(_self, context: bpy.types.Context) -> None:
     """Rebuild point Empties / line meshes when visibility or size changes."""
     from . import scene
@@ -340,10 +348,11 @@ class PMLandmark(bpy.types.PropertyGroup):
         name="Use in Sync",
         description=(
             "Include this landmark in Solve Sync and Diagnose. "
-            "Turn off to debug which landmarks break the solve without deleting picks"
+            "Turn off to debug which landmarks break the solve without deleting picks; "
+            "also hides its Empty / line mesh from PM_Sync_Landmarks"
         ),
         default=True,
-        update=_redraw,
+        update=_update_landmark_use_in_sync,
     )
     kind: bpy.props.EnumProperty(
         name="Kind",
