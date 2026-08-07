@@ -38,6 +38,33 @@ _ERROR_LABEL_FONT_SIZE = 11.0
 _LANDMARK_LABEL_OFFSET_PX = 10.0
 _LANDMARK_LABEL_FONT_SIZE = 12.0
 
+# Modal interact chrome — hard to miss while a draw / pick tool owns LMB.
+_MODE_BANNER_HEIGHT = 34.0
+_MODE_BANNER_FONT_SIZE = 14.0
+_MODE_FRAME_THICKNESS = 4.0
+_MODE_CHROME = {
+    "LINE": {
+        "title": "VP Lines",
+        "hint": "drag to draw · click to select · Esc exits",
+        "color": (0.95, 0.55, 0.12, 0.92),
+    },
+    "ORIGIN": {
+        "title": "Pick Origin",
+        "hint": "click a ground point · Esc exits",
+        "color": (0.98, 0.78, 0.18, 0.92),
+    },
+    "PP": {
+        "title": "Principal Point",
+        "hint": "drag the violet crosshair · Esc exits",
+        "color": (0.72, 0.35, 1.0, 0.92),
+    },
+    "LANDMARK": {
+        "title": "Landmark",
+        "hint": "click / drag on the plate · Esc exits",
+        "color": (0.15, 0.85, 0.85, 0.92),
+    },
+}
+
 _draw_handle = None
 _preview: dict[str, object] = {
     "kind": "",
@@ -68,6 +95,12 @@ def clear_preview(context: bpy.types.Context | None = None) -> None:
     _preview["end"] = None
     _preview["area_pointer"] = 0
     properties.tag_viewport_redraw(context)
+
+
+def interact_mode_label(mode: str) -> str:
+    """Short title for an active Draw / Pick tool mode."""
+    chrome = _MODE_CHROME.get(mode)
+    return chrome["title"] if chrome is not None else "Tool"
 
 
 def _fill_shader():
@@ -758,6 +791,127 @@ def _draw_landmark_labels(context: bpy.types.Context, settings) -> None:
     gpu.state.blend_set("ALPHA")
 
 
+def _draw_rect(shader, x0: float, y0: float, x1: float, y1: float, color) -> None:
+    """Axis-aligned filled rectangle in POST_PIXEL coordinates."""
+    batch = batch_for_shader(
+        shader,
+        "TRI_FAN",
+        {
+            "pos": [
+                (x0, y0),
+                (x1, y0),
+                (x1, y1),
+                (x0, y1),
+            ]
+        },
+    )
+    shader.bind()
+    shader.uniform_float("color", color)
+    batch.draw(shader)
+
+
+def _region_overlap_insets(context: bpy.types.Context) -> tuple[float, float, float, float]:
+    """Return (left, right, bottom, top) insets when UI floats over the WINDOW.
+
+    With Preferences → Interface → Region Overlap (default on), HEADER / TOOL_HEADER
+    / UI / TOOLS sit on top of the 3D View WINDOW. POST_PIXEL draws under them unless
+    we offset chrome into the uncovered plate.
+    """
+    area = context.area
+    preferences = getattr(context, "preferences", None)
+    system = getattr(preferences, "system", None) if preferences is not None else None
+    if (
+        area is None
+        or system is None
+        or not bool(getattr(system, "use_region_overlap", False))
+    ):
+        return 0.0, 0.0, 0.0, 0.0
+    left = right = bottom = top = 0.0
+    for region in area.regions:
+        # Collapsed / hidden regions report tiny sizes.
+        if region.width <= 1 and region.height <= 1:
+            continue
+        if region.type in {"HEADER", "TOOL_HEADER"} and region.alignment == "TOP":
+            top += float(region.height)
+        elif region.type in {"HEADER", "TOOL_HEADER", "FOOTER"} and region.alignment == "BOTTOM":
+            bottom += float(region.height)
+        elif region.type in {"TOOLS", "UI", "HUD"} and region.alignment == "LEFT":
+            left += float(region.width)
+        elif region.type in {"TOOLS", "UI", "HUD"} and region.alignment == "RIGHT":
+            right += float(region.width)
+    return left, right, bottom, top
+
+
+def _draw_interact_mode_chrome(context: bpy.types.Context, workspace) -> None:
+    """Single top banner + side/bottom frame while a Draw / Pick tool is active."""
+    if not workspace.is_modal:
+        return
+    region = context.region
+    if region is None or region.type != "WINDOW":
+        return
+    chrome = _MODE_CHROME.get(workspace.work_mode)
+    if chrome is None:
+        return
+    width = float(region.width)
+    height = float(region.height)
+    if width < 8.0 or height < 8.0:
+        return
+    left, right, bottom, top = _region_overlap_insets(context)
+    # Visible plate bounds inside floating Blender chrome.
+    x0 = left
+    x1 = width - right
+    y0 = bottom
+    y1 = height - top
+    if x1 - x0 < 32.0 or y1 - y0 < 48.0:
+        return
+    accent = chrome["color"]
+    fill_shader = _fill_shader()
+    banner_top = y1
+    banner_bottom = y1 - _MODE_BANNER_HEIGHT
+    # One dark banner just below the overlapping header / tool header.
+    _draw_rect(
+        fill_shader,
+        x0,
+        banner_bottom,
+        x1,
+        banner_top,
+        (0.05, 0.05, 0.05, 0.78),
+    )
+    _draw_rect(
+        fill_shader,
+        x0,
+        banner_bottom,
+        x1,
+        banner_bottom + 3.0,
+        accent,
+    )
+    # Frame only left / right / bottom so it does not stack on the banner.
+    thickness = _MODE_FRAME_THICKNESS
+    frame = (accent[0], accent[1], accent[2], min(1.0, accent[3] * 0.95))
+    _draw_rect(fill_shader, x0, y0, x1, y0 + thickness, frame)
+    _draw_rect(fill_shader, x0, y0, x0 + thickness, banner_bottom, frame)
+    _draw_rect(fill_shader, x1 - thickness, y0, x1, banner_bottom, frame)
+
+    label = f"{chrome['title']}  ·  {chrome['hint']}"
+    font_id = 0
+    blf.size(font_id, _MODE_BANNER_FONT_SIZE)
+    text_width, text_height = blf.dimensions(font_id, label)
+    blf.position(
+        font_id,
+        max(x0 + 12.0, x0 + (x1 - x0 - text_width) * 0.5),
+        banner_bottom + (_MODE_BANNER_HEIGHT - text_height) * 0.5,
+        0.0,
+    )
+    blf.color(font_id, 1.0, 1.0, 1.0, 1.0)
+    blf.enable(font_id, blf.SHADOW)
+    blf.shadow(font_id, 5, 0.0, 0.0, 0.0, 0.9)
+    blf.shadow_offset(font_id, 1, -1)
+    blf.draw(font_id, label)
+    blf.disable(font_id, blf.SHADOW)
+    # blf dirties GPU blend state used by later overlay geometry.
+    gpu.state.blend_set("ALPHA")
+
+
 def _draw_preview(context: bpy.types.Context, settings) -> None:
     if (
         context.area is None
@@ -795,12 +949,19 @@ def _draw_callback() -> None:
         or not hasattr(context.scene, "match_perspective")
     ):
         return
-    settings = properties.active_session(context)
-    if settings is None or settings.image is None or not scene.is_camera_view(context):
-        return
-    fill_shader = _fill_shader()
+    workspace = context.scene.match_perspective
     gpu.state.blend_set("ALPHA")
     try:
+        # Mode chrome stays up even if the user orbits out of camera view.
+        _draw_interact_mode_chrome(context, workspace)
+        settings = properties.active_session(context)
+        if (
+            settings is None
+            or settings.image is None
+            or not scene.is_camera_view(context)
+        ):
+            return
+        fill_shader = _fill_shader()
         _draw_vp_geometry(context, fill_shader, settings)
         _draw_placement(context, fill_shader, settings)
         _draw_landmarks(context, fill_shader, settings)
@@ -826,27 +987,36 @@ def register_viewport_draw_handler() -> None:
 def ensure_viewport_draw_handler() -> None:
     """Drop a stale handle if needed and ensure a live POST_PIXEL callback."""
     global _draw_handle
-    if _draw_handle is not None:
+    # Survive importlib.reload: previous module may have lost _draw_handle.
+    namespace_key = "perspective_match_draw_handle"
+    previous = bpy.app.driver_namespace.pop(namespace_key, None)
+    for handle in (_draw_handle, previous):
+        if handle is None:
+            continue
         try:
-            bpy.types.SpaceView3D.draw_handler_remove(_draw_handle, "WINDOW")
+            bpy.types.SpaceView3D.draw_handler_remove(handle, "WINDOW")
         except (ValueError, RuntimeError):
             pass
-        _draw_handle = None
     _draw_handle = bpy.types.SpaceView3D.draw_handler_add(
         _draw_callback,
         (),
         "WINDOW",
         "POST_PIXEL",
     )
+    bpy.app.driver_namespace[namespace_key] = _draw_handle
 
 
 def unregister_viewport_draw_handler() -> None:
     """Remove the registered viewport callback."""
     global _draw_handle
-    if _draw_handle is not None:
+    namespace_key = "perspective_match_draw_handle"
+    previous = bpy.app.driver_namespace.pop(namespace_key, None)
+    for handle in (_draw_handle, previous):
+        if handle is None:
+            continue
         try:
-            bpy.types.SpaceView3D.draw_handler_remove(_draw_handle, "WINDOW")
+            bpy.types.SpaceView3D.draw_handler_remove(handle, "WINDOW")
         except (ValueError, RuntimeError):
             pass
-        _draw_handle = None
+    _draw_handle = None
     clear_preview()

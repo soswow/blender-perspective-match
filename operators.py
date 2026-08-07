@@ -144,6 +144,47 @@ def _clear_interact_flags(context: bpy.types.Context) -> None:
     workspace.work_mode = "NONE"
 
 
+def _interact_cursor_for_mode(mode: str, context: bpy.types.Context) -> str:
+    """Blender window cursor id for an active Draw / Pick tool mode."""
+    if mode == "LINE":
+        return "KNIFE"
+    if mode == "PP":
+        return "SCROLL_XY"
+    if mode == "ORIGIN":
+        return "PICK_AREA"
+    if mode == "LANDMARK":
+        landmark = scene.active_landmark(context)
+        if landmark is not None and landmark.kind == "LINE":
+            return "KNIFE"
+        return "DOT"
+    return "CROSSHAIR"
+
+
+def _set_interact_cursor(
+    context: bpy.types.Context,
+    mode: str,
+    *,
+    modal: bool,
+) -> None:
+    """Apply the mode cursor; ``modal=True`` stacks via cursor_modal_set."""
+    window = context.window
+    if window is None:
+        return
+    cursor = _interact_cursor_for_mode(mode, context)
+    if modal:
+        window.cursor_modal_set(cursor)
+    else:
+        window.cursor_set(cursor)
+
+
+def _restore_interact_cursor(context: bpy.types.Context) -> None:
+    """Undo cursor_modal_set from an interact tool session."""
+    window = context.window
+    if window is None:
+        return
+    window.cursor_modal_restore()
+
+
 def _perspective_match_sidebar_active(context: bpy.types.Context) -> bool:
     """True when a 3D View has the Perspective Match N-panel tab selected."""
     screen = getattr(context, "screen", None)
@@ -176,6 +217,7 @@ def cancel_active_interact(context: bpy.types.Context) -> bool:
         if workspace.is_modal:
             _clear_interact_flags(context)
             overlay.clear_preview(context)
+            # Stale flag only — no live modal_set stack to restore.
             if context.window is not None:
                 context.window.cursor_set("DEFAULT")
         return False
@@ -783,7 +825,8 @@ class PM_OT_interact(bpy.types.Operator):
             workspace.work_mode = self.mode
             workspace.is_modal = True
             scene.enter_camera_view(context)
-            context.window.cursor_set("CROSSHAIR")
+            # Already inside a modal_set session — swap cursor without nesting.
+            _set_interact_cursor(context, self.mode, modal=False)
             settings.status = active._status_prompt()
             properties.tag_viewport_redraw(context)
             self.report({"INFO"}, "Perspective Match tool already active")
@@ -800,7 +843,7 @@ class PM_OT_interact(bpy.types.Operator):
         self._edit_index = -1
         _active_interact = self
         context.window_manager.modal_handler_add(self)
-        context.window.cursor_set("CROSSHAIR")
+        _set_interact_cursor(context, self.mode, modal=True)
         settings.status = self._status_prompt()
         properties.tag_viewport_redraw(context)
         return {"RUNNING_MODAL"}
@@ -828,8 +871,12 @@ class PM_OT_interact(bpy.types.Operator):
         settings = _session(context)
         workspace.is_modal = False
         workspace.work_mode = "NONE"
-        if context.window is not None:
-            context.window.cursor_set("DEFAULT")
+        _restore_interact_cursor(context)
+        # Drop leftover header text from older builds that used header_text_set.
+        if context.screen is not None:
+            for area in context.screen.areas:
+                if area.type == "VIEW_3D":
+                    area.header_text_set(None)
         overlay.clear_preview(context)
         # Leaving the line tool clears selection so handles don't linger.
         if settings is not None and self.mode == "LINE":

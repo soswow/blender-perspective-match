@@ -6,7 +6,7 @@ from pathlib import Path
 
 import bpy
 
-from . import operators, properties, scene
+from . import operators, overlay, properties, scene
 
 
 def _axis_counts(settings) -> dict[str, int]:
@@ -142,6 +142,21 @@ def _section(
     return header, body
 
 
+def _mode_tool_active(workspace, mode: str) -> bool:
+    return bool(workspace.is_modal and workspace.work_mode == mode)
+
+
+def _draw_active_tool_banner(layout, workspace) -> None:
+    """Non-clickable reminder — sidebar clicks are not a reliable exit path."""
+    if not workspace.is_modal:
+        return
+    title = overlay.interact_mode_label(workspace.work_mode)
+    banner = layout.column(align=True)
+    banner.alert = True
+    banner.label(text=f"{title} tool active — Esc exits", icon="INFO")
+    layout.separator()
+
+
 class VIEW3D_PT_perspective_match(bpy.types.Panel):
     """Perspective Match sidebar panel."""
 
@@ -158,6 +173,7 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
         layout.use_property_split = True
         layout.use_property_decorate = False
 
+        _draw_active_tool_banner(layout, workspace)
         _header, cameras = _section(
             layout, "PM_match_cameras", "Match Cameras", "CAMERA_DATA"
         )
@@ -258,13 +274,12 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
                 "perspective_match.interact",
                 text="Draw / Edit Lines",
                 icon="GREASEPENCIL",
+                depress=_mode_tool_active(workspace, "LINE"),
             )
             operator.mode = "LINE"
             row.operator("perspective_match.delete_selected", text="", icon="TRASH")
             row.operator("perspective_match.clear_axis", text="", icon="X")
             line_body.prop(settings, "show_vp_error_labels")
-            if workspace.is_modal and workspace.work_mode == "LINE":
-                line_body.label(text="Line tool active — Esc exits", icon="MOUSE_LMB")
             if not _panel_lines_ready(settings):
                 line_body.label(text=_panel_lines_hint(settings), icon="INFO")
 
@@ -277,6 +292,7 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
                 "perspective_match.interact",
                 text="Pick Origin",
                 icon="PIVOT_CURSOR",
+                depress=_mode_tool_active(workspace, "ORIGIN"),
             )
             operator.mode = "ORIGIN"
             clear_row = row.row(align=True)
@@ -286,10 +302,7 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             )
             if settings.origin_is_set:
                 origin.label(text="Origin set", icon="CHECKMARK")
-            if workspace.is_modal and workspace.work_mode == "ORIGIN":
-                origin.label(
-                    text="Origin tool active — click ground point", icon="MOUSE_LMB"
-                )
+
 
         _header, camera = _section(layout, "PM_camera", "5. Camera", "CAMERA_DATA")
         if camera is not None:
@@ -367,6 +380,7 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
                 "perspective_match.interact",
                 text="Manual PP Offset",
                 icon="PIVOT_CURSOR",
+                depress=_mode_tool_active(workspace, "PP"),
             )
             pp_operator.mode = "PP"
             # Icon-only: type offsets instead of dragging the crosshair.
@@ -377,11 +391,6 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
                 text="",
                 icon="GREASEPENCIL",
             )
-            if workspace.is_modal and workspace.work_mode == "PP":
-                camera.label(
-                    text="PP tool active — drag violet crosshair",
-                    icon="MOUSE_LMB",
-                )
 
             camera.prop(settings, "estimate_distortion")
             camera.label(text=f"Division λ: {settings.division_lambda:.5f}")
@@ -559,6 +568,7 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
                 "perspective_match.interact",
                 text=pick_label,
                 icon="EYEDROPPER",
+                depress=_mode_tool_active(workspace, "LANDMARK"),
             )
             operator.mode = "LANDMARK"
             pick_row.operator(
@@ -567,11 +577,6 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
                 icon="X",
             )
             sync_body.prop(workspace, "landmark_pick_confidence")
-            if workspace.is_modal and workspace.work_mode == "LANDMARK":
-                sync_body.label(
-                    text="Landmark tool active — switch matches to pick more",
-                    icon="MOUSE_LMB",
-                )
 
             # Compact per-match pick status for the active landmark.
             for root in properties.iter_match_roots():
