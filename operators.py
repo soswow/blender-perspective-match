@@ -1748,6 +1748,8 @@ class PM_OT_refine_lenses(bpy.types.Operator):
                     known_lines=prep.known_lines,
                     parallel_pairs=prep.parallel_pairs,
                     fx_span=prep.fx_span,
+                    lock_rotation=prep.lock_rotation,
+                    lock_translation=prep.lock_translation,
                     cancel_check=cancel_event.is_set,
                     progress_callback=_on_progress,
                 )

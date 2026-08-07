@@ -745,6 +745,20 @@ def _robust_weights(
     return _cauchy_weights(residuals, delta)
 
 
+def _similarity_param_stride(
+    *,
+    lock_scale: bool,
+    lock_rotation: bool,
+    lock_translation: bool = False,
+) -> int:
+    """Pose parameter count: optional α, optional ω, optional t."""
+    return (
+        (0 if lock_scale else 1)
+        + (0 if lock_rotation else 3)
+        + (0 if lock_translation else 3)
+    )
+
+
 def _pack_ba_params(
     free_match_ids: list[str],
     free_landmark_ids: list[str],
@@ -752,17 +766,21 @@ def _pack_ba_params(
     landmarks: dict[str, np.ndarray],
     *,
     lock_scale: bool,
+    lock_rotation: bool = False,
+    lock_translation: bool = False,
     free_line_ids: list[str] | None = None,
     free_line_points: dict[str, np.ndarray] | None = None,
 ) -> np.ndarray:
-    """Pack free-match pose (+ optional log-scale), free landmarks, free line midpoints."""
+    """Pack free-match pose (+ optional log-scale / rotation / translation), free landmarks, free line midpoints."""
     values: list[float] = []
     for match_id in free_match_ids:
         similarity = similarities[match_id]
         if not lock_scale:
             values.append(float(np.log(max(similarity.scale, 1.0e-8))))
-        values.extend(_log_rodrigues(similarity.rotation).tolist())
-        values.extend(similarity.translation.tolist())
+        if not lock_rotation:
+            values.extend(_log_rodrigues(similarity.rotation).tolist())
+        if not lock_translation:
+            values.extend(similarity.translation.tolist())
     for landmark_id in free_landmark_ids:
         values.extend(landmarks[landmark_id].tolist())
     for line_id in free_line_ids or []:
@@ -778,6 +796,10 @@ def _unpack_ba_params(
     *,
     lock_scale: bool,
     fixed_scales: dict[str, float],
+    lock_rotation: bool = False,
+    fixed_rotations: dict[str, np.ndarray] | None = None,
+    lock_translation: bool = False,
+    fixed_translations: dict[str, np.ndarray] | None = None,
     free_line_ids: list[str] | None = None,
 ) -> tuple[
     dict[str, SimilarityTransform],
@@ -786,16 +808,39 @@ def _unpack_ba_params(
 ]:
     similarities: dict[str, SimilarityTransform] = {}
     offset = 0
-    stride = 6 if lock_scale else 7
+    stride = _similarity_param_stride(
+        lock_scale=lock_scale,
+        lock_rotation=lock_rotation,
+        lock_translation=lock_translation,
+    )
+    fixed_rotations = fixed_rotations or {}
+    fixed_translations = fixed_translations or {}
     for match_id in free_match_ids:
+        cursor = offset
         if lock_scale:
             scale = max(float(fixed_scales.get(match_id, 1.0)), 1.0e-8)
-            rotation = _rodrigues(params[offset : offset + 3])
-            translation = params[offset + 3 : offset + 6].copy()
         else:
-            scale = float(np.exp(params[offset]))
-            rotation = _rodrigues(params[offset + 1 : offset + 4])
-            translation = params[offset + 4 : offset + 7].copy()
+            scale = float(np.exp(params[cursor]))
+            cursor += 1
+        if lock_rotation:
+            fixed = fixed_rotations.get(match_id)
+            rotation = (
+                np.asarray(fixed, dtype=np.float64).reshape(3, 3).copy()
+                if fixed is not None
+                else np.eye(3, dtype=np.float64)
+            )
+        else:
+            rotation = _rodrigues(params[cursor : cursor + 3])
+            cursor += 3
+        if lock_translation:
+            fixed_t = fixed_translations.get(match_id)
+            translation = (
+                np.asarray(fixed_t, dtype=np.float64).reshape(3).copy()
+                if fixed_t is not None
+                else np.zeros(3, dtype=np.float64)
+            )
+        else:
+            translation = params[cursor : cursor + 3].copy()
         similarities[match_id] = SimilarityTransform(
             scale=scale,
             rotation=rotation,
@@ -903,6 +948,10 @@ def _ba_raw_residuals_and_jacobian(
     *,
     lock_scale: bool,
     fixed_scales: dict[str, float],
+    lock_rotation: bool = False,
+    fixed_rotations: dict[str, np.ndarray] | None = None,
+    lock_translation: bool = False,
+    fixed_translations: dict[str, np.ndarray] | None = None,
     free_line_ids: list[str] | None = None,
     fixed_line_points: dict[str, np.ndarray] | None = None,
     fixed_line_directions: dict[str, np.ndarray] | None = None,
@@ -911,21 +960,36 @@ def _ba_raw_residuals_and_jacobian(
     free_line_ids = free_line_ids or []
     fixed_line_points = fixed_line_points or {}
     fixed_line_directions = fixed_line_directions or {}
+    fixed_rotations = fixed_rotations or {}
+    fixed_translations = fixed_translations or {}
     similarities, free_landmarks, free_line_points = _unpack_ba_params(
         params,
         free_match_ids,
         free_landmark_ids,
         lock_scale=lock_scale,
         fixed_scales=fixed_scales,
+        lock_rotation=lock_rotation,
+        fixed_rotations=fixed_rotations,
+        lock_translation=lock_translation,
+        fixed_translations=fixed_translations,
         free_line_ids=free_line_ids,
     )
     similarities[anchor_id] = SimilarityTransform()
+    # Both locks omit Empty poses from the parameter vector — keep identity
+    # similarities so residual eval can still project through every match.
+    if lock_rotation and lock_translation:
+        for match_id in matches:
+            similarities.setdefault(match_id, SimilarityTransform())
     landmarks = dict(fixed_landmarks)
     landmarks.update(free_landmarks)
     line_points = dict(fixed_line_points)
     line_points.update(free_line_points)
 
-    stride = 6 if lock_scale else 7
+    stride = _similarity_param_stride(
+        lock_scale=lock_scale,
+        lock_rotation=lock_rotation,
+        lock_translation=lock_translation,
+    )
     match_offset = {
         match_id: index * stride for index, match_id in enumerate(free_match_ids)
     }
@@ -938,10 +1002,16 @@ def _ba_raw_residuals_and_jacobian(
     line_offset = {
         line_id: line_base + index * 3 for index, line_id in enumerate(free_line_ids)
     }
-    rotation_partials = {
-        match_id: _rodrigues_partials(_log_rodrigues(similarities[match_id].rotation))
-        for match_id in free_match_ids
-    }
+    rotation_partials = (
+        {}
+        if lock_rotation
+        else {
+            match_id: _rodrigues_partials(
+                _log_rodrigues(similarities[match_id].rotation)
+            )
+            for match_id in free_match_ids
+        }
+    )
 
     residuals: list[float] = []
     jacobian_rows: list[np.ndarray] = []
@@ -986,16 +1056,19 @@ def _ba_raw_residuals_and_jacobian(
                 row_u[offset] = float(d_uv_d_alpha[0])
                 row_v[offset] = float(d_uv_d_alpha[1])
                 offset += 1
-            y_vector = (point_shared - similarity.translation) * inv_scale
-            for axis, partial in enumerate(rotation_partials[match_id]):
-                d_private_d_omega = partial.T @ y_vector
-                d_uv = d_uv_d_private @ d_private_d_omega
-                row_u[offset + axis] = float(d_uv[0])
-                row_v[offset + axis] = float(d_uv[1])
-            d_private_d_translation = -d_private_d_shared
-            block = d_uv_d_private @ d_private_d_translation
-            row_u[offset + 3 : offset + 6] = block[0]
-            row_v[offset + 3 : offset + 6] = block[1]
+            if not lock_rotation:
+                y_vector = (point_shared - similarity.translation) * inv_scale
+                for axis, partial in enumerate(rotation_partials[match_id]):
+                    d_private_d_omega = partial.T @ y_vector
+                    d_uv = d_uv_d_private @ d_private_d_omega
+                    row_u[offset + axis] = float(d_uv[0])
+                    row_v[offset + axis] = float(d_uv[1])
+                offset += 3
+            if not lock_translation:
+                d_private_d_translation = -d_private_d_shared
+                block = d_uv_d_private @ d_private_d_translation
+                row_u[offset : offset + 3] = block[0]
+                row_v[offset : offset + 3] = block[1]
         jacobian_rows.extend((row_u, row_v))
 
     # Lines: pose FD + free-midpoint FD (directions stay fixed from the seed).
@@ -1036,9 +1109,16 @@ def _ba_raw_residuals_and_jacobian(
                 free_landmark_ids,
                 lock_scale=lock_scale,
                 fixed_scales=fixed_scales,
+                lock_rotation=lock_rotation,
+                fixed_rotations=fixed_rotations,
+                lock_translation=lock_translation,
+                fixed_translations=fixed_translations,
                 free_line_ids=free_line_ids,
             )
             trial_sims[anchor_id] = SimilarityTransform()
+            if lock_rotation and lock_translation:
+                for trial_match_id in matches:
+                    trial_sims.setdefault(trial_match_id, SimilarityTransform())
             trial_point = trial_lines.get(landmark_id, point)
             sample = _line_observation_reprojection_errors(
                 trial_point,
@@ -1070,6 +1150,10 @@ def _ba_residual_vector(
     lock_scale: bool,
     fixed_scales: dict[str, float],
     huber_delta: float,
+    lock_rotation: bool = False,
+    fixed_rotations: dict[str, np.ndarray] | None = None,
+    lock_translation: bool = False,
+    fixed_translations: dict[str, np.ndarray] | None = None,
     free_line_ids: list[str] | None = None,
     fixed_line_points: dict[str, np.ndarray] | None = None,
     fixed_line_directions: dict[str, np.ndarray] | None = None,
@@ -1086,6 +1170,10 @@ def _ba_residual_vector(
         line_constraints,
         lock_scale=lock_scale,
         fixed_scales=fixed_scales,
+        lock_rotation=lock_rotation,
+        fixed_rotations=fixed_rotations,
+        lock_translation=lock_translation,
+        fixed_translations=fixed_translations,
         free_line_ids=free_line_ids,
         fixed_line_points=fixed_line_points,
         fixed_line_directions=fixed_line_directions,
@@ -1195,6 +1283,8 @@ def _bundle_adjust_registration(
     known_line_ids: set[str] | None = None,
     line_segments: dict[str, tuple[np.ndarray, np.ndarray]] | None = None,
     lock_scale: bool = True,
+    lock_rotation: bool = False,
+    lock_translation: bool = False,
     max_iterations: int = 20,
     huber_delta: float = 6.0,
     max_free_lines: int = 24,
@@ -1227,6 +1317,23 @@ def _bundle_adjust_registration(
     # Prefer rigid Empty transforms when every seed is already metric.
     if lock_scale and any(abs(scale - 1.0) > 1.0e-3 for scale in fixed_scales.values()):
         lock_scale = False
+    # Identity rotation for every free Empty when rotation is locked.
+    fixed_rotations = {
+        match_id: np.eye(3, dtype=np.float64) for match_id in free_match_ids
+    } if lock_rotation else {}
+    # Zero translation when translation is locked (private worlds share origin axes).
+    fixed_translations = {
+        match_id: np.zeros(3, dtype=np.float64) for match_id in free_match_ids
+    } if lock_translation else {}
+    # Fully locked Empty → no pose DOFs in BA (landmarks / lines only).
+    pose_match_ids = (
+        []
+        if (lock_rotation and lock_translation)
+        else list(free_match_ids)
+    )
+    if lock_rotation and lock_translation:
+        for match_id in free_match_ids:
+            similarities[match_id] = SimilarityTransform()
 
     working_landmarks = {
         landmark_id: landmarks[landmark_id].copy()
@@ -1257,16 +1364,18 @@ def _bundle_adjust_registration(
             fixed_line_points[landmark_id] = free_line_points.pop(landmark_id)
 
     params = _pack_ba_params(
-        free_match_ids,
+        pose_match_ids,
         free_landmark_ids,
         similarities,
         working_landmarks,
         lock_scale=lock_scale,
+        lock_rotation=lock_rotation,
+        lock_translation=lock_translation,
         free_line_ids=free_line_ids,
         free_line_points=free_line_points,
     )
     residual_kwargs = {
-        "free_match_ids": free_match_ids,
+        "free_match_ids": pose_match_ids,
         "free_landmark_ids": free_landmark_ids,
         "fixed_landmarks": fixed_landmarks,
         "anchor_id": anchor_id,
@@ -1275,6 +1384,10 @@ def _bundle_adjust_registration(
         "line_constraints": line_constraints,
         "lock_scale": lock_scale,
         "fixed_scales": fixed_scales,
+        "lock_rotation": lock_rotation,
+        "fixed_rotations": fixed_rotations,
+        "lock_translation": lock_translation,
+        "fixed_translations": fixed_translations,
         "huber_delta": huber_delta,
         "free_line_ids": free_line_ids,
         "fixed_line_points": fixed_line_points,
@@ -1322,10 +1435,14 @@ def _bundle_adjust_registration(
 
     refined_similarities, refined_free, refined_lines = _unpack_ba_params(
         params,
-        free_match_ids,
+        pose_match_ids,
         free_landmark_ids,
         lock_scale=lock_scale,
         fixed_scales=fixed_scales,
+        lock_rotation=lock_rotation,
+        fixed_rotations=fixed_rotations,
+        lock_translation=lock_translation,
+        fixed_translations=fixed_translations,
         free_line_ids=free_line_ids,
     )
     result_similarities = dict(similarities)
@@ -1420,6 +1537,8 @@ def leave_one_out_landmark_report(
     parallel_pairs: list[tuple[str, str]] | None = None,
     top_k: int = 5,
     baseline: SyncSolveResult | None = None,
+    lock_rotation: bool = False,
+    lock_translation: bool = False,
 ) -> list[tuple[str, float, float]]:
     """Re-solve without each of the worst landmarks; report RMSE deltas.
 
@@ -1435,6 +1554,8 @@ def leave_one_out_landmark_report(
             line_observations=line_observations,
             known_lines=known_lines,
             parallel_pairs=parallel_pairs,
+            lock_rotation=lock_rotation,
+            lock_translation=lock_translation,
         )
     if not baseline.per_landmark_rmse_px:
         return []
@@ -1482,6 +1603,8 @@ def leave_one_out_landmark_report(
             line_observations=filtered_lines,
             known_lines=filtered_known_lines,
             parallel_pairs=filtered_parallel,
+            lock_rotation=lock_rotation,
+            lock_translation=lock_translation,
         )
         without_rmse = (
             float(without.mean_reprojection_px)
@@ -2252,42 +2375,92 @@ def _similarity_from_camera_pose(
     )
 
 
+
+def _apply_pose_locks(
+    seed: SimilarityTransform,
+    *,
+    lock_scale: bool = False,
+    lock_rotation: bool = False,
+    lock_translation: bool = False,
+) -> SimilarityTransform:
+    """Force locked similarity components to identity defaults."""
+    scale = 1.0 if lock_scale else float(seed.scale)
+    rotation = (
+        np.eye(3, dtype=np.float64)
+        if lock_rotation
+        else np.asarray(seed.rotation, dtype=np.float64).reshape(3, 3).copy()
+    )
+    translation = (
+        np.zeros(3, dtype=np.float64)
+        if lock_translation
+        else np.asarray(seed.translation, dtype=np.float64).reshape(3).copy()
+    )
+    return SimilarityTransform(scale=scale, rotation=rotation, translation=translation)
+
+
 def _pack_similarity_pose(
     similarity: SimilarityTransform,
     *,
     lock_scale: bool = False,
+    lock_rotation: bool = False,
+    lock_translation: bool = False,
 ) -> np.ndarray:
-    """Pack (log s, ω, t) — or (ω, t) when scale is locked."""
-    if lock_scale:
-        return np.concatenate(
-            [_log_rodrigues(similarity.rotation), similarity.translation]
+    """Pack pose params — layout mirrors lock_scale / lock_rotation / lock_translation."""
+    parts: list[np.ndarray] = []
+    if not lock_scale:
+        parts.append(
+            np.asarray(
+                [float(np.log(max(float(similarity.scale), 1.0e-8)))],
+                dtype=np.float64,
+            )
         )
-    return np.concatenate(
-        [
-            [float(np.log(max(float(similarity.scale), 1.0e-8)))],
-            _log_rodrigues(similarity.rotation),
-            similarity.translation,
-        ]
-    )
+    if not lock_rotation:
+        parts.append(_log_rodrigues(similarity.rotation))
+    if not lock_translation:
+        parts.append(np.asarray(similarity.translation, dtype=np.float64).reshape(3))
+    if not parts:
+        return np.zeros(0, dtype=np.float64)
+    return np.concatenate(parts)
 
 
 def _unpack_similarity_pose(
     params: np.ndarray,
     *,
     lock_scale: bool = False,
+    lock_rotation: bool = False,
+    lock_translation: bool = False,
     fixed_scale: float = 1.0,
+    fixed_rotation: np.ndarray | None = None,
+    fixed_translation: np.ndarray | None = None,
 ) -> SimilarityTransform:
     """Unpack pose params into a similarity."""
+    offset = 0
     if lock_scale:
-        return SimilarityTransform(
-            scale=max(float(fixed_scale), 1.0e-8),
-            rotation=_rodrigues(params[:3]),
-            translation=params[3:6].copy(),
+        scale = max(float(fixed_scale), 1.0e-8)
+    else:
+        scale = float(np.exp(params[0]))
+        offset = 1
+    if lock_rotation:
+        rotation = (
+            np.asarray(fixed_rotation, dtype=np.float64).reshape(3, 3).copy()
+            if fixed_rotation is not None
+            else np.eye(3, dtype=np.float64)
         )
+    else:
+        rotation = _rodrigues(params[offset : offset + 3])
+        offset += 3
+    if lock_translation:
+        translation = (
+            np.asarray(fixed_translation, dtype=np.float64).reshape(3).copy()
+            if fixed_translation is not None
+            else np.zeros(3, dtype=np.float64)
+        )
+    else:
+        translation = params[offset : offset + 3].copy()
     return SimilarityTransform(
-        scale=float(np.exp(params[0])),
-        rotation=_rodrigues(params[1:4]),
-        translation=params[4:7].copy(),
+        scale=scale,
+        rotation=rotation,
+        translation=translation,
     )
 
 
@@ -2301,23 +2474,34 @@ def _pnp_similarity(
     max_iterations: int = 40,
     weights: np.ndarray | None = None,
     lock_scale: bool = True,
+    lock_rotation: bool = False,
+    lock_translation: bool = False,
 ) -> SimilarityTransform | None:
     """Solve Empty pose from shared 3D ↔ image 2D correspondences.
 
     ``lock_scale=True`` (default) keeps ``s=1`` — preferred when private worlds
     already share metric units. Free scale is a fallback when rigid PnP fails.
+    ``lock_rotation=True`` keeps ``R=I``; ``lock_translation=True`` keeps ``t=0``.
     """
     if len(points_shared) < 3:
         return None
-    seed = initial or SimilarityTransform()
-    if lock_scale:
-        seed = SimilarityTransform(
-            scale=1.0,
-            rotation=seed.rotation.copy(),
-            translation=np.asarray(seed.translation, dtype=np.float64).copy(),
-        )
-    params = _pack_similarity_pose(seed, lock_scale=lock_scale)
+    seed = _apply_pose_locks(
+        initial or SimilarityTransform(),
+        lock_scale=lock_scale,
+        lock_rotation=lock_rotation,
+        lock_translation=lock_translation,
+    )
+    if lock_rotation and lock_translation:
+        return seed
+    params = _pack_similarity_pose(
+        seed,
+        lock_scale=lock_scale,
+        lock_rotation=lock_rotation,
+        lock_translation=lock_translation,
+    )
     fixed_scale = float(seed.scale)
+    fixed_rotation = seed.rotation.copy()
+    fixed_translation = seed.translation.copy()
     if weights is None:
         point_weights = np.ones(len(points_shared), dtype=np.float64)
     else:
@@ -2331,7 +2515,13 @@ def _pnp_similarity(
 
     def residual(values: np.ndarray) -> np.ndarray:
         similarity = _unpack_similarity_pose(
-            values, lock_scale=lock_scale, fixed_scale=fixed_scale
+            values,
+            lock_scale=lock_scale,
+            lock_rotation=lock_rotation,
+            lock_translation=lock_translation,
+            fixed_scale=fixed_scale,
+            fixed_rotation=fixed_rotation,
+            fixed_translation=fixed_translation,
         )
         projected, valid = _project_shared_points(
             shared_array, calibration, similarity
@@ -2380,7 +2570,13 @@ def _pnp_similarity(
             break
 
     return _unpack_similarity_pose(
-        params, lock_scale=lock_scale, fixed_scale=fixed_scale
+        params,
+        lock_scale=lock_scale,
+        lock_rotation=lock_rotation,
+        lock_translation=lock_translation,
+        fixed_scale=fixed_scale,
+        fixed_rotation=fixed_rotation,
+        fixed_translation=fixed_translation,
     )
 
 
@@ -2509,9 +2705,26 @@ def _refine_rigid_from_rays(
     other: core.Calibration,
     *,
     max_iterations: int = 60,
+    lock_rotation: bool = False,
+    lock_translation: bool = False,
 ) -> SimilarityTransform:
     """Levenberg–Marquardt on Empty (R, t) minimizing ray–ray distances."""
-    params = np.concatenate([_log_rodrigues(seed.rotation), seed.translation])
+    seed = _apply_pose_locks(
+        seed,
+        lock_scale=True,
+        lock_rotation=lock_rotation,
+        lock_translation=lock_translation,
+    )
+    if lock_rotation and lock_translation:
+        return seed
+    params = _pack_similarity_pose(
+        seed,
+        lock_scale=True,
+        lock_rotation=lock_rotation,
+        lock_translation=lock_translation,
+    )
+    fixed_rotation = seed.rotation.copy()
+    fixed_translation = seed.translation.copy()
     anchor_directions: list[np.ndarray] = []
     other_directions: list[np.ndarray] = []
     pair_scales: list[float] = []
@@ -2532,10 +2745,14 @@ def _refine_rigid_from_rays(
     origin_b_private = other.camera_center
 
     def residual(values: np.ndarray) -> np.ndarray:
-        similarity = SimilarityTransform(
-            scale=1.0,
-            rotation=_rodrigues(values[:3]),
-            translation=values[3:6].copy(),
+        similarity = _unpack_similarity_pose(
+            values,
+            lock_scale=True,
+            lock_rotation=lock_rotation,
+            lock_translation=lock_translation,
+            fixed_scale=1.0,
+            fixed_rotation=fixed_rotation,
+            fixed_translation=fixed_translation,
         )
         origin_b = similarity.transform_point(origin_b_private)
         direction_b = other_direction_array @ similarity.rotation.T
@@ -2593,10 +2810,14 @@ def _refine_rigid_from_rays(
         if not improved:
             break
 
-    return SimilarityTransform(
-        scale=1.0,
-        rotation=_rodrigues(params[:3]),
-        translation=params[3:6].copy(),
+    return _unpack_similarity_pose(
+        params,
+        lock_scale=True,
+        lock_rotation=lock_rotation,
+        lock_translation=lock_translation,
+        fixed_scale=1.0,
+        fixed_rotation=fixed_rotation,
+        fixed_translation=fixed_translation,
     )
 
 
@@ -2866,10 +3087,15 @@ def _solve_relative_from_pairs(
     pairs: list[tuple[SyncObservation, SyncObservation]],
     anchor: core.Calibration,
     other: core.Calibration,
+    *,
+    lock_rotation: bool = False,
+    lock_translation: bool = False,
 ) -> SimilarityTransform | None:
     """Multi-start ray-distance LM for Empty (R, t) from 2D↔2D pairs only."""
     if len(pairs) < 5:
         return None
+    if lock_rotation and lock_translation:
+        return SimilarityTransform()
     seeds: list[SimilarityTransform] = [
         SimilarityTransform(),
         SimilarityTransform(
@@ -2878,55 +3104,61 @@ def _solve_relative_from_pairs(
             translation=anchor.camera_center - other.camera_center,
         ),
     ]
-    if len(pairs) >= 8:
-        rays_a = np.stack(
-            [_normalized_camera_ray(a.u, a.v, anchor) for a, _b in pairs]
-        )
-        rays_b = np.stack(
-            [_normalized_camera_ray(b.u, b.v, other) for _a, b in pairs]
-        )
-        essential = _essential_eight_point(rays_a, rays_b)
-        if essential is not None:
-            for rotation_rel, translation_hat in _decompose_essential(essential):
-                rotation_b = rotation_rel @ anchor.rotation_w2c
-                rotation_sim = rotation_b.T @ other.rotation_w2c
-                u_matrix, _, vt_matrix = np.linalg.svd(rotation_sim)
-                rotation_sim = u_matrix @ vt_matrix
-                if np.linalg.det(rotation_sim) < 0.0:
-                    u_matrix[:, -1] *= -1.0
-                    rotation_sim = u_matrix @ vt_matrix
-                baseline = float(np.linalg.norm(anchor.camera_center)) or 5.0
-                center_b = anchor.camera_center - baseline * (
-                    rotation_b.T @ translation_hat
-                )
-                translation = center_b - rotation_sim @ other.camera_center
-                seeds.append(
-                    SimilarityTransform(
-                        scale=1.0,
-                        rotation=rotation_sim,
-                        translation=translation,
-                    )
-                )
-    for yaw in (-0.6, -0.3, 0.3, 0.6, 0.9, -0.9):
-        cosine = float(np.cos(yaw))
-        sine = float(np.sin(yaw))
-        rotation_yaw = np.array(
-            ((cosine, -sine, 0.0), (sine, cosine, 0.0), (0.0, 0.0, 1.0)),
-            dtype=np.float64,
-        )
-        seeds.append(
-            SimilarityTransform(
-                scale=1.0,
-                rotation=rotation_yaw,
-                translation=anchor.camera_center
-                - rotation_yaw @ other.camera_center,
+    # Locked rotation: only identity-R seeds; skip essential / yaw multi-start.
+    if not lock_rotation:
+        if len(pairs) >= 8:
+            rays_a = np.stack(
+                [_normalized_camera_ray(a.u, a.v, anchor) for a, _b in pairs]
             )
-        )
+            rays_b = np.stack(
+                [_normalized_camera_ray(b.u, b.v, other) for _a, b in pairs]
+            )
+            essential = _essential_eight_point(rays_a, rays_b)
+            if essential is not None:
+                for rotation_rel, translation_hat in _decompose_essential(essential):
+                    rotation_b = rotation_rel @ anchor.rotation_w2c
+                    rotation_sim = rotation_b.T @ other.rotation_w2c
+                    u_matrix, _, vt_matrix = np.linalg.svd(rotation_sim)
+                    rotation_sim = u_matrix @ vt_matrix
+                    if np.linalg.det(rotation_sim) < 0.0:
+                        u_matrix[:, -1] *= -1.0
+                        rotation_sim = u_matrix @ vt_matrix
+                    baseline = float(np.linalg.norm(anchor.camera_center)) or 5.0
+                    center_b = anchor.camera_center - baseline * (
+                        rotation_b.T @ translation_hat
+                    )
+                    translation = center_b - rotation_sim @ other.camera_center
+                    seeds.append(
+                        SimilarityTransform(
+                            scale=1.0,
+                            rotation=rotation_sim,
+                            translation=translation,
+                        )
+                    )
+        for yaw in (-0.6, -0.3, 0.3, 0.6, 0.9, -0.9):
+            cosine = float(np.cos(yaw))
+            sine = float(np.sin(yaw))
+            rotation_yaw = np.array(
+                ((cosine, -sine, 0.0), (sine, cosine, 0.0), (0.0, 0.0, 1.0)),
+                dtype=np.float64,
+            )
+            seeds.append(
+                SimilarityTransform(
+                    scale=1.0,
+                    rotation=rotation_yaw,
+                    translation=anchor.camera_center
+                    - rotation_yaw @ other.camera_center,
+                )
+            )
 
     best: SimilarityTransform | None = None
     best_key: tuple[float, float, float] | None = None
     for seed in seeds:
-        refined = _refine_rigid_from_rays(seed, pairs, anchor, other)
+        refined = _refine_rigid_from_rays(
+            seed, pairs, anchor, other,
+            lock_rotation=lock_rotation,
+            lock_translation=lock_translation,
+        )
         center_b = refined.transform_point(other.camera_center)
         baseline = float(np.linalg.norm(center_b - anchor.camera_center))
         if baseline < 0.2:
@@ -3070,16 +3302,27 @@ def _refine_rigid_mixed(
     | None = None,
     parallel_weight: float = 0.0,
     lock_scale: bool = True,
+    lock_rotation: bool = False,
+    lock_translation: bool = False,
 ) -> SimilarityTransform:
     """LM on Empty pose: free 2D↔2D ray gaps + Known 3D point/line reprojection."""
-    if lock_scale:
-        seed = SimilarityTransform(
-            scale=1.0,
-            rotation=seed.rotation.copy(),
-            translation=np.asarray(seed.translation, dtype=np.float64).copy(),
-        )
-    params = _pack_similarity_pose(seed, lock_scale=lock_scale)
+    seed = _apply_pose_locks(
+        seed,
+        lock_scale=lock_scale,
+        lock_rotation=lock_rotation,
+        lock_translation=lock_translation,
+    )
+    if lock_rotation and lock_translation:
+        return seed
+    params = _pack_similarity_pose(
+        seed,
+        lock_scale=lock_scale,
+        lock_rotation=lock_rotation,
+        lock_translation=lock_translation,
+    )
     fixed_scale = float(seed.scale)
+    fixed_rotation = seed.rotation.copy()
+    fixed_translation = seed.translation.copy()
     # Ray distance (scene units) → rough pixels using focal length.
     ray_to_px = float(max(other.intrinsics.fx, other.intrinsics.fy)) / 5.0
     if point_weights is None:
@@ -3124,7 +3367,13 @@ def _refine_rigid_mixed(
 
     def residual(values: np.ndarray) -> np.ndarray:
         similarity = _unpack_similarity_pose(
-            values, lock_scale=lock_scale, fixed_scale=fixed_scale
+            values,
+            lock_scale=lock_scale,
+            lock_rotation=lock_rotation,
+            lock_translation=lock_translation,
+            fixed_scale=fixed_scale,
+            fixed_rotation=fixed_rotation,
+            fixed_translation=fixed_translation,
         )
         errors: list[float] = []
         if len(free_pairs):
@@ -3222,7 +3471,13 @@ def _refine_rigid_mixed(
             break
 
     return _unpack_similarity_pose(
-        params, lock_scale=lock_scale, fixed_scale=fixed_scale
+        params,
+        lock_scale=lock_scale,
+        lock_rotation=lock_rotation,
+        lock_translation=lock_translation,
+        fixed_scale=fixed_scale,
+        fixed_rotation=fixed_rotation,
+        fixed_translation=fixed_translation,
     )
 
 
@@ -3233,6 +3488,8 @@ def _mixed_pose_seeds(
     *,
     include_scale_grid: bool = False,
     dense_yaw: bool = False,
+    lock_rotation: bool = False,
+    lock_translation: bool = False,
 ) -> list[SimilarityTransform]:
     """Yaw seeds (and optional scale grid) for Known 3D / mixed registration."""
     scale_guesses = [1.0]
@@ -3254,6 +3511,37 @@ def _mixed_pose_seeds(
                     for existing in scale_guesses
                 ):
                     scale_guesses.append(guess)
+
+    # Locked pose components use identity defaults (R=I and/or t=0).
+    if lock_rotation and lock_translation:
+        return [SimilarityTransform(scale=scale) for scale in scale_guesses]
+    if lock_rotation:
+        return [
+            SimilarityTransform(
+                scale=scale,
+                rotation=np.eye(3, dtype=np.float64),
+                translation=anchor.camera_center - scale * other.camera_center,
+            )
+            for scale in scale_guesses
+        ]
+    if lock_translation:
+        seeds = [SimilarityTransform(scale=scale) for scale in scale_guesses]
+        for yaw in (-0.8, -0.4, 0.4, 0.8):
+            cosine = float(np.cos(yaw))
+            sine = float(np.sin(yaw))
+            rotation_yaw = np.array(
+                ((cosine, -sine, 0.0), (sine, cosine, 0.0), (0.0, 0.0, 1.0)),
+                dtype=np.float64,
+            )
+            for scale in scale_guesses:
+                seeds.append(
+                    SimilarityTransform(
+                        scale=scale,
+                        rotation=rotation_yaw,
+                        translation=np.zeros(3, dtype=np.float64),
+                    )
+                )
+        return seeds
 
     # Dense yaw (incl. ±90°/180°) for pure Known 3D PnP; keep the smaller set
     # elsewhere so line-only registration does not fall into wrong basins.
@@ -3318,6 +3606,9 @@ def _relative_pose_from_correspondences(
     | None = None,
     parallel_pairs: list[tuple[str, str]] | None = None,
     initial_similarity: SimilarityTransform | None = None,
+    *,
+    lock_rotation: bool = False,
+    lock_translation: bool = False,
 ) -> tuple[SimilarityTransform | None, str]:
     """Register other from free 2D↔2D and/or Known 3D points/lines.
 
@@ -3327,6 +3618,8 @@ def _relative_pose_from_correspondences(
     lines use 2D segments in the other still. Free 2D↔2D lines need ≥3 stills
     (handled after two matches are registered).
     """
+    if lock_rotation and lock_translation:
+        return SimilarityTransform(), ""
     known_ids = set(known_world or {})
     free_pairs: list[tuple[SyncObservation, SyncObservation]] = []
     for landmark_id, items in observations_by_landmark.items():
@@ -3422,8 +3715,15 @@ def _relative_pose_from_correspondences(
         points_shared or known_line_constraints
     ):
         lock_warm_scale = abs(float(initial_similarity.scale) - 1.0) < 1.0e-6
+        warm_seed = initial_similarity
+        if lock_rotation or lock_translation:
+            warm_seed = _apply_pose_locks(
+                warm_seed,
+                lock_rotation=lock_rotation,
+                lock_translation=lock_translation,
+            )
         warm = _refine_rigid_mixed(
-            initial_similarity,
+            warm_seed,
             free_pairs,
             points_shared,
             points_image,
@@ -3432,6 +3732,8 @@ def _relative_pose_from_correspondences(
             point_weights=known_weights,
             known_line_constraints=known_line_constraints,
             lock_scale=lock_warm_scale,
+            lock_rotation=lock_rotation,
+            lock_translation=lock_translation,
         )
         warm_errors = _reprojection_errors_for_similarity(
             warm,
@@ -3462,11 +3764,13 @@ def _relative_pose_from_correspondences(
     mixed_kwargs = {
         "point_weights": known_weights,
         "known_line_constraints": known_line_constraints,
+        "lock_rotation": lock_rotation,
+        "lock_translation": lock_translation,
     }
 
     relative: SimilarityTransform | None = None
     if can_pairs_only:
-        relative = _solve_relative_from_pairs(free_pairs, anchor, other)
+        relative = _solve_relative_from_pairs(free_pairs, anchor, other, lock_rotation=lock_rotation, lock_translation=lock_translation)
         if relative is not None:
             if points_shared or known_line_constraints:
                 if points_shared:
@@ -3485,6 +3789,8 @@ def _relative_pose_from_correspondences(
                         other,
                         initial=relative,
                         weights=np.asarray(known_weights, dtype=np.float64),
+                        lock_rotation=lock_rotation,
+                        lock_translation=lock_translation,
                     )
                     if scaled is not None:
                         candidates.append(
@@ -3516,7 +3822,7 @@ def _relative_pose_from_correspondences(
                 )
 
     if can_joint:
-        for seed in _mixed_pose_seeds(anchor, other):
+        for seed in _mixed_pose_seeds(anchor, other, lock_rotation=lock_rotation, lock_translation=lock_translation):
             candidates.append(
                 _refine_rigid_mixed(
                     seed,
@@ -3552,6 +3858,8 @@ def _relative_pose_from_correspondences(
                 other,
                 include_scale_grid=allow_scale,
                 dense_yaw=True,
+                lock_rotation=lock_rotation,
+                lock_translation=lock_translation,
             )
             for seed in seeds:
                 solved = _pnp_similarity(
@@ -3562,6 +3870,8 @@ def _relative_pose_from_correspondences(
                     initial=seed,
                     weights=np.asarray(known_weights, dtype=np.float64),
                     lock_scale=not allow_scale,
+                    lock_rotation=lock_rotation,
+                    lock_translation=lock_translation,
                 )
                 if solved is None:
                     continue
@@ -3601,7 +3911,7 @@ def _relative_pose_from_correspondences(
                 candidates.append(best_pnp)
 
     if can_pnl_only:
-        for seed in _mixed_pose_seeds(anchor, other):
+        for seed in _mixed_pose_seeds(anchor, other, lock_rotation=lock_rotation, lock_translation=lock_translation):
             candidates.append(
                 _refine_rigid_mixed(
                     seed,
@@ -3681,7 +3991,7 @@ def _relative_pose_from_correspondences(
         parallel_pairs,
         line_observations_by_landmark,
     )
-    if parallel_specs:
+    if parallel_specs and not lock_rotation and not lock_translation:
         refined = _refine_rigid_mixed(
             best,
             free_pairs,
@@ -3730,11 +4040,18 @@ def _register_from_relative_pose(
     | None = None,
     parallel_pairs: list[tuple[str, str]] | None = None,
     initial_similarities: dict[str, SimilarityTransform] | None = None,
+    *,
+    lock_rotation: bool = False,
+    lock_translation: bool = False,
 ) -> tuple[dict[str, SimilarityTransform] | None, str]:
     """Register free matches vs anchor, then bridge via triangulated landmarks."""
     similarities: dict[str, SimilarityTransform] = {
         anchor_id: SimilarityTransform(),
     }
+    if lock_rotation and lock_translation:
+        for match_id in free_match_ids:
+            similarities[match_id] = SimilarityTransform()
+        return similarities, ""
     pending = set(free_match_ids)
     failure_details: list[str] = []
 
@@ -3749,6 +4066,8 @@ def _register_from_relative_pose(
             line_observations_by_landmark=line_observations_by_landmark,
             parallel_pairs=parallel_pairs,
             initial_similarity=(initial_similarities or {}).get(match_id),
+            lock_rotation=lock_rotation,
+            lock_translation=lock_translation,
         )
         if solved is None:
             if detail:
@@ -3823,6 +4142,8 @@ def _register_from_relative_pose(
                     points_shared,
                     points_image,
                     matches[match_id].calibration,
+                    lock_rotation=lock_rotation,
+                    lock_translation=lock_translation,
                 )
                 if solved is not None and line_constraints:
                     solved = _refine_rigid_mixed(
@@ -3833,11 +4154,15 @@ def _register_from_relative_pose(
                         matches[anchor_id].calibration,
                         matches[match_id].calibration,
                         known_line_constraints=line_constraints,
+                        lock_rotation=lock_rotation,
+                        lock_translation=lock_translation,
                     )
             elif len(line_constraints) >= 3:
                 for seed in _mixed_pose_seeds(
                     matches[anchor_id].calibration,
                     matches[match_id].calibration,
+                    lock_rotation=lock_rotation,
+                    lock_translation=lock_translation,
                 ):
                     candidate = _refine_rigid_mixed(
                         seed,
@@ -3847,6 +4172,8 @@ def _register_from_relative_pose(
                         matches[anchor_id].calibration,
                         matches[match_id].calibration,
                         known_line_constraints=line_constraints,
+                        lock_rotation=lock_rotation,
+                        lock_translation=lock_translation,
                     )
                     errors: list[float] = []
                     for point_a, point_b, line_obs in line_constraints:
@@ -3893,6 +4220,8 @@ def solve_landmark_sync(
     known_lines: dict[str, tuple[np.ndarray, np.ndarray]] | None = None,
     parallel_pairs: list[tuple[str, str]] | None = None,
     initial_similarities: dict[str, SimilarityTransform] | None = None,
+    lock_rotation: bool = False,
+    lock_translation: bool = False,
 ) -> SyncSolveResult:
     """Register non-anchor matches from 2D correspondences and/or known 3D.
 
@@ -4063,6 +4392,8 @@ def solve_landmark_sync(
         line_observations_by_landmark=line_observations_by_landmark,
         parallel_pairs=parallel_pairs,
         initial_similarities=initial_similarities,
+        lock_rotation=lock_rotation,
+        lock_translation=lock_translation,
     )
     if similarities is None:
         return SyncSolveResult(
@@ -4194,6 +4525,8 @@ def solve_landmark_sync(
             line_constraints,
             known_line_ids=set(known_lines),
             line_segments=line_segments,
+            lock_rotation=lock_rotation,
+            lock_translation=lock_translation,
             max_iterations=ba_iterations,
         )
     )

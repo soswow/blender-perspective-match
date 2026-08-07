@@ -1962,6 +1962,8 @@ def diagnose_sync(context: bpy.types.Context):
         line_observations=line_observations,
         known_lines=known_lines,
         parallel_pairs=parallel_pairs,
+        lock_rotation=bool(space.lock_rotation),
+        lock_translation=bool(space.lock_translation),
     )
     if result.mean_reprojection_px > 8.0 or not result.success:
         result.leave_one_out = sync_module.leave_one_out_landmark_report(
@@ -1974,6 +1976,8 @@ def diagnose_sync(context: bpy.types.Context):
             parallel_pairs=parallel_pairs,
             top_k=5,
             baseline=result if result.per_landmark_rmse_px else None,
+            lock_rotation=bool(space.lock_rotation),
+            lock_translation=bool(space.lock_translation),
         )
     _apply_sync_landmark_diagnostics(context, result)
 
@@ -2063,6 +2067,8 @@ def solve_and_apply_sync(context: bpy.types.Context):
         line_observations=line_observations,
         known_lines=known_lines,
         parallel_pairs=parallel_pairs,
+        lock_rotation=bool(space.lock_rotation),
+        lock_translation=bool(space.lock_translation),
     )
     _apply_sync_landmark_diagnostics(context, result)
     message = result.message
@@ -2148,6 +2154,8 @@ def refine_lenses_and_sync(context: bpy.types.Context):
         known_lines=prep.known_lines,
         parallel_pairs=prep.parallel_pairs,
         fx_span=prep.fx_span,
+        lock_rotation=prep.lock_rotation,
+        lock_translation=prep.lock_translation,
     )
     return apply_lens_refine_result(context, refine_result, prep.root_by_name)
 
@@ -2165,6 +2173,8 @@ class LensRefinePrep:
     anchor_id: str
     fx_span: float
     root_by_name: dict
+    lock_rotation: bool = False
+    lock_translation: bool = False
 
 
 def prepare_lens_refine(context: bpy.types.Context) -> LensRefinePrep:
@@ -2234,6 +2244,8 @@ def prepare_lens_refine(context: bpy.types.Context) -> LensRefinePrep:
         anchor_id=anchor.name,
         fx_span=max(float(space.lens_refine_span_percent), 1.0) / 100.0,
         root_by_name=root_by_name,
+        lock_rotation=bool(space.lock_rotation),
+        lock_translation=bool(space.lock_translation),
     )
 
 

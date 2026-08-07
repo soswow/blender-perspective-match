@@ -231,6 +231,9 @@ def _run_sync(
     known_lines: dict,
     parallel_pairs: list,
     initial_similarities: dict[str, sync_module.SimilarityTransform] | None = None,
+    *,
+    lock_rotation: bool = False,
+    lock_translation: bool = False,
 ) -> sync_module.SyncSolveResult:
     sync_matches = [
         sync_module.SyncMatchInput(match_id=match_id, calibration=calibrations[match_id])
@@ -245,6 +248,8 @@ def _run_sync(
         known_lines=known_lines,
         parallel_pairs=parallel_pairs,
         initial_similarities=initial_similarities,
+        lock_rotation=lock_rotation,
+        lock_translation=lock_translation,
     )
 
 
@@ -266,6 +271,8 @@ def refine_lenses_from_landmarks(
     refine_samples: int = 7,
     couple_pair_limit: int = 3,
     couple_samples: int = 3,
+    lock_rotation: bool = False,
+    lock_translation: bool = False,
     cancel_check=None,
     progress_callback=None,
 ) -> LensRefineResult:
@@ -337,6 +344,8 @@ def refine_lenses_from_landmarks(
             known_lines,
             parallel_pairs,
             initial_similarities,
+            lock_rotation=lock_rotation,
+            lock_translation=lock_translation,
         )
         cost = _joint_cost(
             cals,

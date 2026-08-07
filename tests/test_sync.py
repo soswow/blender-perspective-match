@@ -208,6 +208,67 @@ class LandmarkSyncTests(unittest.TestCase):
         recovered_center = recovered.transform_point(center_private)
         self.assertTrue(np.allclose(recovered_center, shared_center, atol=0.2))
 
+    def test_lock_rotation_and_translation_keeps_identity_empty(self) -> None:
+        """Both locks: cameras stay put; BA only adjusts shared landmarks."""
+        # Cameras already share a Blender frame (identity Empty is correct).
+        matches, _observations, _true_sim, _center, _shared = _synthetic_scene(
+            with_ground=True
+        )
+        shared_center = np.array((4.0, -3.0, 2.5), dtype=np.float64)
+        other_shared = core.Calibration(
+            intrinsics=matches[1].calibration.intrinsics,
+            rotation_w2c=_look_at_rotation(
+                shared_center,
+                np.array((0.5, 0.5, 0.5), dtype=np.float64),
+            ),
+            camera_center=shared_center,
+        )
+        true_landmarks = {
+            "p0": np.array((0.0, 0.0, 0.0), dtype=np.float64),
+            "p1": np.array((2.0, 0.0, 0.0), dtype=np.float64),
+            "p2": np.array((0.0, 2.5, 0.0), dtype=np.float64),
+            "p3": np.array((1.5, 1.0, 0.0), dtype=np.float64),
+            "p4": np.array((1.0, 0.5, 2.0), dtype=np.float64),
+            "p5": np.array((-0.5, 1.2, 1.5), dtype=np.float64),
+            "p6": np.array((0.8, -0.4, 0.9), dtype=np.float64),
+        }
+        ground_ids = {"p0", "p1", "p2", "p3"}
+        matches = [
+            matches[0],
+            sync.SyncMatchInput("other", other_shared),
+        ]
+        observations = []
+        for landmark_id, point in true_landmarks.items():
+            for match_id, calibration in (
+                ("anchor", matches[0].calibration),
+                ("other", other_shared),
+            ):
+                u_coord, v_coord = _project(point, calibration)
+                observations.append(
+                    sync.SyncObservation(
+                        match_id,
+                        landmark_id,
+                        u_coord,
+                        v_coord,
+                        on_ground=landmark_id in ground_ids and match_id == "anchor",
+                        landmark_name=landmark_id,
+                    )
+                )
+        result = sync.solve_landmark_sync(
+            matches,
+            observations,
+            anchor_id="anchor",
+            lock_rotation=True,
+            lock_translation=True,
+        )
+        self.assertTrue(result.success, result.message)
+        other = result.similarities["other"]
+        self.assertTrue(np.allclose(other.rotation, np.eye(3), atol=1.0e-9))
+        self.assertTrue(np.allclose(other.translation, np.zeros(3), atol=1.0e-9))
+        self.assertAlmostEqual(other.scale, 1.0, places=6)
+        self.assertGreaterEqual(len(result.landmarks), 5)
+        self.assertLess(result.mean_reprojection_px, 2.0)
+
     def test_leave_one_out_flags_outlier_landmark(self) -> None:
         """Diagnose helper should show removing a bad pick improves RMSE."""
         matches, observations, _true_sim, _center, _shared = _synthetic_scene(

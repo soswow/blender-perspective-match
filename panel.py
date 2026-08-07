@@ -608,6 +608,11 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
         row.operator("perspective_match.solve_sync", icon="FILE_REFRESH")
         row.operator("perspective_match.diagnose_sync", text="Diagnose", icon="INFO")
         row.operator("perspective_match.clear_sync", text="Clear", icon="X")
+        # Full-width rows — avoid property-split pushing controls to mid-panel.
+        lock_row = sync_body.row(align=True)
+        lock_row.use_property_split = False
+        lock_row.prop(workspace, "lock_rotation", text="Lock Rotation")
+        lock_row.prop(workspace, "lock_translation", text="Lock Translation")
         refine_row = sync_body.row(align=True)
         if operators.lens_refine_is_running():
             progress = refine_row.row(align=True)
@@ -633,6 +638,7 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             span.ui_units_x = 4
             span.prop(workspace, "lens_refine_span_percent", text="%")
         empties_row = sync_body.row(align=True)
+        empties_row.use_property_split = False
         empties_row.prop(workspace, "show_landmark_empties", text="Landmark Empties")
         size_row = empties_row.row(align=True)
         size_row.enabled = workspace.show_landmark_empties

@@ -720,6 +720,28 @@ class PMWorkspace(bpy.types.PropertyGroup):
         subtype="FACTOR",
         options={"SKIP_SAVE"},
     )
+    lock_rotation: bpy.props.BoolProperty(
+        name="Lock Rotation",
+        description=(
+            "When solving sync, keep each match Empty's rotation fixed (identity) "
+            "and only solve translation and scale to fit landmarks. "
+            "With Lock Translation also on, cameras stay put and only 3D "
+            "landmark positions are adjusted"
+        ),
+        default=False,
+        update=_redraw,
+    )
+    lock_translation: bpy.props.BoolProperty(
+        name="Lock Translation",
+        description=(
+            "When solving sync, keep each match Empty's translation fixed "
+            "(cameras stay in place) and only solve rotation and scale. "
+            "With Lock Rotation also on, cameras stay put and only 3D "
+            "landmark positions are adjusted"
+        ),
+        default=False,
+        update=_redraw,
+    )
     sync_status: bpy.props.StringProperty(default="")
     work_mode: bpy.props.EnumProperty(
         name="Tool",
