@@ -34,6 +34,9 @@ _GUIDE_LINE_THICKNESS = 0.9
 _ERROR_LABEL_INSET = 0.12
 _ERROR_LABEL_OFFSET_PX = 8.0
 _ERROR_LABEL_FONT_SIZE = 11.0
+# Landmark name labels sit beside the pick / segment midpoint.
+_LANDMARK_LABEL_OFFSET_PX = 10.0
+_LANDMARK_LABEL_FONT_SIZE = 12.0
 
 _draw_handle = None
 _preview: dict[str, object] = {
@@ -440,12 +443,36 @@ def _error_label_anchor(point_a: Vector, point_b: Vector) -> Vector:
 
 def _draw_error_label(position: Vector, text: str, opacity: float) -> None:
     """Draw a small shadowed residual number in POST_PIXEL space."""
+    _draw_overlay_label(
+        position,
+        text,
+        opacity,
+        font_size=_ERROR_LABEL_FONT_SIZE,
+        align="center",
+    )
+
+
+def _draw_overlay_label(
+    position: Vector,
+    text: str,
+    opacity: float,
+    *,
+    font_size: float,
+    align: str = "center",
+) -> None:
+    """Draw shadowed POST_PIXEL text; align is center or left of position."""
+    if not text:
+        return
     font_id = 0
-    blf.size(font_id, _ERROR_LABEL_FONT_SIZE)
+    blf.size(font_id, font_size)
     width, height = blf.dimensions(font_id, text)
+    if align == "left":
+        x = float(position.x)
+    else:
+        x = float(position.x) - width * 0.5
     blf.position(
         font_id,
-        float(position.x) - width * 0.5,
+        x,
         float(position.y) - height * 0.35,
         0.0,
     )
@@ -696,6 +723,41 @@ def _draw_landmarks(context: bpy.types.Context, fill_shader, settings) -> None:
         _draw_crosshair(fill_shader, point, color, 9.0 if is_active else 6.0)
 
 
+def _draw_landmark_labels(context: bpy.types.Context, settings) -> None:
+    """Name labels beside each pick in the active match (when toggled on)."""
+    space = properties.workspace(context)
+    if not space.show_landmark_overlay or not space.show_landmark_labels:
+        return
+    root = properties.active_root(context)
+    if root is None:
+        return
+    opacity = settings.overlay_opacity
+    for landmark in space.landmarks:
+        observation = scene.observation_for_match(landmark, root)
+        if observation is None or not observation.is_set:
+            continue
+        draw_opacity = opacity * (0.35 if not landmark.use_in_sync else 1.0)
+        if landmark.kind == "LINE":
+            point_a = scene.image_to_region(context, observation.x, observation.y)
+            point_b = scene.image_to_region(context, observation.x2, observation.y2)
+            if point_a is None or point_b is None:
+                continue
+            anchor = (point_a + point_b) * 0.5
+        else:
+            anchor = scene.image_to_region(context, observation.x, observation.y)
+            if anchor is None:
+                continue
+        _draw_overlay_label(
+            anchor + Vector((_LANDMARK_LABEL_OFFSET_PX, _LANDMARK_LABEL_OFFSET_PX)),
+            landmark.name or "Landmark",
+            draw_opacity,
+            font_size=_LANDMARK_LABEL_FONT_SIZE,
+            align="left",
+        )
+    # blf leaves blend/shader state dirty; restore so later GPU draws keep alpha.
+    gpu.state.blend_set("ALPHA")
+
+
 def _draw_preview(context: bpy.types.Context, settings) -> None:
     if (
         context.area is None
@@ -743,7 +805,8 @@ def _draw_callback() -> None:
         _draw_placement(context, fill_shader, settings)
         _draw_landmarks(context, fill_shader, settings)
         _draw_preview(context, settings)
-        # After GPU geometry so blf cannot wipe landmark alpha blending.
+        # After GPU geometry so blf cannot wipe landmark / preview alpha blending.
+        _draw_landmark_labels(context, settings)
         _draw_vp_error_labels(context, settings)
     except Exception:
         # Keep the handler alive — an uncaught error can stop POST_PIXEL draws.

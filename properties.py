@@ -666,6 +666,12 @@ class PMWorkspace(bpy.types.PropertyGroup):
         default=False,
         options={"SKIP_SAVE"},
     )
+    show_landmark_labels: bpy.props.BoolProperty(
+        name="Landmark Labels",
+        description="Show each landmark's name next to its pick on the reference plate",
+        default=False,
+        update=_redraw,
+    )
     landmark_pick_confidence: bpy.props.EnumProperty(
         name="Pick Confidence",
         description="Confidence applied to the next landmark pick in the active match",

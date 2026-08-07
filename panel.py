@@ -489,13 +489,20 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             icon="IMPORT",
         )
         list_column.operator("perspective_match.remove_landmark", text="", icon="REMOVE")
-        # Separate control group: display order only (does not reorder storage).
+        # Separate control group: list display / overlay helpers (not storage).
         list_column.separator()
         list_column.prop(
             workspace,
             "landmarks_sort_alphabetical",
             text="",
             icon="SORTALPHA",
+            toggle=True,
+        )
+        list_column.prop(
+            workspace,
+            "show_landmark_labels",
+            text="",
+            icon="FONTPREVIEW",
             toggle=True,
         )
         list_column.operator(
