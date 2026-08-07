@@ -10,6 +10,7 @@ The extension is a native port of the manual workflow from Perspective Match Stu
 - Switch the active match from a dropdown to edit that session and view through its camera.
 - Remember each match’s last camera-view zoom and pan when switching or saving.
 - Load a still directly as a Blender camera background on the active match only.
+- Replace the plate on an existing match without clearing VP lines, origin, or landmarks (same pixel size).
 - Choose 1-, 2-, or 3-point perspective.
 - Draw, select, edit, and delete axis-colored VP segments in camera view.
 - Optionally label each VP segment with its residual (px) to the current camera.
@@ -19,6 +20,7 @@ The extension is a native port of the manual workflow from Perspective Match Stu
 - Robust length-weighted VP fitting with Huber outlier reduction.
 - Solve camera orientation and, when constrained, focal length from orthogonal VPs.
 - Lock and edit horizontal FOV manually, including underconstrained 1-point shots.
+- Import ROS ``camera_info`` YAML intrinsics (**Import YAML**): locks Manual FOV from ``fx``, sets principal point from ``cx``/``cy``, and applies ``fitzgibbon_lambda`` when present. Plumb-bob ``D`` is skipped.
 - Solve an off-center principal point from three finite orthogonal VPs, or set it with **Manual PP Offset** (drag or type offsets; violet crosshair when off-center).
 - Show per-plane FOV estimates, angular consistency, and VP-line RMSE diagnostics.
 - Pick a ground origin so the matched camera sits relative to world origin.
@@ -108,6 +110,8 @@ With a match active, choose **Open Image** or **Import Project** (`.pmproj`). Th
 
 After bind, the hierarchy is renamed from `PM_Match_###` to `PM_<image stem>` when that name is free. You can rename again anytime with the rename button in **Match Cameras**. The camera becomes the scene camera, the still is attached with **Stretch** frame mapping, and render dimensions match the image.
 
+Once a still is loaded, **Import Project** is replaced by **Replace Image**: same pixel size only, keeps VP lines, origin, calibration, and landmarks (drops view-lighting / undistorted caches). **Open Image** still does a full rebind and clears that match’s edit state.
+
 ### 2. Choose perspective
 
 - **1 Point:** draw Z verticals and Y depth lines. FOV stays manual.
@@ -131,7 +135,7 @@ Axis mapping matches Blender’s gizmos:
 
 While the tool is active, left-clicks in the 3D View belong to Perspective Match (object selection is blocked). Clicking **Draw / Edit Lines** or **Pick Origin** again refreshes the active tool instead of getting stuck. If you orbit out of camera view, the next line/origin click switches back to the match camera.
 
-The camera refines whenever enough required lines exist. **Auto from VPs** allows orthogonal VP pairs to solve FOV. Enable **Manual FOV**, set the horizontal angle, and apply it to lock focal length while continuing to solve orientation.
+The camera refines whenever enough required lines exist. **Auto from VPs** allows orthogonal VP pairs to solve FOV. Enable **Manual FOV**, set the horizontal angle, and apply it to lock focal length while continuing to solve orientation. **Import YAML** loads a ROS `camera_info` file (same layout as OpenCV / `camera_calibration_parsers`): it locks Manual FOV from `fx`, sets the principal point from `cx`/`cy`, applies optional project-extension `fitzgibbon_lambda` as Division λ (and builds/shows the undistorted plate when λ ≠ 0, turning **Estimate Distortion** on without re-fitting λ from VP lines), and scales K if the YAML resolution differs from the loaded still. Brown–Conrady / `plumb_bob` coefficients are still skipped.
 
 **Manual PP Offset** (Camera section): drag the principal point on the plate, or click the pencil icon beside it to type **Offset X / Offset Y** in pixels from image center (same values as the PP offset readout; OK applies, Cancel discards). A **violet** crosshair marks it whenever it is off-center (and always while the drag tool is active). While dragging, orientation is rebuilt from VP lines on a short throttle (~12 Hz) so the mesh tracks the same “snap” you get on release; release does a final rebuild. **Esc** exits the drag tool like other tools (cancels an in-progress drag). **Reset Camera** recenters PP.
 

@@ -26,6 +26,7 @@ _RELOAD_SUBMODULES = (
     "scene",
     "distortion",
     "project_io",
+    "ros_camera_info",
     "overlay",
     "operators",
     "panel",

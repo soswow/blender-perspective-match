@@ -345,13 +345,8 @@ def rename_match(
     return root
 
 
-def _reset_session_edit_state(session: properties.PMSession) -> None:
-    session.lines.clear()
-    session.selected_line_index = -1
-    session.origin_is_set = False
-    session.project_path = ""
-    session.source_session_json = ""
-    clear_similarity_on_session(session)
+def _clear_derived_plates(session: properties.PMSession) -> None:
+    """Drop view-lighting / undistorted caches without touching lines or origin."""
     invalidate_undistorted_cache(session)
     cached_view = session.view_image
     session.view_lighting_applied = False
@@ -363,6 +358,16 @@ def _reset_session_edit_state(session: properties.PMSession) -> None:
     session.view_baked_contrast = 1.0
     if cached_view is not None and cached_view.users == 0:
         bpy.data.images.remove(cached_view)
+
+
+def _reset_session_edit_state(session: properties.PMSession) -> None:
+    session.lines.clear()
+    session.selected_line_index = -1
+    session.origin_is_set = False
+    session.project_path = ""
+    session.source_session_json = ""
+    clear_similarity_on_session(session)
+    _clear_derived_plates(session)
     session.error = ""
 
 
@@ -426,6 +431,62 @@ def bind_reference_image(context: bpy.types.Context, image_path: str) -> bpy.typ
 
 # Compatibility alias for older call sites / smoke tests.
 setup_reference_image = bind_reference_image
+
+
+def replace_reference_image(
+    context: bpy.types.Context, image_path: str
+) -> bpy.types.Object:
+    """Swap the still on the active match; keep VP lines, origin, calibration, landmarks.
+
+    Requires the same pixel dimensions as the current plate so existing image-space
+    picks stay valid. Derived plates (view lighting / undistorted) are discarded.
+    """
+    root = properties.active_root(context)
+    if root is None:
+        raise ValueError("Create or activate a match camera first")
+    session = root.pm_session
+    if session.image is None:
+        raise ValueError("No reference image to replace — use Open Image first")
+    camera_object = session.camera_object
+    if camera_object is None or camera_object.type != "CAMERA":
+        raise ValueError("Active match has no camera")
+
+    absolute_path = str(Path(bpy.path.abspath(image_path)).expanduser().resolve())
+    image = bpy.data.images.load(absolute_path, check_existing=True)
+    width, height = int(image.size[0]), int(image.size[1])
+    if width <= 0 or height <= 0:
+        raise ValueError("The selected image has no readable pixel dimensions")
+    if width != int(session.image_width) or height != int(session.image_height):
+        raise ValueError(
+            f"New image is {width}×{height}; current plate is "
+            f"{int(session.image_width)}×{int(session.image_height)}. "
+            "Replace Image needs the same size — use Open Image to start over."
+        )
+
+    _clear_derived_plates(session)
+    session.error = ""
+
+    camera_data = camera_object.data
+    camera_data.show_background_images = True
+    if len(camera_data.background_images) == 0:
+        background = camera_data.background_images.new()
+        background.alpha = 1.0
+        background.display_depth = "BACK"
+        background.frame_method = "STRETCH"
+    else:
+        background = camera_data.background_images[0]
+    background.image = image
+    background.show_background_image = True
+    if hasattr(image, "use_view_as_render"):
+        image.use_view_as_render = True
+
+    session.image = image
+    session.image_path = absolute_path
+    # Keep width/height, calibration, lines, origin, and sync transform.
+    session.status = f"Replaced plate with {Path(absolute_path).name} (lines kept)"
+    refresh_background_projection(context)
+    properties.tag_viewport_redraw(context)
+    return camera_object
 
 
 def apply_camera(
@@ -510,8 +571,16 @@ def private_camera_matrix(calibration: core.Calibration) -> Matrix:
     return matrix_world
 
 
-def refine_match(context: bpy.types.Context) -> core.Calibration:
-    """Refine and apply camera state from all current VP lines."""
+def refine_match(
+    context: bpy.types.Context,
+    *,
+    estimate_distortion: bool | None = None,
+) -> core.Calibration:
+    """Refine and apply camera state from all current VP lines.
+
+    ``estimate_distortion`` overrides the session toggle when not None (used
+    when importing a known Fitzgibbon λ so VP refine does not re-fit it).
+    """
     settings = properties.active_session(context)
     if settings is None:
         raise ValueError("Create or activate a match camera first")
@@ -529,13 +598,18 @@ def refine_match(context: bpy.types.Context) -> core.Calibration:
         intrinsics.fx = focal
         intrinsics.fy = focal
 
+    use_estimate_distortion = (
+        settings.estimate_distortion
+        if estimate_distortion is None
+        else bool(estimate_distortion)
+    )
     calibration = core.refine_camera(
         line_bundles,
         intrinsics,
         lock_focal=settings.lock_focal or settings.vp_mode == "1",
         estimate_principal_point=settings.vp_mode == "3" and not settings.lock_focal,
         # λ can be estimated at a locked Manual FOV; only PP stays auto-only.
-        estimate_distortion=settings.estimate_distortion,
+        estimate_distortion=use_estimate_distortion,
         initial_division_lambda=previous_calibration.division_lambda,
     )
 
@@ -644,6 +718,103 @@ def apply_manual_fov(context: bpy.types.Context) -> None:
         reapply_placement(context)
     settings.status = f"Manual HFOV {settings.hfov_degrees:.2f}°"
     properties.tag_viewport_redraw(context)
+
+
+def apply_ros_camera_info_yaml(context: bpy.types.Context, filepath: str) -> str:
+    """Import ROS camera_info YAML: HFOV, principal point, optional Fitzgibbon λ.
+
+    Brown–Conrady / plumb_bob coefficients are ignored. When ``fitzgibbon_lambda``
+    is present it becomes ``division_lambda`` (resolution-invariant in the
+    normalized plane — not scaled with image size). A non-zero imported λ also
+    builds/shows the undistorted plate (Estimate Distortion on, without re-fitting λ).
+    """
+    from . import distortion, ros_camera_info
+
+    settings = properties.active_session(context)
+    if settings is None:
+        raise ValueError("Create or activate a match camera first")
+    if settings.image is None:
+        raise ValueError("Load a reference image first")
+
+    text = Path(filepath).read_text(encoding="utf-8")
+    info = ros_camera_info.parse_ros_camera_info_yaml(text)
+    fx, fy, cx, cy, scaled = ros_camera_info.scale_intrinsics_to_image(
+        info,
+        int(settings.image_width),
+        int(settings.image_height),
+    )
+
+    previous = calibration_from_settings(settings)
+    settings.lock_focal = True
+    settings.fx = float(fx)
+    settings.fy = float(fy)
+    settings.cx = float(cx)
+    settings.cy = float(cy)
+    settings.hfov_degrees = core.hfov_from_focal(fx, max(int(settings.image_width), 1))
+
+    imported_lambda = info.fitzgibbon_lambda is not None
+    if imported_lambda:
+        settings.division_lambda = float(info.fitzgibbon_lambda)
+        settings.lambda_saturated = False
+
+    line_bundles = line_bundles_from_settings(settings)
+    ready_axes = sum(1 for segments in line_bundles.values() if len(segments) >= 2)
+    if ready_axes >= 2:
+        # Locked FOV + imported PP; keep YAML λ (do not re-fit from VP lines).
+        refine_match(
+            context,
+            estimate_distortion=False if imported_lambda else None,
+        )
+    else:
+        calibration = calibration_from_settings(settings)
+        if _intrinsics_or_distortion_changed(previous, calibration):
+            invalidate_undistorted_cache(settings)
+        apply_camera(context.scene, settings, calibration)
+        if any(segments for segments in line_bundles.values()):
+            _update_diagnostics(settings, line_bundles, calibration)
+        if settings.origin_is_set:
+            reapply_placement(context)
+
+    # Undistorted background: only sync/generate after intrinsics + λ are final.
+    if imported_lambda and abs(settings.division_lambda) > 1.0e-8:
+        # Turn on the toggle without running its "re-estimate from VPs" callback.
+        properties._syncing_estimate_distortion = True
+        try:
+            settings.estimate_distortion = True
+        finally:
+            properties._syncing_estimate_distortion = False
+        try:
+            distortion.generate_undistorted_plate(context)
+        except Exception as error:
+            settings.status = f"Imported λ; plate failed: {error}"
+            print(f"Perspective Match: undistorted plate failed: {error}")
+    else:
+        distortion.sync_undistorted_plate_after_refine(context)
+
+    offset_x = settings.cx - settings.image_width * 0.5
+    offset_y = settings.cy - settings.image_height * 0.5
+    label = info.camera_name or Path(filepath).name
+    parts = [
+        f"Imported {label}",
+        f"HFOV {settings.hfov_degrees:.2f}°",
+        f"PP {offset_x:+.1f},{offset_y:+.1f} px",
+    ]
+    if imported_lambda:
+        parts.append(f"λ {settings.division_lambda:.5f}")
+    if scaled:
+        parts.append(
+            f"scaled from {info.image_width}×{info.image_height}"
+        )
+    # plumb_bob k1… is not Fitzgibbon λ.
+    if info.distortion_coefficients and any(
+        abs(value) > 1.0e-12 for value in info.distortion_coefficients
+    ):
+        parts.append("plumb_bob D skipped")
+    message = " · ".join(parts)
+    settings.status = message
+    settings.error = ""
+    properties.tag_viewport_redraw(context)
+    return message
 
 
 def _intrinsics_or_distortion_changed(

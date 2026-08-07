@@ -251,6 +251,38 @@ class PM_OT_load_image(bpy.types.Operator, ImportHelper):
         return {"FINISHED"}
 
 
+class PM_OT_replace_image(bpy.types.Operator, ImportHelper):
+    """Replace the active match still without clearing lines or landmarks."""
+
+    bl_idname = "perspective_match.replace_image"
+    bl_label = "Replace Reference Image"
+    bl_description = (
+        "Swap the reference still on the active match. Keeps VP lines, origin, "
+        "calibration, and landmarks. New image must match the current pixel size"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    filename_ext = ""
+    filter_glob: bpy.props.StringProperty(
+        default="*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.bmp;*.exr;*.webp",
+        options={"HIDDEN"},
+    )
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        settings = properties.active_session(context)
+        return settings is not None and settings.image is not None
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        self._context_scene = context.scene
+        try:
+            scene.replace_reference_image(context, self.filepath)
+        except Exception as error:
+            return _report_exception(self, error)
+        self.report({"INFO"}, f"Replaced with {Path(self.filepath).name}")
+        return {"FINISHED"}
+
+
 class PM_OT_import_project(bpy.types.Operator, ImportHelper):
     """Import a desktop-compatible Perspective Match project."""
 
@@ -269,6 +301,38 @@ class PM_OT_import_project(bpy.types.Operator, ImportHelper):
         except Exception as error:
             return _report_exception(self, error)
         self.report({"INFO"}, f"Imported {Path(self.filepath).name}")
+        return {"FINISHED"}
+
+
+class PM_OT_import_ros_yaml(bpy.types.Operator, ImportHelper):
+    """Import ROS camera_info YAML intrinsics into the active match."""
+
+    bl_idname = "perspective_match.import_ros_yaml"
+    bl_label = "Import YAML"
+    bl_description = (
+        "Import ROS camera_info YAML: lock Manual FOV from fx, set principal "
+        "point from cx/cy, and apply fitzgibbon_lambda when present. "
+        "Brown–Conrady distortion coefficients are skipped"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    filename_ext = ".yaml"
+    filter_glob: bpy.props.StringProperty(
+        default="*.yaml;*.yml",
+        options={"HIDDEN"},
+    )
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        settings = _session(context)
+        return settings is not None and settings.image is not None
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        try:
+            message = scene.apply_ros_camera_info_yaml(context, self.filepath)
+        except Exception as error:
+            return _report_exception(self, error)
+        self.report({"INFO"}, message[:255] if len(message) > 255 else message)
         return {"FINISHED"}
 
 
@@ -1875,7 +1939,9 @@ CLASSES = (
     PM_OT_rename_match,
     PM_OT_reload,
     PM_OT_load_image,
+    PM_OT_replace_image,
     PM_OT_import_project,
+    PM_OT_import_ros_yaml,
     PM_OT_refine,
     PM_OT_camera_view,
     PM_OT_apply_manual_fov,

@@ -197,6 +197,33 @@ def main() -> None:
             scene.refine_match(bpy.context)
             assert settings.origin_is_set
 
+            # Replace Image keeps lines/origin when dimensions match.
+            replacement_path = _write_png(
+                temporary_path,
+                "reference_replaced",
+                800,
+                600,
+                (0.05, 0.35, 0.15, 1.0),
+            )
+            line_count_before = len(settings.lines)
+            scene.replace_reference_image(bpy.context, str(replacement_path))
+            assert settings.image_path.endswith("reference_replaced.png")
+            assert len(settings.lines) == line_count_before
+            assert settings.origin_is_set
+            assert settings.origin_image[0] == 400.0
+            mismatched = _write_png(
+                temporary_path,
+                "reference_wrong_size",
+                640,
+                480,
+                (0.2, 0.2, 0.2, 1.0),
+            )
+            try:
+                scene.replace_reference_image(bpy.context, str(mismatched))
+                raise AssertionError("replace should reject size mismatch")
+            except ValueError as error:
+                assert "same size" in str(error).lower() or "×" in str(error)
+
             # Second match must keep the first intact.
             image_b_path = _write_png(
                 temporary_path,

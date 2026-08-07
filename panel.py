@@ -199,16 +199,21 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             row.operator(
                 "perspective_match.load_image", text="Open Image", icon="FILE_IMAGE"
             )
-            row.operator(
-                "perspective_match.import_project",
-                text="Import Project",
-                icon="FILE_FOLDER",
-            )
             if settings.image is None:
+                row.operator(
+                    "perspective_match.import_project",
+                    text="Import Project",
+                    icon="FILE_FOLDER",
+                )
                 image.label(
                     text="Load a still or .pmproj into this match", icon="INFO"
                 )
             else:
+                row.operator(
+                    "perspective_match.replace_image",
+                    text="Replace Image",
+                    icon="FILE_REFRESH",
+                )
                 image.label(text=Path(settings.image_path).name, icon="CHECKMARK")
                 image.label(
                     text=f"{settings.image_width} × {settings.image_height} px"
@@ -288,10 +293,18 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
 
         _header, camera = _section(layout, "PM_camera", "5. Camera", "CAMERA_DATA")
         if camera is not None:
-            focal_row = camera.row(align=True)
+            # Full-width toolbar: property_split would shrink buttons to the value column.
+            camera_actions = camera.column(align=True)
+            camera_actions.use_property_split = False
+            focal_row = camera_actions.row(align=True)
             focal_row.prop(settings, "lock_focal", text="Manual FOV", toggle=True)
             focal_row.operator(
                 "perspective_match.refine", text="Auto from VPs", icon="FILE_REFRESH"
+            )
+            focal_row.operator(
+                "perspective_match.import_ros_yaml",
+                text="Import YAML",
+                icon="IMPORT",
             )
             manual_column = camera.column(align=True)
             manual_column.enabled = settings.lock_focal or settings.vp_mode == "1"
