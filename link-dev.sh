@@ -21,6 +21,9 @@ if [ ! -f "${SCRIPT_DIR}/blender_manifest.toml" ] || [ ! -f "${SCRIPT_DIR}/__ini
     exit 1
 fi
 
+# Ensure OpenCV wheels exist so Blender can extract them on enable.
+"${SCRIPT_DIR}/fetch-wheels.sh"
+
 mkdir -p "$EXT_ROOT"
 
 # Replace a prior ZIP install or stale link with a live checkout.
@@ -36,7 +39,6 @@ fi
 ln -s "$SCRIPT_DIR" "$TARGET"
 
 printf 'Linked:\n  %s\n→ %s\n\n' "$TARGET" "$SCRIPT_DIR"
-printf 'In Blender: enable Perspective Match once if needed, then after edits use\n'
-printf '  F3 → Reload Scripts\n'
-printf '(or Preferences → Extensions → Refresh Local). Restart Blender if a modal\n'
-printf 'draw tool leaves stale handlers.\n'
+printf 'In Blender: disable then re-enable Perspective Match once so wheels\n'
+printf '(OpenCV) are extracted, then after edits use Reload Perspective Match.\n'
+printf 'Restart Blender if a modal draw tool leaves stale handlers.\n'

@@ -13,7 +13,7 @@ import bpy
 from bpy_extras.io_utils import ImportHelper
 from mathutils import Vector
 
-from . import core, distortion, overlay, project_io, properties, scene
+from . import apriltag_detect, core, distortion, overlay, project_io, properties, scene
 
 
 def _session(context: bpy.types.Context):
@@ -1579,6 +1579,58 @@ class PM_OT_remove_landmark(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class PM_OT_find_apriltag_landmarks(bpy.types.Operator):
+    """Detect AprilTag 25h9 markers and assign them to sync landmarks."""
+
+    bl_idname = "perspective_match.find_apriltag_landmarks"
+    bl_label = "Find AprilTags"
+    bl_description = (
+        "Scan the active match still for AprilTag 25h9 markers. "
+        "Assign each tag centre to a landmark named idNN-25h9 "
+        "(create the landmark when missing)"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        settings = properties.active_session(context)
+        return (
+            settings is not None
+            and settings.image is not None
+            and properties.active_root(context) is not None
+        )
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        try:
+            result = apriltag_detect.find_and_assign_apriltags(context)
+        except apriltag_detect.AprilTagDependencyError as error:
+            return _report_exception(self, error)
+        except Exception as error:
+            return _report_exception(self, error)
+
+        settings = properties.active_session(context)
+        if result.detected == 0:
+            message = "No AprilTag 25h9 markers found in this still"
+            if settings is not None:
+                settings.status = message
+            self.report({"WARNING"}, message)
+            return {"FINISHED"}
+
+        parts = [f"Found {result.detected}"]
+        if result.updated:
+            parts.append(f"updated {result.updated}")
+        if result.created:
+            parts.append(f"created {result.created}")
+        if result.skipped:
+            parts.append(f"skipped {result.skipped} line")
+        message = " · ".join(parts)
+        if settings is not None:
+            settings.status = message
+            settings.error = ""
+        self.report({"INFO"}, message)
+        return {"FINISHED"}
+
+
 class PM_OT_duplicate_landmark(bpy.types.Operator):
     """Duplicate the active landmark without picks, Known 3D links, or solved positions."""
 
@@ -2009,6 +2061,7 @@ CLASSES = (
     PM_OT_landmark_use_selected,
     PM_OT_landmark_clear_known,
     PM_OT_remove_landmark,
+    PM_OT_find_apriltag_landmarks,
     PM_OT_duplicate_landmark,
     PM_OT_clear_landmark_observation,
     PM_OT_solve_sync,

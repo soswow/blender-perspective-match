@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "match_perspective"
-version = "0.3.5"
+version = "0.3.6"
 name = "Perspective Match"
 tagline = "Match a Blender camera to a reference image"
 maintainer = "Aleksandr 'Sasha' Motsjonov"
@@ -9,11 +9,23 @@ type = "add-on"
 
 blender_version_min = "5.1.0"
 
+# Platform-specific OpenCV wheels; build with --split-platforms so each zip
+# only embeds the matching binary (~50–65 MB), not all four.
+platforms = ["windows-x64", "macos-arm64", "macos-x64", "linux-x64"]
+
 license = [
   "SPDX:GPL-3.0-or-later",
 ]
 
 tags = ["3D View", "Camera"]
+
+# OpenCV with aruco (AprilTag 25h9). NumPy is not listed — Blender already ships it.
+wheels = [
+  "./wheels/opencv_contrib_python_headless-5.0.0.93-cp37-abi3-macosx_13_0_arm64.whl",
+  "./wheels/opencv_contrib_python_headless-5.0.0.93-cp37-abi3-macosx_14_0_x86_64.whl",
+  "./wheels/opencv_contrib_python_headless-5.0.0.93-cp37-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+  "./wheels/opencv_contrib_python_headless-5.0.0.93-cp37-abi3-win_amd64.whl",
+]
 
 [permissions]
 files = "Import images/projects and write view / undistorted PNG plates"
@@ -25,7 +37,10 @@ paths_exclude_pattern = [
   "/*.zip",
   "/validate_addon.py",
   "/build-extension.sh",
+  "/fetch-wheels.sh",
   "/link-dev.sh",
   "/tests/",
   "/TODOs.md",
+  "/wheels/README.md",
+  "/tools/",
 ]

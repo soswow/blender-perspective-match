@@ -497,6 +497,11 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             text="",
             icon="IMPORT",
         )
+        list_column.operator(
+            "perspective_match.find_apriltag_landmarks",
+            text="",
+            icon="TRACKING",
+        )
         list_column.operator("perspective_match.remove_landmark", text="", icon="REMOVE")
         # Separate control group: list display / overlay helpers (not storage).
         list_column.separator()

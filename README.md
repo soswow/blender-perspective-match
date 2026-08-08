@@ -2,7 +2,7 @@
 
 Perspective Match is a Blender 5.1 extension for matching perspective cameras to stills without leaving Blender. Keep several matches in one `.blend`, draw colored vanishing-point line bundles in camera view, solve each camera independently, pick a world origin on the ground plane, and optionally synchronise matches into one shared space with a landmark graph.
 
-The extension is a native port of the manual workflow from Perspective Match Studio. It does not require Electron, Node.js, a Python sidecar, PyTorch, GeoCalib, OpenCV, or network access.
+The extension is a native port of the manual workflow from Perspective Match Studio. It does not require Electron, Node.js, a Python sidecar, PyTorch, GeoCalib, or network access. Core matching uses only NumPy (bundled with Blender). **Find AprilTags** ships OpenCV (aruco) as a bundled wheel.
 
 ## Features
 
@@ -25,6 +25,7 @@ The extension is a native port of the manual workflow from Perspective Match Stu
 - Show per-plane FOV estimates, angular consistency, and VP-line RMSE diagnostics.
 - Pick a ground origin so the matched camera sits relative to world origin.
 - Synchronise multiple matched cameras into one shared world with a landmark graph: 2D↔2D picks and/or **Known 3D** Blender objects (Empties at verts on a modeled edge), optional On Ground, choose an anchor, solve similarities onto match root Empties.
+- Detect printed **AprilTag 25h9** markers in the active still and auto-create / update landmarks named `idNN-25h9` (OpenCV bundled as a wheel).
 - Estimate Fitzgibbon one-parameter radial distortion from three or more concurrent segments.
 - With **Estimate Distortion**, automatically generate and show an expanded undistorted PNG (NumPy only—no OpenCV).
 - Apply display-only exposure/contrast to a sibling ``*-pm-view.png`` plate (undistorted uses the same lit image).
@@ -35,7 +36,16 @@ The extension is a native port of the manual workflow from Perspective Match Stu
 - Blender 5.1 or newer.
 - A reference image with clear straight edges for the VP workflow.
 
-The extension uses the NumPy bundled with Blender. It has no third-party runtime packages.
+The extension uses the NumPy bundled with Blender. **Find AprilTags** bundles `opencv-contrib-python-headless` as a platform wheel (extracted on install / enable). No manual `pip install` into Blender’s Python.
+
+Wheels are **not** stored in git (~50–65 MB each). Before building or linking for development:
+
+```sh
+./fetch-wheels.sh
+```
+
+`./build-extension.sh` and `./link-dev.sh` call that for you. Release zips are built with `--split-platforms` so each OS package only embeds its own OpenCV binary.
+
 
 ## Installation
 
@@ -65,7 +75,7 @@ Point Blender's installed extension at this git checkout with a symlink (no ZIP 
 ./link-dev.sh
 ```
 
-That replaces `~/Library/Application Support/Blender/5.1/extensions/user_default/match_perspective` with a link to this repo. Enable **Perspective Match** once if it is not already on.
+That replaces `~/Library/Application Support/Blender/5.1/extensions/user_default/match_perspective` with a link to this repo (and downloads OpenCV wheels if missing). Enable **Perspective Match** once if it is not already on — **disable then re-enable** after the first link so Blender extracts the OpenCV wheel.
 
 Daily loop:
 
@@ -153,8 +163,10 @@ When several matches show the same scene, register them into one Blender world:
 
 1. Match each still on its own (VP + origin). Origins do **not** need to match.
 2. Choose an **Anchor** match — that world is shared space. Each match has **Enable sync for current match** (on by default) at the top of Sync Matches; turn it off to exclude that still from Solve Sync / Diagnose / Refine Lenses (the rest of the sync UI hides while that match is active).
-3. Add landmarks for features visible in two or more stills (≥5 shared 2D picks), **or** link **Known 3D** Blender objects (≥3) and pick them in the other stills. Each landmark keeps a stable `item_id` plus a `creation_index` (add order). The **A–Z** toggle beside the list (below + / line / import / −) is a depressed/undepressed control: on = alphabetical by name, off = original add order. Sort only changes the list display — not storage order. The **font** toggle under A–Z shows each landmark's name next to its pick on the plate (off by default). The **Duplicate** button under that copies type / On Ground / Use in Sync (and sets Pick Confidence from existing picks) but clears Known 3D links, parallel links, picks, and solved positions. Uncheck **Use in Sync** (list checkbox or detail prop) to exclude a landmark from Solve Sync / Diagnose without deleting its picks — useful when sync starts failing after adding one point. With **Landmark Empties** on, that also removes its helper from `PM_Sync_Landmarks` (and restores it when re-enabled).
-4. Pick each landmark in every still where it is visible. **Point** landmarks: click the feature. **Line** landmarks: drag a segment along the same edge (no need for a shared point). **Known 3D** Empties: auto-projected on the anchor; pick them in other matches only. For a metric edge, set **Known 3D** + **Known 3D B** on a Line landmark. Free lines (no Empties) need the edge in **≥3 stills** to constrain pose. Ordinary point landmarks must be picked in **both** stills when Known 3D sit on one line. Set **Pick Confidence** before clicking.
+3. Add landmarks for features visible in two or more stills (≥5 shared 2D picks), **or** link **Known 3D** Blender objects (≥3) and pick them in the other stills. Each landmark keeps a stable `item_id` plus a `creation_index` (add order). The **A–Z** toggle beside the list (below + / line / import / tracking / −) is a depressed/undepressed control: on = alphabetical by name, off = original add order. Sort only changes the list display — not storage order. The **font** toggle under A–Z shows each landmark's name next to its pick on the plate (off by default). The **Duplicate** button under that copies type / On Ground / Use in Sync (and sets Pick Confidence from existing picks) but clears Known 3D links, parallel links, picks, and solved positions. Uncheck **Use in Sync** (list checkbox or detail prop) to exclude a landmark from Solve Sync / Diagnose without deleting its picks — useful when sync starts failing after adding one point. With **Landmark Empties** on, that also removes its helper from `PM_Sync_Landmarks` (and restores it when re-enabled).
+
+   **Find AprilTags** (tracking icon in the first button column): scans the active match still for **AprilTag 25h9** markers (same family as `tools/print-apriltags`). Each tag centre becomes a point pick on that match. Landmark names are `idNN-25h9` (NN = 00–99): if a landmark whose name **starts with** that prefix already exists, its pick for this match is updated; otherwise a new point landmark is created. OpenCV ships with the extension as a bundled wheel.
+4. Pick each landmark in every still where it is visible (or re-run **Find AprilTags** per still). **Point** landmarks: click the feature. **Line** landmarks: drag a segment along the same edge (no need for a shared point). **Known 3D** Empties: auto-projected on the anchor; pick them in other matches only. For a metric edge, set **Known 3D** + **Known 3D B** on a Line landmark. Free lines (no Empties) need the edge in **≥3 stills** to constrain pose. Ordinary point landmarks must be picked in **both** stills when Known 3D sit on one line. Set **Pick Confidence** before clicking.
 5. Optional: tag **On Ground** on point landmarks in the anchor, or rely on Known 3D points/lines, to pin absolute scale. Without metric cues, sync still recovers orientation and baseline *direction* with a depth heuristic.
 6. **Solve Sync** writes a rigid transform (`R`, `t`, scale 1) onto non-anchor root Empties — or a similarity with free scale if a rigid pose cannot lock (different private-world metrics). Between Solve Sync and Refine Lenses: **Lock Rotation** keeps each Empty’s rotation at identity and only solves translation/scale (when private VP worlds already share axes); **Lock Translation** keeps Empty translation fixed and only solves rotation/scale; check **both** to leave cameras unmoved and only adjust 3D landmark / Empty positions to fit the picks. After the pairwise seed, a **joint bundle-adjustment** pass couples every free Empty pose with shared landmark positions (Cauchy-weighted point residuals + free-line midpoints / Known 3D line constraints) and soft-downweights severe landmark outliers. Use **Diagnose** first to see per-landmark RMSE without moving cameras — when error is high it also runs leave-one-out checks on the worst landmarks; **Clear** resets sync transforms. **Refine Lenses** searches each unlocked match’s focal length (re-orients from VP lines at each trial) with a **per-line VP residual prior** and hard VP guardrails, then a **coupled polish** jointly moves landmark-sharing pairs, then runs Solve Sync. It runs in a background thread so the UI stays responsive — watch the progress slider / status line, and press **Esc** or **Cancel** to stop (partial results are discarded). The % field beside it is the ± search window around current fx (default 18). Skips **1-point** matches and matches without enough VP lines (Manual FOV matches are included). The eye icon on **Sync Matches** toggles landmark picks on the plate (same pattern as VP Lines); **Landmark Empties** still controls the 3D helpers after sync.
 
@@ -222,16 +234,20 @@ match_perspective/
   core.py                 # VP, focal, distortion, placement, and surface math
   sync.py                 # Multi-match landmark graph registration
   lens_refine.py          # Outer fx search (VP prior + sync RMSE)
+  apriltag_detect.py      # AprilTag 25h9 → landmark picks (bundled OpenCV wheel)
   scene.py                # Camera/background integration and coordinate mapping
   overlay.py              # Camera-view GPU drawing
   operators.py            # File, solve, and modal interaction operators
   panel.py                # 3D View sidebar workflow
   distortion.py           # NumPy image remapping
   project_io.py           # .pmproj import
+  wheels/                 # OpenCV wheels (gitignored; ./fetch-wheels.sh)
+  fetch-wheels.sh         # Download platform wheels before build / link-dev
   validate_addon.py       # Headless Blender smoke test
   tests/test_core.py      # Pure geometry regressions
   tests/test_sync.py      # Landmark sync regressions
   tests/test_lens_refine.py  # VP residual + locked-focal helper
+  tests/test_apriltag_detect.py  # AprilTag naming / matching helpers
   tools/print-apriltags/  # Generate A4/A3 AprilTag print sheets (standalone)
   tools/explore-vp-intrinsics/  # FOV×PP diagnostic plotter (standalone)
   link-dev.sh             # Symlink checkout into Blender 5.1 for live reload
@@ -257,7 +273,7 @@ Run the Blender smoke test:
   --factory-startup -b --python validate_addon.py
 ```
 
-Validate and build a distributable ZIP when needed:
+Validate and build distributable ZIPs (one per platform, each with its OpenCV wheel):
 
 ```sh
 ./build-extension.sh

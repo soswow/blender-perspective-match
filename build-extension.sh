@@ -12,7 +12,12 @@ fi
 
 cd "$SCRIPT_DIR"
 
-"$BLENDER_BIN" --factory-startup --command extension validate
-"$BLENDER_BIN" --factory-startup --command extension build
+# OpenCV wheels are not in git — fetch before validate/build.
+./fetch-wheels.sh
 
-printf '\nExtension package built in: %s\n' "$SCRIPT_DIR"
+"$BLENDER_BIN" --factory-startup --command extension validate
+# One zip per platform so each package only embeds its OpenCV binary.
+"$BLENDER_BIN" --factory-startup --command extension build --split-platforms
+
+printf '\nExtension packages built in: %s\n' "$SCRIPT_DIR"
+ls -lh "$SCRIPT_DIR"/match_perspective-*.zip 2>/dev/null || true
