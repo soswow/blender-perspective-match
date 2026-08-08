@@ -127,6 +127,11 @@ def detect_apriltags_25h9(gray: np.ndarray) -> list[DetectedTag]:
         raise ValueError("Detection expects a single-channel grayscale image")
     dictionary = _aruco_dictionary(cv2)
     parameters = cv2.aruco.DetectorParameters()
+    # Stock defaults drop fairly small tags on high-res stills (perimeter ≥ 3%
+    # of max(W,H), canonical side ≥ 32 px). Halve both so mid-distance printed
+    # markers still decode; no UI knobs yet.
+    parameters.minMarkerPerimeterRate = 0.015
+    parameters.minSideLengthCanonicalImg = 16
     detector = cv2.aruco.ArucoDetector(dictionary, parameters)
     corners_list, ids, _rejected = detector.detectMarkers(gray)
     if ids is None or len(ids) == 0:
