@@ -232,6 +232,8 @@ match_perspective/
   tests/test_core.py      # Pure geometry regressions
   tests/test_sync.py      # Landmark sync regressions
   tests/test_lens_refine.py  # VP residual + locked-focal helper
+  tools/print-apriltags/  # Generate A4/A3 AprilTag print sheets (standalone)
+  tools/explore-vp-intrinsics/  # FOV×PP diagnostic plotter (standalone)
   link-dev.sh             # Symlink checkout into Blender 5.1 for live reload
   build-extension.sh      # Validate and build installable zip
 ```
