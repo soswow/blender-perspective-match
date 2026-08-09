@@ -216,10 +216,7 @@ def main() -> None:
             assert len(properties.iter_match_roots()) == 2
 
             # Deleting a match root should prune it from discovery.
-            camera_b = settings_b.camera_object
-            bpy.data.objects.remove(root_b, do_unlink=True)
-            if camera_b is not None and camera_b.name in bpy.data.objects:
-                bpy.data.objects.remove(camera_b, do_unlink=True)
+            scene.delete_match(bpy.context, root_b)
             roots = properties.iter_match_roots()
             assert len(roots) == 1
             assert roots[0] == root_a

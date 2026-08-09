@@ -379,7 +379,8 @@ class PMLandmark(bpy.types.PropertyGroup):
         name="Known 3D B",
         description=(
             "Second endpoint Empty/object for a Known 3D line landmark. "
-            "With both ends set, the edge is metric in the anchor world"
+            "With both ends set, the edge is metric in the anchor world; "
+            "otherwise draw the line in ≥3 stills"
         ),
         type=bpy.types.Object,
         update=_redraw,
@@ -428,10 +429,15 @@ class PMSession(bpy.types.PropertyGroup):
 
     vp_mode: bpy.props.EnumProperty(
         name="Perspective",
+        description="Vanishing-point mode for this match",
         items=(
-            ("1", "1 Point", "One depth VP plus verticals; FOV stays manual"),
-            ("2", "2 Point", "Two horizontal orthogonal VPs"),
-            ("3", "3 Point", "Three finite orthogonal VPs"),
+            ("1", "1 Point", "1-point: Y + Z lines; FOV stays manual"),
+            ("2", "2 Point", "2-point: X + Y horizontals; Z uprights not used"),
+            (
+                "3",
+                "3 Point",
+                "3-point: any two axes (2+ lines each); the third is derived",
+            ),
         ),
         default="2",
         update=_redraw,
@@ -574,7 +580,9 @@ class PMSession(bpy.types.PropertyGroup):
         name="Enable Sync",
         description=(
             "Include this match in Solve Sync, Diagnose, and Refine Lenses. "
-            "Turn off to leave it out of the shared-world registration"
+            "Turn off to leave it out of the shared-world registration. "
+            "Need at least two sync-enabled matched cameras; "
+            "points or lines across stills, Known 3D Empties optional"
         ),
         default=True,
         update=_redraw,
@@ -605,7 +613,10 @@ class PMWorkspace(bpy.types.PropertyGroup):
     )
     active_match: bpy.props.EnumProperty(
         name="Active Match",
-        description="Perspective Match camera currently being edited",
+        description=(
+            "Perspective Match camera currently being edited. "
+            "Create or select a match camera to continue"
+        ),
         items=_active_match_items,
         update=_update_active_match,
     )

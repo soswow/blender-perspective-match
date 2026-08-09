@@ -108,9 +108,9 @@ PM_<image>
 3. With the **Perspective Match** sidebar tab selected, **Ctrl+Alt+NumPad 1–9** jumps to the Nth match (name-sorted). Any Draw / Pick Origin / PP / Landmark tool is cancelled first.
 4. Click the rename button (font icon) next to **New** to rename the active match after it was created. Opening a still still defaults the name from the image stem; rename anytime afterward. The hierarchy stays `PM_<name>` / `PM_<name>_Origin` / `PM_<name>_Camera`.
 5. Click **Unload** to detach the sidebar from editing without deleting objects.
-6. Delete a match by removing its Empty/camera in the Outliner; the dropdown prunes dead entries automatically.
+6. Click the trash button to **Delete** the active match (asks for confirmation). This removes its collection / Origin / Camera and that match’s landmark picks. You can still delete via the Outliner; the dropdown prunes dead entries automatically.
 
-Selecting objects in the viewport does **not** change the active match—only New, Rename, Unload, the dropdown, and the NumPad shortcuts do.
+Selecting objects in the viewport does **not** change the active match—only New, Rename, Unload, Delete, the dropdown, and the NumPad shortcuts do.
 
 Each match remembers its last camera-view zoom and pan. Switching matches (or Unload / save) stores the current framing; activating a match restores it.
 

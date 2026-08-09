@@ -274,7 +274,7 @@ class PM_OT_load_image(bpy.types.Operator, ImportHelper):
 
     bl_idname = "perspective_match.load_image"
     bl_label = "Open Reference Image"
-    bl_description = "Load a still into the active Perspective Match camera"
+    bl_description = "Load a still into this match"
     bl_options = {"REGISTER", "UNDO"}
 
     filename_ext = ""
@@ -817,6 +817,22 @@ class PM_OT_interact(bpy.types.Operator):
     _PP_REORIENT_INTERVAL = 0.08
 
     @classmethod
+    def description(cls, context: bpy.types.Context, properties) -> str:
+        mode = getattr(properties, "mode", "LINE")
+        if mode == "LINE":
+            settings = _session(context)
+            if settings is not None and not _required_lines_ready(settings):
+                return _lines_needed_message(settings)
+            return "Draw and edit vanishing-point lines in camera view"
+        if mode == "ORIGIN":
+            return "Pick the ground origin on the reference plate"
+        if mode == "PP":
+            return "Drag the principal point on the plate"
+        if mode == "LANDMARK":
+            return "Pick the active landmark in this match"
+        return cls.bl_description
+
+    @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
         settings = _session(context)
         return (
@@ -1322,7 +1338,10 @@ class PM_OT_new_match_camera(bpy.types.Operator):
 
     bl_idname = "perspective_match.new_match_camera"
     bl_label = "New Match Camera"
-    bl_description = "Create a new Perspective Match camera session"
+    bl_description = (
+        "Create a new Perspective Match camera session. "
+        "Create or select a match camera to continue"
+    )
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context: bpy.types.Context) -> set[str]:
@@ -1350,6 +1369,45 @@ class PM_OT_unload_match(bpy.types.Operator):
     def execute(self, context: bpy.types.Context) -> set[str]:
         scene.unload_match(context)
         self.report({"INFO"}, "Perspective Match session unloaded")
+        return {"FINISHED"}
+
+
+class PM_OT_delete_match(bpy.types.Operator):
+    """Delete the active match hierarchy after confirmation."""
+
+    bl_idname = "perspective_match.delete_match"
+    bl_label = "Delete Match"
+    bl_description = (
+        "Delete the active Perspective Match (collection, Origin, Camera) "
+        "and its landmark picks"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        return properties.active_root(context) is not None
+
+    def invoke(self, context: bpy.types.Context, event) -> set[str]:
+        root = properties.active_root(context)
+        if root is None:
+            return {"CANCELLED"}
+        label = scene.match_prefix(root)
+        return context.window_manager.invoke_confirm(
+            self,
+            event,
+            title="Delete Match?",
+            message=f"Delete {label} and its camera? This cannot be undone easily.",
+            confirm_text="Delete",
+            icon="WARNING",
+        )
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        try:
+            prefix = scene.delete_match(context)
+        except Exception as error:
+            self.report({"ERROR"}, str(error))
+            return {"CANCELLED"}
+        self.report({"INFO"}, f"Deleted {prefix}")
         return {"FINISHED"}
 
 
@@ -2054,6 +2112,7 @@ class PM_OT_clear_sync(bpy.types.Operator):
 CLASSES = (
     PM_OT_new_match_camera,
     PM_OT_unload_match,
+    PM_OT_delete_match,
     PM_OT_rename_match,
     PM_OT_reload,
     PM_OT_load_image,

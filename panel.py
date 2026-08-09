@@ -16,25 +16,6 @@ def _axis_counts(settings) -> dict[str, int]:
     return counts
 
 
-def _panel_lines_ready(settings) -> bool:
-    counts = _axis_counts(settings)
-    if settings.vp_mode == "1":
-        return counts["y"] >= 2 and counts["z"] >= 2
-    if settings.vp_mode == "2":
-        return counts["x"] >= 2 and counts["z"] >= 2
-    return sum(1 for axis in ("x", "y", "z") if counts[axis] >= 2) >= 2
-
-
-def _panel_lines_hint(settings) -> str:
-    counts = _axis_counts(settings)
-    summary = f"X {counts['x']} · Y {counts['z']} · Z {counts['y']}"
-    if settings.vp_mode == "1":
-        return f"Need 2+ Y and 2+ Z ({summary})"
-    if settings.vp_mode == "2":
-        return f"Need 2+ X and 2+ Y ({summary})"
-    return f"Need 2+ lines on two axes ({summary})"
-
-
 def _observation_count(landmark) -> int:
     return sum(1 for observation in landmark.observations if observation.is_set)
 
@@ -174,21 +155,28 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
         layout.use_property_decorate = False
 
         _draw_active_tool_banner(layout, workspace)
-        _header, cameras = _section(
+        _cameras_header, cameras = _section(
             layout, "PM_match_cameras", "Match Cameras", "CAMERA_DATA"
         )
         if cameras is not None:
-            row = cameras.row(align=True)
-            row.operator("perspective_match.new_match_camera", icon="ADD")
-            rename_row = row.row(align=True)
-            rename_row.enabled = settings is not None
-            rename_row.operator(
-                "perspective_match.rename_match", text="", icon="FONT_DATA"
-            )
-            row.operator("perspective_match.unload_match", text="", icon="X")
+            cameras.operator("perspective_match.new_match_camera", icon="ADD")
             cameras.prop(workspace, "active_match", text="")
-            if settings is None:
-                cameras.label(text="Create or select a match camera", icon="INFO")
+            actions = cameras.row(align=True)
+            actions.enabled = settings is not None
+            actions.operator(
+                "perspective_match.rename_match", text="Rename", icon="FONT_DATA"
+            )
+            actions.operator(
+                "perspective_match.unload_match", text="Unload", icon="X"
+            )
+            actions.operator(
+                "perspective_match.delete_match", text="Delete", icon="TRASH"
+            )
+            actions.operator(
+                "perspective_match.camera_view",
+                text="View Match Camera",
+                icon="CAMERA_DATA",
+            )
 
         if settings is not None:
             self._draw_active_match(layout, context, workspace, settings)
@@ -207,43 +195,36 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
         layout.operator("perspective_match.reload", icon="FILE_REFRESH")
 
     def _draw_active_match(self, layout, context, workspace, settings) -> None:
-        _header, image = _section(
+        _image_header, image = _section(
             layout, "PM_reference_image", "1. Reference Image", "IMAGE_DATA"
         )
         if image is not None:
+            if settings.image is not None:
+                image.label(
+                    text=(
+                        f"{Path(settings.image_path).name} "
+                        f"[{settings.image_width} × {settings.image_height} px]"
+                    )
+                )
             row = image.row(align=True)
             row.operator(
                 "perspective_match.load_image", text="Open Image", icon="FILE_IMAGE"
             )
-            if settings.image is None:
-                image.label(text="Load a still into this match", icon="INFO")
-            else:
+            if settings.image is not None:
                 row.operator(
                     "perspective_match.replace_image",
                     text="Replace Image",
                     icon="FILE_REFRESH",
                 )
-                image.label(text=Path(settings.image_path).name, icon="CHECKMARK")
-                image.label(
-                    text=f"{settings.image_width} × {settings.image_height} px"
-                )
-                image.operator("perspective_match.camera_view", icon="CAMERA_DATA")
 
         if settings.image is None:
             return
 
-        _header, perspective = _section(
+        _perspective_header, perspective = _section(
             layout, "PM_perspective", "2. Perspective", "ORIENTATION_GLOBAL"
         )
         if perspective is not None:
             perspective.prop(settings, "vp_mode", expand=True)
-            if settings.vp_mode == "1":
-                tip = "1-point: Y + Z lines; FOV stays manual"
-            elif settings.vp_mode == "2":
-                tip = "2-point: X + Y horizontals; Z uprights not used"
-            else:
-                tip = "3-point: any two axes (2+ lines each); the third is derived"
-            perspective.label(text=tip, icon="INFO")
 
         line_header, line_body = _section(
             layout, "PM_vp_lines", "3. VP Lines", "TRACKING"
@@ -273,8 +254,6 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             row.operator("perspective_match.delete_selected", text="", icon="TRASH")
             row.operator("perspective_match.clear_axis", text="", icon="X")
             line_body.prop(settings, "show_vp_error_labels")
-            if not _panel_lines_ready(settings):
-                line_body.label(text=_panel_lines_hint(settings), icon="INFO")
 
         _header, origin = _section(layout, "PM_origin", "4. Origin", "PIVOT_CURSOR")
         if origin is not None:
@@ -283,7 +262,7 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             pick_row.operator_context = "INVOKE_REGION_WIN"
             operator = pick_row.operator(
                 "perspective_match.interact",
-                text="Pick Origin",
+                text="Re-pick Origin" if settings.origin_is_set else "Pick Origin",
                 icon="PIVOT_CURSOR",
                 depress=_mode_tool_active(workspace, "ORIGIN"),
             )
@@ -293,8 +272,6 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             clear_row.operator(
                 "perspective_match.clear_placement", text="", icon="X"
             )
-            if settings.origin_is_set:
-                origin.label(text="Origin set", icon="CHECKMARK")
 
 
         _header, camera = _section(layout, "PM_camera", "5. Camera", "CAMERA_DATA")
@@ -430,35 +407,19 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             return
 
         if settings is None:
-            sync_body.label(text="Activate a match camera first", icon="INFO")
             return
 
         # Opt-in for this match — when off, hide the rest of the sync UI.
         sync_body.prop(settings, "sync_enabled", text="Enable sync for current match")
         if not settings.sync_enabled:
-            sync_body.label(
-                text="This match is excluded from Solve Sync / Diagnose / Refine Lenses",
-                icon="INFO",
-            )
             return
 
         match_count = len(properties.iter_match_roots())
         enabled_count = len(properties.iter_sync_enabled_roots())
-        if match_count < 2:
-            sync_body.label(text="Create at least two matched cameras", icon="INFO")
-            return
-        if enabled_count < 2:
-            sync_body.label(
-                text="Enable sync on at least two matches",
-                icon="INFO",
-            )
+        if match_count < 2 or enabled_count < 2:
             return
 
         sync_body.prop(workspace, "anchor_match", text="Anchor")
-        sync_body.label(
-            text="Points or lines across stills; Known 3D Empties optional",
-            icon="INFO",
-        )
 
         list_row = sync_body.row()
         list_row.template_list(
@@ -537,10 +498,6 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             if landmark.kind == "LINE":
                 sync_body.prop(landmark, "known_object_b", text="Known 3D B")
                 sync_body.prop(landmark, "parallel_to", text="Is Parallel To")
-                sync_body.label(
-                    text="Optional: two Empties = metric edge; else draw in ≥3 stills",
-                    icon="INFO",
-                )
             if landmark.known_object is not None:
                 location = landmark.known_object.matrix_world.to_translation()
                 sync_body.label(

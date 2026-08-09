@@ -240,6 +240,77 @@ def unload_match(context: bpy.types.Context) -> None:
     properties.tag_viewport_redraw(context)
 
 
+def _clear_observations_for_root(
+    context: bpy.types.Context, root: bpy.types.Object
+) -> None:
+    """Drop landmark picks that pointed at a match about to be deleted."""
+    space = properties.workspace(context)
+    for landmark in space.landmarks:
+        for index in range(len(landmark.observations) - 1, -1, -1):
+            if landmark.observations[index].match_root == root:
+                landmark.observations.remove(index)
+
+
+def delete_match(
+    context: bpy.types.Context, root: bpy.types.Object | None = None
+) -> str:
+    """Delete a match hierarchy (collection, Origin, Camera) and its landmark picks."""
+    from . import operators as operators_module
+
+    if root is None:
+        root = properties.active_root(context)
+    if root is None or not properties.is_match_root(root):
+        raise ValueError("No Perspective Match to delete")
+
+    prefix = match_prefix(root)
+    session = root.pm_session
+    space = properties.workspace(context)
+
+    operators_module.cancel_active_interact(context)
+    _clear_observations_for_root(context, root)
+
+    if space.anchor_root == root:
+        space.anchor_root = None
+        properties.sync_anchor_match_enum(space, "NONE")
+    if space.active_root == root:
+        space.active_root = None
+        properties.sync_active_match_enum(space, "NONE")
+        space.is_modal = False
+        space.work_mode = "NONE"
+
+    _clear_derived_plates(session)
+
+    camera = session.camera_object
+    collection = session.match_collection
+    camera_data = camera.data if camera is not None else None
+
+    if camera is not None:
+        bpy.data.objects.remove(camera, do_unlink=True)
+    if camera_data is not None and camera_data.users == 0:
+        bpy.data.cameras.remove(camera_data)
+
+    # Strip anything else left in the match collection before removing the root.
+    if collection is not None:
+        for obj in list(collection.objects):
+            if obj == root:
+                continue
+            obj_type = obj.type
+            data = obj.data
+            bpy.data.objects.remove(obj, do_unlink=True)
+            if data is not None and getattr(data, "users", 1) == 0:
+                if obj_type == "MESH":
+                    bpy.data.meshes.remove(data)
+                elif obj_type == "CAMERA":
+                    bpy.data.cameras.remove(data)
+
+    bpy.data.objects.remove(root, do_unlink=True)
+    if collection is not None and collection.name in bpy.data.collections:
+        bpy.data.collections.remove(collection)
+
+    properties.tag_viewport_redraw(context)
+    return prefix
+
+
 def match_prefix(root: bpy.types.Object) -> str:
     """Collection / hierarchy prefix for a match root (``PM_*`` without ``_Origin``)."""
     name = root.name

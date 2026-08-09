@@ -1,4 +1,9 @@
 TODOs to be done:
+- Creating new PM should open image loading dialog automatically.
+- VP Lines -> "Vanishing Point Lines"
+- Move "Perspective" picker at the begining of "Vanishing Point Lines" section. 
+- In Reference Image section, add "path" as a tooltip for filename we write right now.
+
 
 Done TODOs:
 - No need for `-view` variant of the image file name below "Apply lighting" button.
