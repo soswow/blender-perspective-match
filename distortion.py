@@ -511,16 +511,16 @@ def generate_undistorted_plate(
 
 
 def sync_undistorted_plate_after_refine(context: bpy.types.Context) -> None:
-    """Build/show undistorted plate when Estimate Distortion is on; else stay original.
+    """Rebuild the undistorted plate when viewing one; else leave the source plate.
 
-    Call after refine so Auto from VPs regenerates the plate instead of leaving
-    a blank/reset background when λ or intrinsics change.
+    Call after refine so FOV/PP changes regenerate the plate instead of leaving
+    a blank/reset background. Does not re-estimate λ — that is button-only.
     """
     settings = properties.active_session(context)
     if settings is None:
         return
     if (
-        settings.estimate_distortion
+        settings.view_undistorted
         and abs(settings.division_lambda) > 1.0e-8
         and not settings.lambda_saturated
     ):
@@ -530,7 +530,8 @@ def sync_undistorted_plate_after_refine(context: bpy.types.Context) -> None:
             settings.status = f"Distortion estimated; plate failed: {error}"
             print(f"Perspective Match: undistorted plate failed: {error}")
         return
-    if settings.view_undistorted or settings.undistorted_image is not None:
+    # Viewing undistorted but λ is gone/unusable — fall back to the source still.
+    if settings.view_undistorted:
         scene.invalidate_undistorted_cache(settings)
         scene.refresh_background_projection(context)
 
@@ -554,27 +555,18 @@ def revert_to_original_plate(context: bpy.types.Context) -> None:
 
 
 def use_original_plate(context: bpy.types.Context) -> None:
-    """Turn off Estimate Distortion and restore the original plate + camera."""
-    settings = properties.active_session(context)
-    if settings is None:
-        raise ValueError("Create or activate a match camera first")
-    # Avoid re-entering the checkbox update while clearing the flag.
-    properties._syncing_estimate_distortion = True
-    try:
-        settings.estimate_distortion = False
-    finally:
-        properties._syncing_estimate_distortion = False
+    """Clear λ and restore the original plate + camera."""
     revert_to_original_plate(context)
 
 
-def on_estimate_distortion_toggled(context: bpy.types.Context) -> None:
-    """React to the Estimate Distortion checkbox (enable → plate; disable → original)."""
+def estimate_distortion(context: bpy.types.Context) -> None:
+    """Estimate λ once from VP lines and show the undistorted plate.
+
+    Subsequent VP-line refines keep the stored λ; press again to re-fit.
+    """
     settings = properties.active_session(context)
     if settings is None or settings.image is None:
-        return
-    if not settings.estimate_distortion:
-        revert_to_original_plate(context)
-        return
+        raise ValueError("Load a reference image first")
     # Keep Manual FOV if set — λ is estimated at the locked focal.
     line_bundles = scene.line_bundles_from_settings(settings)
     ready_axes = sum(1 for segments in line_bundles.values() if len(segments) >= 2)
@@ -584,14 +576,25 @@ def on_estimate_distortion_toggled(context: bpy.types.Context) -> None:
             if settings.lock_focal or settings.vp_mode == "1"
             else "draw VP lines, then Auto from VPs"
         )
-        settings.status = f"Estimate Distortion on — {tip}"
+        raise ValueError(f"Need enough VP lines first — {tip}")
+    scene.refine_match(context, estimate_distortion=True)
+    if (
+        abs(settings.division_lambda) > 1.0e-8
+        and not settings.lambda_saturated
+    ):
+        try:
+            generate_undistorted_plate(context)
+        except Exception as error:
+            settings.status = f"Distortion estimated; plate failed: {error}"
+            print(f"Perspective Match: undistorted plate failed: {error}")
+            raise
         return
-    scene.refine_match(context)
-    sync_undistorted_plate_after_refine(context)
-    if abs(settings.division_lambda) <= 1.0e-8:
-        settings.status = (
-            "Estimate Distortion on — need ≥3 concurrent segments on one axis for λ"
-        )
+    if settings.lambda_saturated:
+        settings.status = "Estimate saturated; pinhole retained"
+        return
+    settings.status = (
+        "Need ≥3 concurrent segments on one axis to estimate λ"
+    )
 
 
 def set_undistorted_view(context: bpy.types.Context, enabled: bool) -> None:

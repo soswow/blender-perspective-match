@@ -392,13 +392,17 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
                 icon="GREASEPENCIL",
             )
 
-            camera.prop(settings, "estimate_distortion")
+            camera.operator(
+                "perspective_match.estimate_distortion",
+                text="Estimate Distortion",
+                icon="MOD_SIMPLEDEFORM",
+            )
             camera.label(text=f"Division λ: {settings.division_lambda:.5f}")
             if settings.lambda_saturated:
                 camera.label(
                     text="Estimate saturated; pinhole retained", icon="ERROR"
                 )
-            if settings.view_undistorted or settings.estimate_distortion:
+            if settings.view_undistorted or abs(settings.division_lambda) > 1.0e-8:
                 camera.operator(
                     "perspective_match.use_original_plate",
                     text="Original Plate",

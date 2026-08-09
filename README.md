@@ -27,7 +27,7 @@ The extension is a native port of the manual workflow from Perspective Match Stu
 - Synchronise multiple matched cameras into one shared world with a landmark graph: 2D↔2D picks and/or **Known 3D** Blender objects (Empties at verts on a modeled edge), optional On Ground, choose an anchor, solve similarities onto match root Empties.
 - Detect printed **AprilTag 25h9** markers in the active still and auto-create / update landmarks named `idNN-25h9` (OpenCV bundled as a wheel).
 - Estimate Fitzgibbon one-parameter radial distortion from three or more concurrent segments.
-- With **Estimate Distortion**, automatically generate and show an expanded undistorted PNG (NumPy only—no OpenCV).
+- Press **Estimate Distortion** to fit λ once and show an expanded undistorted PNG (NumPy only—no OpenCV). Editing VP lines afterward keeps the stored λ; press again to re-fit.
 - Apply display-only exposure/contrast to a sibling ``*-pm-view.png`` plate (undistorted uses the same lit image).
 - Save match state in the `.blend` and import desktop-compatible `.pmproj` files.
 
@@ -145,7 +145,7 @@ Axis mapping matches Blender’s gizmos:
 
 While the tool is active, left-clicks in the 3D View belong to Perspective Match (object selection is blocked). Mode feedback: a color-coded viewport banner + side/bottom frame, a depressed tool button, and a sidebar alert label. Exit with **Esc** (or finish the pick / drag). Cursors also switch per tool (knife for VP / line landmarks, pick-area for origin, scroll for principal point, dot for point landmarks). Clicking **Draw / Edit Lines** or **Pick Origin** again refreshes the active tool instead of getting stuck. If you orbit out of camera view, the next line/origin click switches back to the match camera.
 
-The camera refines whenever enough required lines exist. **Auto from VPs** allows orthogonal VP pairs to solve FOV. Enable **Manual FOV**, set the horizontal angle, and apply it to lock focal length while continuing to solve orientation. **Import YAML** loads a ROS `camera_info` file (same layout as OpenCV / `camera_calibration_parsers`): it locks Manual FOV from `fx`, sets the principal point from `cx`/`cy`, applies optional project-extension `fitzgibbon_lambda` as Division λ (and builds/shows the undistorted plate when λ ≠ 0, turning **Estimate Distortion** on without re-fitting λ from VP lines), and scales K if the YAML resolution differs from the loaded still. Brown–Conrady / `plumb_bob` coefficients are still skipped.
+The camera refines whenever enough required lines exist. **Auto from VPs** allows orthogonal VP pairs to solve FOV. Enable **Manual FOV**, set the horizontal angle, and apply it to lock focal length while continuing to solve orientation. **Import YAML** loads a ROS `camera_info` file (same layout as OpenCV / `camera_calibration_parsers`): it locks Manual FOV from `fx`, sets the principal point from `cx`/`cy`, applies optional project-extension `fitzgibbon_lambda` as Division λ (and builds/shows the undistorted plate when λ ≠ 0, without re-fitting λ from VP lines), and scales K if the YAML resolution differs from the loaded still. Brown–Conrady / `plumb_bob` coefficients are still skipped.
 
 **Manual PP Offset** (Camera section): drag the principal point on the plate, or click the pencil icon beside it to type **Offset X / Offset Y** in pixels from image center (same values as the PP offset readout; OK applies, Cancel discards). A **violet** crosshair marks it whenever it is off-center (and always while the drag tool is active). While dragging, orientation is rebuilt from VP lines on a short throttle (~12 Hz) so the mesh tracks the same “snap” you get on release; release does a final rebuild. **Esc** exits the drag tool like other tools (cancels an in-progress drag). **Reset Camera** recenters PP.
 
@@ -193,7 +193,7 @@ Why not “any corresponding points”? Photogrammetry / SfM does solve relative
 
 ## Lens distortion
 
-Enable **Estimate Distortion** in the **Camera** section. After a successful VP refine with ≥3 concurrent segments on one axis, the solver estimates Fitzgibbon λ and **automatically** generates/switches to an undistorted plate. Works with **Manual FOV** (λ is estimated at the locked focal so you can compare VP-line RMSE with/without distortion). **Original Plate** turns estimation off, clears λ, re-solves, and restores the source still. Plate file paths are logged to the console, not the sidebar status line.
+Press **Estimate Distortion** in the **Camera** section. With a successful VP solve and ≥3 concurrent segments on one axis, the solver fits Fitzgibbon λ once and generates/switches to an undistorted plate. Editing VP lines afterward keeps that λ (and regenerates the plate if you are still viewing it) — press the button again to re-fit. Works with **Manual FOV** (λ is estimated at the locked focal so you can compare VP-line RMSE with/without distortion). **Original Plate** clears λ, re-solves, and restores the source still. Plate file paths are logged to the console, not the sidebar status line.
 
 ## Project compatibility
 

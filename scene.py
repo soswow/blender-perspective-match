@@ -574,12 +574,12 @@ def private_camera_matrix(calibration: core.Calibration) -> Matrix:
 def refine_match(
     context: bpy.types.Context,
     *,
-    estimate_distortion: bool | None = None,
+    estimate_distortion: bool = False,
 ) -> core.Calibration:
     """Refine and apply camera state from all current VP lines.
 
-    ``estimate_distortion`` overrides the session toggle when not None (used
-    when importing a known Fitzgibbon λ so VP refine does not re-fit it).
+    Pass ``estimate_distortion=True`` only from the Estimate Distortion button.
+    Ordinary VP-line / FOV refines keep the stored λ without re-fitting it.
     """
     settings = properties.active_session(context)
     if settings is None:
@@ -598,18 +598,13 @@ def refine_match(
         intrinsics.fx = focal
         intrinsics.fy = focal
 
-    use_estimate_distortion = (
-        settings.estimate_distortion
-        if estimate_distortion is None
-        else bool(estimate_distortion)
-    )
     calibration = core.refine_camera(
         line_bundles,
         intrinsics,
         lock_focal=settings.lock_focal or settings.vp_mode == "1",
         estimate_principal_point=settings.vp_mode == "3" and not settings.lock_focal,
-        # λ can be estimated at a locked Manual FOV; only PP stays auto-only.
-        estimate_distortion=use_estimate_distortion,
+        # λ is button-only; locked Manual FOV still allows a one-shot estimate.
+        estimate_distortion=bool(estimate_distortion),
         initial_division_lambda=previous_calibration.division_lambda,
     )
 
@@ -691,17 +686,12 @@ def apply_manual_fov(context: bpy.types.Context) -> None:
     settings.lock_focal = True
     line_bundles = line_bundles_from_settings(settings)
     ready_axes = sum(1 for segments in line_bundles.values() if len(segments) >= 2)
-    # With enough lines, re-orient (and re-estimate λ if distortion is on) at the locked FOV.
+    # With enough lines, re-orient at the locked FOV (keeps stored λ; no re-fit).
     if ready_axes >= 2:
         refine_match(context)
-        if settings.estimate_distortion:
-            from . import distortion
+        from . import distortion
 
-            distortion.sync_undistorted_plate_after_refine(context)
-        elif settings.view_undistorted or settings.undistorted_image is not None:
-            # Manual FOV changed: drop a stale undistorted plate when not regenerating.
-            invalidate_undistorted_cache(settings)
-            refresh_background_projection(context)
+        distortion.sync_undistorted_plate_after_refine(context)
         return
     calibration = calibration_from_settings(settings)
     previous_focal = calibration.intrinsics.fx
@@ -726,7 +716,7 @@ def apply_ros_camera_info_yaml(context: bpy.types.Context, filepath: str) -> str
     Brown–Conrady / plumb_bob coefficients are ignored. When ``fitzgibbon_lambda``
     is present it becomes ``division_lambda`` (resolution-invariant in the
     normalized plane — not scaled with image size). A non-zero imported λ also
-    builds/shows the undistorted plate (Estimate Distortion on, without re-fitting λ).
+    builds/shows the undistorted plate (without re-fitting λ from VP lines).
     """
     from . import distortion, ros_camera_info
 
@@ -761,10 +751,7 @@ def apply_ros_camera_info_yaml(context: bpy.types.Context, filepath: str) -> str
     ready_axes = sum(1 for segments in line_bundles.values() if len(segments) >= 2)
     if ready_axes >= 2:
         # Locked FOV + imported PP; keep YAML λ (do not re-fit from VP lines).
-        refine_match(
-            context,
-            estimate_distortion=False if imported_lambda else None,
-        )
+        refine_match(context, estimate_distortion=False)
     else:
         calibration = calibration_from_settings(settings)
         if _intrinsics_or_distortion_changed(previous, calibration):
@@ -777,12 +764,6 @@ def apply_ros_camera_info_yaml(context: bpy.types.Context, filepath: str) -> str
 
     # Undistorted background: only sync/generate after intrinsics + λ are final.
     if imported_lambda and abs(settings.division_lambda) > 1.0e-8:
-        # Turn on the toggle without running its "re-estimate from VPs" callback.
-        properties._syncing_estimate_distortion = True
-        try:
-            settings.estimate_distortion = True
-        finally:
-            properties._syncing_estimate_distortion = False
         try:
             distortion.generate_undistorted_plate(context)
         except Exception as error:

@@ -284,15 +284,12 @@ def main() -> None:
             assert not hasattr(reloaded, "surfaces") or len(getattr(reloaded, "surfaces", [])) == 0
 
             reloaded.lock_focal = True
-            reloaded.estimate_distortion = False
-            # Turning estimation off intentionally clears λ; set the synthetic
-            # stored value afterward to test locked-focal preservation itself.
+            # Ordinary refine must keep a stored λ without re-fitting it.
             reloaded.division_lambda = 0.12
             manual_result = scene.refine_match(bpy.context)
             assert abs(manual_result.division_lambda - 0.12) < 1.0e-6, (
                 manual_result.division_lambda,
                 reloaded.division_lambda,
-                reloaded.estimate_distortion,
                 reloaded.lock_focal,
             )
 

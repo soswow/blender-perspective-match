@@ -660,14 +660,52 @@ class PM_OT_generate_undistorted(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class PM_OT_estimate_distortion(bpy.types.Operator):
+    """Estimate Fitzgibbon λ once from VP lines and show the undistorted plate."""
+
+    bl_idname = "perspective_match.estimate_distortion"
+    bl_label = "Estimate Distortion"
+    bl_description = (
+        "Estimate division λ from VP lines (≥3 concurrent segments on one axis), "
+        "then generate and show an undistorted plate. Does not re-run when lines "
+        "change — press again to re-fit. Works with Manual FOV (λ at the locked focal)"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        settings = _session(context)
+        return settings is not None and settings.image is not None
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        settings = _session(context)
+        try:
+            distortion.estimate_distortion(context)
+        except Exception as error:
+            return _report_exception(self, error)
+        scene.enter_camera_view(context)
+        if settings is not None and abs(settings.division_lambda) > 1.0e-8:
+            self.report(
+                {"INFO"},
+                f"Estimated λ {settings.division_lambda:.5f}",
+            )
+        elif settings is not None and settings.lambda_saturated:
+            self.report({"WARNING"}, "Estimate saturated; pinhole retained")
+        else:
+            self.report(
+                {"WARNING"},
+                "Need ≥3 concurrent segments on one axis to estimate λ",
+            )
+        return {"FINISHED"}
+
+
 class PM_OT_use_original_plate(bpy.types.Operator):
-    """Turn off distortion estimation and restore the original still."""
+    """Clear distortion and restore the original still."""
 
     bl_idname = "perspective_match.use_original_plate"
     bl_label = "Original Plate"
     bl_description = (
-        "Uncheck Estimate Distortion, clear λ, re-solve the camera, "
-        "and show the original reference image"
+        "Clear λ, re-solve the camera, and show the original reference image"
     )
     bl_options = {"REGISTER", "UNDO"}
 
@@ -2052,6 +2090,7 @@ CLASSES = (
     PM_OT_delete_selected,
     PM_OT_clear_placement,
     PM_OT_generate_undistorted,
+    PM_OT_estimate_distortion,
     PM_OT_use_original_plate,
     PM_OT_toggle_undistorted,
     PM_OT_apply_view_lighting,
