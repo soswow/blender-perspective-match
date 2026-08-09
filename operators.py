@@ -1339,8 +1339,8 @@ class PM_OT_new_match_camera(bpy.types.Operator):
     bl_idname = "perspective_match.new_match_camera"
     bl_label = "New Match Camera"
     bl_description = (
-        "Create a new Perspective Match camera session. "
-        "Create or select a match camera to continue"
+        "Create a new Perspective Match camera session and open the "
+        "reference image file dialog"
     )
     bl_options = {"REGISTER", "UNDO"}
 
@@ -1351,6 +1351,28 @@ class PM_OT_new_match_camera(bpy.types.Operator):
             self.report({"ERROR"}, str(error))
             return {"CANCELLED"}
         self.report({"INFO"}, f"Created {root.name}")
+        # Chain into Open Image so a new match always starts with a still.
+        bpy.ops.perspective_match.load_image("INVOKE_DEFAULT")
+        return {"FINISHED"}
+
+
+class PM_OT_reference_image_label(bpy.types.Operator):
+    """Filename label whose tooltip is the full reference image path."""
+
+    bl_idname = "perspective_match.reference_image_label"
+    bl_label = "Reference Image"
+    bl_description = "Full path of the reference image"
+    bl_options = {"INTERNAL"}
+
+    path: bpy.props.StringProperty(options={"HIDDEN", "SKIP_SAVE"})
+
+    @classmethod
+    def description(cls, _context, properties) -> str:
+        path = getattr(properties, "path", "") or ""
+        return path if path else "Full path of the reference image"
+
+    def execute(self, _context: bpy.types.Context) -> set[str]:
+        # Label-only control — click is a no-op; tooltip carries the path.
         return {"FINISHED"}
 
 
@@ -2111,6 +2133,7 @@ class PM_OT_clear_sync(bpy.types.Operator):
 
 CLASSES = (
     PM_OT_new_match_camera,
+    PM_OT_reference_image_label,
     PM_OT_unload_match,
     PM_OT_delete_match,
     PM_OT_rename_match,

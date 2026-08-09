@@ -103,7 +103,7 @@ PM_<image>
     PM_<image>_Camera
 ```
 
-1. Click **New Match Camera** to create an empty match and activate it.
+1. Click **New Match Camera** to create an empty match, activate it, and open the reference image file dialog.
 2. Use **Active Match** to switch which session the sidebar edits. Switching also sets the scene camera and enters that camera view.
 3. With the **Perspective Match** sidebar tab selected, **Ctrl+Alt+NumPad 1–9** jumps to the Nth match (name-sorted). Any Draw / Pick Origin / PP / Landmark tool is cancelled first.
 4. Click the rename button (font icon) next to **New** to rename the active match after it was created. Opening a still still defaults the name from the image stem; rename anytime afterward. The hierarchy stays `PM_<name>` / `PM_<name>_Origin` / `PM_<name>_Camera`.
@@ -116,13 +116,15 @@ Each match remembers its last camera-view zoom and pan. Switching matches (or Un
 
 ### 1. Load a reference
 
-With a match active, choose **Open Image**. The still binds to the **active** match only; other matches stay untouched. If no match is active, Open Image creates one first.
+With a match active, choose **Open Image** (or create a match with **New Match Camera**, which opens the same dialog). The still binds to the **active** match only; other matches stay untouched. If no match is active, Open Image creates one first. Hover the filename under Reference Image to see the full path.
 
 After bind, the hierarchy is renamed from `PM_Match_###` to `PM_<image stem>` when that name is free. You can rename again anytime with the rename button in **Match Cameras**. The camera becomes the scene camera, the still is attached with **Stretch** frame mapping, and render dimensions match the image.
 
 Once a still is loaded, **Replace Image** appears: same pixel size only, keeps VP lines, origin, calibration, and landmarks (drops view-lighting / undistorted caches). **Open Image** still does a full rebind and clears that match’s edit state.
 
-### 2. Choose perspective
+### 2. Vanishing point lines
+
+At the top of this section, choose perspective mode:
 
 - **1 Point:** draw Z verticals and Y depth lines. FOV stays manual.
 - **2 Point:** draw X and Y horizontal bundles (finite VPs). Z uprights are not used as a vanishing point.
@@ -134,7 +136,7 @@ Axis mapping matches Blender’s gizmos:
 - Green → Blender Y
 - Blue → Blender Z (up)
 
-### 3. Draw VP lines
+Then draw lines:
 
 1. Choose the colored axis.
 2. Click **Draw / Edit Lines**. Optional: enable **Show Error Label** to see each segment’s residual (px) beside the stroke.
@@ -151,13 +153,13 @@ The camera refines whenever enough required lines exist. **Auto from VPs** allow
 
 Middle mouse and the wheel retain normal Blender navigation while a match tool is active. Sidebar sections use Blender’s native collapsible panels (**View** starts collapsed). Overlay guides only draw in **camera view** of the active match — choosing a match from the dropdown (or **View Match Camera**) rehydrates the plate/lens after opening a `.blend` and enters that view.
 
-### 4. Set origin
+### 3. Set origin
 
 Use **Pick Origin** to choose a ground point that should become world origin (placement updates automatically after VP solves). Clear (X) removes the pick.
 
 Build your own floor/wall geometry in Blender once the camera is matched—the extension no longer creates surface meshes or measures known lengths.
 
-### 5. Sync matches
+### 4. Sync matches
 
 When several matches show the same scene, register them into one Blender world:
 
@@ -165,7 +167,7 @@ When several matches show the same scene, register them into one Blender world:
 2. Choose an **Anchor** match — that world is shared space. Each match has **Enable sync for current match** (on by default) at the top of Sync Matches; turn it off to exclude that still from Solve Sync / Diagnose / Refine Lenses (the rest of the sync UI hides while that match is active).
 3. Add landmarks for features visible in two or more stills (≥5 shared 2D picks), **or** link **Known 3D** Blender objects (≥3) and pick them in the other stills. Each landmark keeps a stable `item_id` plus a `creation_index` (add order). The **A–Z** toggle beside the list (below + / line / import / tracking / −) is a depressed/undepressed control: on = alphabetical by name, off = original add order. Sort only changes the list display — not storage order. The **font** toggle under A–Z shows each landmark's name next to its pick on the plate (off by default). The **Duplicate** button under that copies type / On Ground / Use in Sync (and sets Pick Confidence from existing picks) but clears Known 3D links, parallel links, picks, and solved positions. Uncheck **Use in Sync** (list checkbox or detail prop) to exclude a landmark from Solve Sync / Diagnose without deleting its picks — useful when sync starts failing after adding one point. With **Landmark Empties** on, that also removes its helper from `PM_Sync_Landmarks` (and restores it when re-enabled).
 
-   **Find AprilTags** (tracking icon in the first button column): scans the active match still for **AprilTag 25h9** markers (same family as `tools/print-apriltags`). Each tag centre becomes a point pick on that match. Landmark names are `idNN-25h9` (NN = 00–99): if a landmark whose name **starts with** that prefix already exists, its pick for this match is updated; otherwise a new point landmark is created. OpenCV ships with the extension as a bundled wheel.
+   **Find AprilTags** (AprilTag icon in the first button column): scans the active match still for **AprilTag 25h9** markers (same family as `tools/print-apriltags`). Each tag centre becomes a point pick on that match. Landmark names are `idNN-25h9` (NN = 00–99): if a landmark whose name **starts with** that prefix already exists, its pick for this match is updated; otherwise a new point landmark is created. OpenCV ships with the extension as a bundled wheel.
 4. Pick each landmark in every still where it is visible (or re-run **Find AprilTags** per still). **Point** landmarks: click the feature. **Line** landmarks: drag a segment along the same edge (no need for a shared point). **Known 3D** Empties: auto-projected on the anchor; pick them in other matches only. For a metric edge, set **Known 3D** + **Known 3D B** on a Line landmark. Free lines (no Empties) need the edge in **≥3 stills** to constrain pose. Ordinary point landmarks must be picked in **both** stills when Known 3D sit on one line. Set **Pick Confidence** before clicking.
 5. Optional: tag **On Ground** on point landmarks in the anchor, or rely on Known 3D points/lines, to pin absolute scale. Without metric cues, sync still recovers orientation and baseline *direction* with a depth heuristic.
 6. **Solve Sync** writes a rigid transform (`R`, `t`, scale 1) onto non-anchor root Empties — or a similarity with free scale if a rigid pose cannot lock (different private-world metrics). Between Solve Sync and Refine Lenses: **Lock Rotation** keeps each Empty’s rotation at identity and only solves translation/scale (when private VP worlds already share axes); **Lock Translation** keeps Empty translation fixed and only solves rotation/scale; check **both** to leave cameras unmoved and only adjust 3D landmark / Empty positions to fit the picks. After the pairwise seed, a **joint bundle-adjustment** pass couples every free Empty pose with shared landmark positions (Cauchy-weighted point residuals + free-line midpoints / Known 3D line constraints) and soft-downweights severe landmark outliers. Use **Diagnose** first to see per-landmark RMSE without moving cameras — when error is high it also runs leave-one-out checks on the worst landmarks; **Clear** resets sync transforms. **Refine Lenses** searches each unlocked match’s focal length (re-orients from VP lines at each trial) with a **per-line VP residual prior** and hard VP guardrails, then a **coupled polish** jointly moves landmark-sharing pairs, then runs Solve Sync. It runs in a background thread so the UI stays responsive — watch the progress slider / status line, and press **Esc** or **Cancel** to stop (partial results are discarded). The % field beside it is the ± search window around current fx (default 18). Skips **1-point** matches and matches without enough VP lines (Manual FOV matches are included). The eye icon on **Sync Matches** toggles landmark picks on the plate (same pattern as VP Lines); **Landmark Empties** still controls the 3D helpers after sync.
@@ -223,6 +225,8 @@ match_perspective/
   overlay.py              # Camera-view GPU drawing
   operators.py            # File, solve, and modal interaction operators
   panel.py                # 3D View sidebar workflow
+  icons.py                # Custom sidebar icons (bpy.utils.previews)
+  icons/                  # PNG icon assets (vp-lines, april-tag 32/64, …)
   distortion.py           # NumPy image remapping
   wheels/                 # OpenCV wheels (gitignored; ./fetch-wheels.sh)
   fetch-wheels.sh         # Download platform wheels before build / link-dev

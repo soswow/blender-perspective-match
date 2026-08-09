@@ -6,7 +6,7 @@ from pathlib import Path
 
 import bpy
 
-from . import operators, overlay, properties, scene
+from . import icons, operators, overlay, properties, scene
 
 
 def _axis_counts(settings) -> dict[str, int]:
@@ -115,11 +115,15 @@ def _section(
     title: str,
     icon: str = "NONE",
     *,
+    icon_value: int = 0,
     default_closed: bool = False,
 ):
     """Create a Blender-native collapsible section; body is None when collapsed."""
     header, body = layout.panel(idname, default_closed=default_closed)
-    header.label(text=title, icon=icon)
+    if icon_value:
+        header.label(text=title, icon_value=icon_value)
+    else:
+        header.label(text=title, icon=icon)
     return header, body
 
 
@@ -196,16 +200,22 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
 
     def _draw_active_match(self, layout, context, workspace, settings) -> None:
         _image_header, image = _section(
-            layout, "PM_reference_image", "1. Reference Image", "IMAGE_DATA"
+            layout, "PM_reference_image", "Reference Image", "IMAGE_DATA"
         )
         if image is not None:
             if settings.image is not None:
-                image.label(
+                # Emboss-free operator so the filename can carry a path tooltip.
+                name_row = image.row(align=True)
+                name_row.alignment = "LEFT"
+                label_op = name_row.operator(
+                    "perspective_match.reference_image_label",
                     text=(
                         f"{Path(settings.image_path).name} "
                         f"[{settings.image_width} × {settings.image_height} px]"
-                    )
+                    ),
+                    emboss=False,
                 )
+                label_op.path = settings.image_path
             row = image.row(align=True)
             row.operator(
                 "perspective_match.load_image", text="Open Image", icon="FILE_IMAGE"
@@ -220,14 +230,11 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
         if settings.image is None:
             return
 
-        _perspective_header, perspective = _section(
-            layout, "PM_perspective", "2. Perspective", "ORIENTATION_GLOBAL"
-        )
-        if perspective is not None:
-            perspective.prop(settings, "vp_mode", expand=True)
-
         line_header, line_body = _section(
-            layout, "PM_vp_lines", "3. VP Lines", "TRACKING"
+            layout,
+            "PM_vp_lines",
+            "Vanishing Point Lines",
+            icon_value=icons.icon_id("vp_lines"),
         )
         line_header.prop(
             settings,
@@ -237,6 +244,7 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             emboss=False,
         )
         if line_body is not None:
+            line_body.prop(settings, "vp_mode", expand=True)
             line_body.prop(settings, "active_axis", expand=True)
             counts = _axis_counts(settings)
             required = f"X {counts['x']} · Y {counts['z']} · Z {counts['y']}"
@@ -255,7 +263,7 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             row.operator("perspective_match.clear_axis", text="", icon="X")
             line_body.prop(settings, "show_vp_error_labels")
 
-        _header, origin = _section(layout, "PM_origin", "4. Origin", "PIVOT_CURSOR")
+        _header, origin = _section(layout, "PM_origin", "Origin", "PIVOT_CURSOR")
         if origin is not None:
             row = origin.row(align=True)
             pick_row = row.row(align=True)
@@ -274,7 +282,7 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             )
 
 
-        _header, camera = _section(layout, "PM_camera", "5. Camera", "CAMERA_DATA")
+        _header, camera = _section(layout, "PM_camera", "Camera", "CAMERA_DATA")
         if camera is not None:
             # Full-width toolbar: property_split would shrink buttons to the value column.
             camera_actions = camera.column(align=True)
@@ -394,7 +402,7 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
 
     def _draw_sync(self, layout, context, workspace, settings) -> None:
         sync_header, sync_body = _section(
-            layout, "PM_sync", "6. Sync Matches", "LINKED"
+            layout, "PM_sync", "Sync Matches", "LINKED"
         )
         sync_header.prop(
             workspace,
@@ -438,6 +446,17 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             icon="ADD",
         )
         add_point.kind = "POINT"
+        
+        list_column.operator(
+            "perspective_match.duplicate_landmark",
+            text="",
+            icon="DUPLICATE",
+        )
+
+        list_column.operator("perspective_match.remove_landmark", text="", icon="REMOVE")
+        
+        list_column.separator()
+
         add_line = list_column.operator(
             "perspective_match.add_landmark",
             text="",
@@ -452,11 +471,13 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
         list_column.operator(
             "perspective_match.find_apriltag_landmarks",
             text="",
-            icon="TRACKING",
+            icon_value=icons.icon_id("april_tag"),
         )
-        list_column.operator("perspective_match.remove_landmark", text="", icon="REMOVE")
+        
+        
         # Separate control group: list display / overlay helpers (not storage).
         list_column.separator()
+
         list_column.prop(
             workspace,
             "landmarks_sort_alphabetical",
@@ -470,11 +491,6 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             text="",
             icon="FONTPREVIEW",
             toggle=True,
-        )
-        list_column.operator(
-            "perspective_match.duplicate_landmark",
-            text="",
-            icon="DUPLICATE",
         )
 
         landmark = scene.active_landmark(context)

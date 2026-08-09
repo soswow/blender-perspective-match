@@ -419,7 +419,11 @@ class PMSession(bpy.types.PropertyGroup):
     is_match_root: bpy.props.BoolProperty(default=False, options={"HIDDEN"})
 
     image: bpy.props.PointerProperty(name="Reference Image", type=bpy.types.Image)
-    image_path: bpy.props.StringProperty(name="Image Path", subtype="FILE_PATH")
+    image_path: bpy.props.StringProperty(
+        name="Image Path",
+        description="Full path of the reference image",
+        subtype="FILE_PATH",
+    )
     image_width: bpy.props.IntProperty(default=0, min=0)
     image_height: bpy.props.IntProperty(default=0, min=0)
     source_image_width: bpy.props.IntProperty(default=0, min=0)

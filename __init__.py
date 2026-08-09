@@ -9,7 +9,7 @@ import traceback
 import bpy
 from bpy.app.handlers import persistent
 
-from . import operators, overlay, panel, properties
+from . import icons, operators, overlay, panel, properties
 
 CLASSES = (
     *properties.CLASSES,
@@ -27,6 +27,7 @@ _RELOAD_SUBMODULES = (
     "scene",
     "distortion",
     "ros_camera_info",
+    "icons",
     "overlay",
     "operators",
     "panel",
@@ -212,11 +213,13 @@ def register() -> None:
     # Existing open file: migrate landmark creation indices once on enable.
     properties.ensure_landmark_creation_indices()
     overlay.register_viewport_draw_handler()
+    icons.register()
     _register_keymaps()
 
 
 def unregister() -> None:
     """Remove drawing, scene state, and all registered classes."""
+    icons.unregister()
     _unregister_keymaps()
     if _capture_framing_before_save in bpy.app.handlers.save_pre:
         bpy.app.handlers.save_pre.remove(_capture_framing_before_save)
