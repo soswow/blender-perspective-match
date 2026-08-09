@@ -152,8 +152,6 @@ def create_match_camera(context: bpy.types.Context) -> bpy.types.Object:
     session.lines.clear()
     session.selected_line_index = -1
     session.origin_is_set = False
-    session.project_path = ""
-    session.source_session_json = ""
     session.undistorted_path = ""
     session.undistorted_image = None
     session.undistorted_width = 0
@@ -169,13 +167,13 @@ def create_match_camera(context: bpy.types.Context) -> bpy.types.Object:
     session.view_baked_exposure = 0.0
     session.view_baked_contrast = 1.0
     session.error = ""
-    session.status = "Load a reference image or project"
+    session.status = "Load a reference image"
 
     calibration = _default_calibration(session.hfov_degrees)
     store_calibration(session, calibration)
     apply_camera(context.scene, session, calibration)
     set_active_match(context, root)
-    session.status = "Load a reference image or project"
+    session.status = "Load a reference image"
     properties.tag_viewport_redraw(context)
     return root
 
@@ -364,8 +362,6 @@ def _reset_session_edit_state(session: properties.PMSession) -> None:
     session.lines.clear()
     session.selected_line_index = -1
     session.origin_is_set = False
-    session.project_path = ""
-    session.source_session_json = ""
     clear_similarity_on_session(session)
     _clear_derived_plates(session)
     session.error = ""

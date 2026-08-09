@@ -13,7 +13,7 @@ import bpy
 from bpy_extras.io_utils import ImportHelper
 from mathutils import Vector
 
-from . import apriltag_detect, core, distortion, overlay, project_io, properties, scene
+from . import apriltag_detect, core, distortion, overlay, properties, scene
 
 
 def _session(context: bpy.types.Context):
@@ -322,27 +322,6 @@ class PM_OT_replace_image(bpy.types.Operator, ImportHelper):
         except Exception as error:
             return _report_exception(self, error)
         self.report({"INFO"}, f"Replaced with {Path(self.filepath).name}")
-        return {"FINISHED"}
-
-
-class PM_OT_import_project(bpy.types.Operator, ImportHelper):
-    """Import a desktop-compatible Perspective Match project."""
-
-    bl_idname = "perspective_match.import_project"
-    bl_label = "Import Project"
-    bl_description = "Import a .pmproj project into the active match camera"
-    bl_options = {"REGISTER", "UNDO"}
-
-    filename_ext = ".pmproj"
-    filter_glob: bpy.props.StringProperty(default="*.pmproj", options={"HIDDEN"})
-
-    def execute(self, context: bpy.types.Context) -> set[str]:
-        self._context_scene = context.scene
-        try:
-            project_io.load_project(context, self.filepath)
-        except Exception as error:
-            return _report_exception(self, error)
-        self.report({"INFO"}, f"Imported {Path(self.filepath).name}")
         return {"FINISHED"}
 
 
@@ -2079,7 +2058,6 @@ CLASSES = (
     PM_OT_reload,
     PM_OT_load_image,
     PM_OT_replace_image,
-    PM_OT_import_project,
     PM_OT_import_ros_yaml,
     PM_OT_refine,
     PM_OT_camera_view,

@@ -28,7 +28,7 @@ wheels = [
 ]
 
 [permissions]
-files = "Import images/projects and write view / undistorted PNG plates"
+files = "Import images and write view / undistorted PNG plates"
 
 [build]
 paths_exclude_pattern = [

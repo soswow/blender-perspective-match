@@ -1,4 +1,4 @@
-"""Headless registration, solver, scene, and project smoke test.
+"""Headless registration, solver, and scene smoke test.
 
 Run with:
 ``blender --factory-startup -b --python validate_addon.py``
@@ -7,7 +7,6 @@ Run with:
 from __future__ import annotations
 
 import importlib.util
-import json
 from pathlib import Path
 import sys
 import tempfile
@@ -55,48 +54,6 @@ def _write_png(temporary_path: Path, name: str, width: int, height: int, color) 
     return image_path
 
 
-def _write_minimal_pmproj(path: Path, image_path: Path, *, include_origin: bool = True) -> None:
-    """Write a minimal importable .pmproj for smoke testing."""
-    session = {
-        "imagePath": str(image_path),
-        "vpMode": 2,
-        "activeAxis": "x",
-        "lockFocal": False,
-        "overlayOpacity": 0.9,
-        "controlsOpacity": 1.0,
-        "showVpOverlay": True,
-        "lines": {
-            "x": [
-                {"id": "lx1", "x1": 50.0, "y1": 180.0, "x2": 120.0, "y2": 220.0},
-                {"id": "lx2", "x1": 60.0, "y1": 420.0, "x2": 140.0, "y2": 380.0},
-            ],
-            "y": [],
-            "z": [
-                {"id": "lz1", "x1": 680.0, "y1": 160.0, "x2": 620.0, "y2": 210.0},
-                {"id": "lz2", "x1": 670.0, "y1": 450.0, "x2": 610.0, "y2": 400.0},
-            ],
-        },
-        # Surfaces/scale must be ignored by the importer.
-        "surfaces": [
-            {"id": "ignored", "plane": "xz", "x1": 1, "y1": 1, "x2": 2, "y2": 2, "divisions": 4},
-        ],
-        "scalePointA": [100.0, 100.0],
-        "scalePointB": [200.0, 100.0],
-        "measuredLength": 2.0,
-        "scale": 0.5,
-    }
-    if include_origin:
-        session["originImage"] = [400.0, 420.0]
-    path.write_text(
-        json.dumps({
-            "kind": "perspective-match-project",
-            "version": 1,
-            "session": session,
-        }),
-        encoding="utf-8",
-    )
-
-
 def main() -> None:
     """Exercise core math and native scene application."""
     extension = load_extension_module()
@@ -110,7 +67,6 @@ def main() -> None:
             distortion = sys.modules["match_perspective.distortion"]
             properties = sys.modules["match_perspective.properties"]
             scene = sys.modules["match_perspective.scene"]
-            project_io = sys.modules["match_perspective.project_io"]
 
             crossing = core.vanishing_point_from_lines(
                 [
@@ -269,19 +225,31 @@ def main() -> None:
             assert roots[0] == root_a
 
             scene.set_active_match(bpy.context, root_a)
-            settings = properties.active_session(bpy.context)
-            assert settings is not None
-
-            project_path = temporary_path / "import.pmproj"
-            _write_minimal_pmproj(project_path, image_path)
-            project_io.load_project(bpy.context, str(project_path))
+            # Rebind the original plate for downstream lighting/distortion checks.
+            # Replace Image earlier left a different still on this match.
+            scene.bind_reference_image(bpy.context, str(image_path))
             reloaded = properties.active_session(bpy.context)
             assert reloaded is not None
+            reloaded.vp_mode = "2"
+            reloaded.lines.clear()
+            add_bundle(
+                reloaded,
+                "x",
+                np.array((-600.0, 300.0)),
+                ((200.0, 120.0), (220.0, 500.0)),
+            )
+            add_bundle(
+                reloaded,
+                "z",
+                np.array((900.0, 300.0)),
+                ((620.0, 100.0), (610.0, 520.0)),
+            )
+            reloaded.origin_image = (400.0, 420.0)
+            reloaded.origin_is_set = True
+            scene.refine_match(bpy.context)
             assert len(reloaded.lines) == 4
             assert reloaded.origin_is_set
             assert reloaded.camera_object is not None
-            # Surfaces from the project must not be created.
-            assert not hasattr(reloaded, "surfaces") or len(getattr(reloaded, "surfaces", [])) == 0
 
             reloaded.lock_focal = True
             # Ordinary refine must keep a stored λ without re-fitting it.
@@ -427,26 +395,9 @@ def main() -> None:
             reloaded.lock_focal = True
             reloaded.hfov_degrees += 1.0
             scene.apply_manual_fov(bpy.context)
-            assert not reloaded.view_undistorted
-            assert reloaded.undistorted_image is None
-
-            camera_before_invalid_load = reloaded.camera_object
-            invalid_path = temporary_path / "invalid.pmproj"
-            invalid_path.write_text(json.dumps({
-                "kind": "perspective-match-project",
-                "version": 1,
-                "session": {
-                    "imagePath": str(image_path),
-                    "lines": {"x": [{"x1": "broken"}]},
-                },
-            }))
-            try:
-                project_io.load_project(bpy.context, str(invalid_path))
-            except ValueError:
-                pass
-            else:
-                raise AssertionError("Malformed project should be rejected")
-            assert reloaded.camera_object == camera_before_invalid_load
+            # FOV change regenerates the undistorted plate when one is being viewed.
+            assert reloaded.view_undistorted
+            assert reloaded.undistorted_image is not None
 
             # Landmark sync: 2D↔2D essential pose; ground tags pin absolute scale.
             from match_perspective import sync

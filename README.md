@@ -29,7 +29,7 @@ The extension is a native port of the manual workflow from Perspective Match Stu
 - Estimate Fitzgibbon one-parameter radial distortion from three or more concurrent segments.
 - Press **Estimate Distortion** to fit λ once and show an expanded undistorted PNG (NumPy only—no OpenCV). Editing VP lines afterward keeps the stored λ; press again to re-fit.
 - Apply display-only exposure/contrast to a sibling ``*-pm-view.png`` plate (undistorted uses the same lit image).
-- Save match state in the `.blend` and import desktop-compatible `.pmproj` files.
+- Save match state in the `.blend`.
 
 ## Requirements
 
@@ -116,11 +116,11 @@ Each match remembers its last camera-view zoom and pan. Switching matches (or Un
 
 ### 1. Load a reference
 
-With a match active, choose **Open Image** or **Import Project** (`.pmproj`). The still binds to the **active** match only; other matches stay untouched. If no match is active, Open Image / Import Project creates one first.
+With a match active, choose **Open Image**. The still binds to the **active** match only; other matches stay untouched. If no match is active, Open Image creates one first.
 
 After bind, the hierarchy is renamed from `PM_Match_###` to `PM_<image stem>` when that name is free. You can rename again anytime with the rename button in **Match Cameras**. The camera becomes the scene camera, the still is attached with **Stretch** frame mapping, and render dimensions match the image.
 
-Once a still is loaded, **Import Project** is replaced by **Replace Image**: same pixel size only, keeps VP lines, origin, calibration, and landmarks (drops view-lighting / undistorted caches). **Open Image** still does a full rebind and clears that match’s edit state.
+Once a still is loaded, **Replace Image** appears: same pixel size only, keeps VP lines, origin, calibration, and landmarks (drops view-lighting / undistorted caches). **Open Image** still does a full rebind and clears that match’s edit state.
 
 ### 2. Choose perspective
 
@@ -195,21 +195,6 @@ Why not “any corresponding points”? Photogrammetry / SfM does solve relative
 
 Press **Estimate Distortion** in the **Camera** section. With a successful VP solve and ≥3 concurrent segments on one axis, the solver fits Fitzgibbon λ once and generates/switches to an undistorted plate. Editing VP lines afterward keeps that λ (and regenerates the plate if you are still viewing it) — press the button again to re-fit. Works with **Manual FOV** (λ is estimated at the locked focal so you can compare VP-line RMSE with/without distortion). **Original Plate** clears λ, re-solves, and restores the source still. Plate file paths are logged to the console, not the sidebar status line.
 
-## Project compatibility
-
-The extension imports version-1 Perspective Match Studio projects:
-
-```json
-{
-  "kind": "perspective-match-project",
-  "version": 1,
-  "savedAt": "...",
-  "session": {}
-}
-```
-
-The referenced image remains external. Relative image paths are resolved from the `.pmproj` directory. Surfaces and scale fields in imported projects are ignored; origin is still applied when present. Session data for each match is stored on its root Empty in the `.blend`.
-
 ## Limitations
 
 - Initial FOV is manual. GeoCalib automatic FOV/gravity estimation is intentionally omitted.
@@ -222,7 +207,6 @@ The referenced image remains external. Relative image paths are resolved from th
 - Sync **Solve Sync** seeds pairwise pose then runs joint BA over Empty transforms + landmarks + free-line midpoints (Cauchy + line constraints) with block-analytic Jacobians; use **Refine Lenses** afterward to adjust unlocked focals against landmarks + a per-line VP prior with hard guardrails and a coupled multi-camera polish.
 - **Diagnose** can leave-one-out the worst landmarks when sync error is high.
 - View lighting bakes per match into ``<stem>-<camera>-pm-view.png``; matches that share one still do not share one plate. Reload the add-on after updating so activate restores a lost plate instead of the bright original.
-- Projects are import-only; there is no Save Project or camera JSON export.
 
 ## Project layout
 
@@ -240,7 +224,6 @@ match_perspective/
   operators.py            # File, solve, and modal interaction operators
   panel.py                # 3D View sidebar workflow
   distortion.py           # NumPy image remapping
-  project_io.py           # .pmproj import
   wheels/                 # OpenCV wheels (gitignored; ./fetch-wheels.sh)
   fetch-wheels.sh         # Download platform wheels before build / link-dev
   validate_addon.py       # Headless Blender smoke test

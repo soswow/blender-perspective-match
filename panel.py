@@ -216,14 +216,7 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
                 "perspective_match.load_image", text="Open Image", icon="FILE_IMAGE"
             )
             if settings.image is None:
-                row.operator(
-                    "perspective_match.import_project",
-                    text="Import Project",
-                    icon="FILE_FOLDER",
-                )
-                image.label(
-                    text="Load a still or .pmproj into this match", icon="INFO"
-                )
+                image.label(text="Load a still into this match", icon="INFO")
             else:
                 row.operator(
                     "perspective_match.replace_image",

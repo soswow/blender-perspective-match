@@ -419,8 +419,6 @@ class PMSession(bpy.types.PropertyGroup):
 
     image: bpy.props.PointerProperty(name="Reference Image", type=bpy.types.Image)
     image_path: bpy.props.StringProperty(name="Image Path", subtype="FILE_PATH")
-    project_path: bpy.props.StringProperty(name="Project Path", subtype="FILE_PATH")
-    source_session_json: bpy.props.StringProperty(default="", options={"HIDDEN"})
     image_width: bpy.props.IntProperty(default=0, min=0)
     image_height: bpy.props.IntProperty(default=0, min=0)
     source_image_width: bpy.props.IntProperty(default=0, min=0)
