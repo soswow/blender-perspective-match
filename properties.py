@@ -515,7 +515,7 @@ class PMSession(bpy.types.PropertyGroup):
         update=_redraw,
     )
     overlay_opacity: bpy.props.FloatProperty(
-        name="Opacity",
+        name="Overlay Opacity",
         description="Opacity for VP guides, handles, origin marker, and landmark picks",
         default=0.9,
         min=0.05,

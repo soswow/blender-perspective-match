@@ -1,10 +1,10 @@
 TODOs to be done:
+
+Done TODOs:
 - No need for `-view` variant of the image file name below "Apply lighting" button.
 - Move Opacity slider to top of that section. and call it "Overlay opacity"
 - No need for warning "Display only - does not affect ... "
 - Opacity should affect actively drawn VP line. right now it is only applied for already drawn ones.
-
-Done TODOs:
 - Sync: free-line midpoints participate in joint BA (directions fixed; parallel pass afterward).
 - Sync: stronger Cauchy robust loss in joint BA (replaces Huber taper).
 - Sync/Refine Lenses: coupled multi-camera focal search (vs coordinate descent).

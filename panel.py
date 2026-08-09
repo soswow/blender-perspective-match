@@ -413,7 +413,7 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             layout, "PM_view", "View", "IMAGE_RGB", default_closed=True
         )
         if view is not None:
-            view.label(text="Display only — does not affect the solve", icon="INFO")
+            view.prop(settings, "overlay_opacity")
             view.prop(settings, "view_exposure")
             view.prop(settings, "view_contrast")
             row = view.row(align=True)
@@ -421,12 +421,6 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             row.operator(
                 "perspective_match.reset_view_lighting", text="", icon="LOOP_BACK"
             )
-            if settings.view_lighting_applied:
-                view.label(
-                    text=Path(settings.view_path).name or "View plate active",
-                    icon="CHECKMARK",
-                )
-            view.prop(settings, "overlay_opacity")
 
     def _draw_sync(self, layout, context, workspace, settings) -> None:
         sync_header, sync_body = _section(

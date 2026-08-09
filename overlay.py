@@ -936,7 +936,7 @@ def _draw_preview(context: bpy.types.Context, settings) -> None:
         context,
         ideal[0],
         ideal[1],
-        AXIS_COLORS[settings.active_axis],
+        _with_alpha(AXIS_COLORS[settings.active_axis], settings.overlay_opacity),
         2.0,
     )
 
