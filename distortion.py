@@ -515,6 +515,9 @@ def sync_undistorted_plate_after_refine(context: bpy.types.Context) -> None:
 
     Call after refine so FOV/PP changes regenerate the plate instead of leaving
     a blank/reset background. Does not re-estimate λ — that is button-only.
+
+    The plate depends on intrinsics and λ only. Orientation-only VP refines keep
+    a valid cache — skip the expensive remap + PNG write in that case.
     """
     settings = properties.active_session(context)
     if settings is None:
@@ -524,6 +527,9 @@ def sync_undistorted_plate_after_refine(context: bpy.types.Context) -> None:
         and abs(settings.division_lambda) > 1.0e-8
         and not settings.lambda_saturated
     ):
+        # Cache still present ⇒ K/λ unchanged (invalidate clears the pointer).
+        if settings.undistorted_image is not None:
+            return
         try:
             generate_undistorted_plate(context)
         except Exception as error:

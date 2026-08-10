@@ -201,7 +201,8 @@ def _clear_interact_flags(context: bpy.types.Context) -> None:
 def _interact_cursor_for_mode(mode: str, context: bpy.types.Context) -> str:
     """Blender window cursor id for an active Draw / Pick tool mode."""
     if mode == "LINE":
-        return "KNIFE"
+        # Empty-plate draw affordance; hover hit-tests refine this further.
+        return "PAINT_CROSS"
     if mode == "PP":
         return "SCROLL_XY"
     if mode == "ORIGIN":
@@ -226,9 +227,16 @@ def _set_interact_cursor(
         return
     cursor = _interact_cursor_for_mode(mode, context)
     if modal:
-        window.cursor_modal_set(cursor)
+        # Push DEFAULT as the modal cursor so later cursor_set("DEFAULT") shows a
+        # real arrow. Blender remaps DEFAULT → win->modalcursor while modal is set
+        # (see WM_cursor_set in wm_cursors.cc).
+        window.cursor_modal_set("DEFAULT")
+        window.cursor_set(cursor)
     else:
         window.cursor_set(cursor)
+    # Keep hover-cursor tracking in sync when the tool mode is (re)applied.
+    if _active_interact is not None:
+        _active_interact._hover_cursor = cursor
 
 
 def _restore_interact_cursor(context: bpy.types.Context) -> None:
@@ -237,6 +245,8 @@ def _restore_interact_cursor(context: bpy.types.Context) -> None:
     if window is None:
         return
     window.cursor_modal_restore()
+    if _active_interact is not None:
+        _active_interact._hover_cursor = ""
 
 
 def _perspective_match_sidebar_active(context: bpy.types.Context) -> bool:
@@ -866,6 +876,8 @@ class PM_OT_interact(bpy.types.Operator):
     _original: tuple[float, ...] | None = None
     _edit_index: int = -1
     _edit_endpoint: int = 0
+    # Last cursor id applied during hover (avoids redundant cursor_set calls).
+    _hover_cursor: str = ""
     # Throttle full VP re-orient while dragging the principal point.
     _pp_last_reorient: float = 0.0
     _PP_REORIENT_INTERVAL = 0.08
@@ -928,12 +940,72 @@ class PM_OT_interact(bpy.types.Operator):
         workspace.is_modal = True
         self._drag_kind = ""
         self._edit_index = -1
+        self._hover_cursor = ""
         _active_interact = self
         context.window_manager.modal_handler_add(self)
         _set_interact_cursor(context, self.mode, modal=True)
         settings.status = self._status_prompt()
         properties.tag_viewport_redraw(context)
         return {"RUNNING_MODAL"}
+
+    def _apply_hover_cursor(self, context: bpy.types.Context, cursor: str) -> None:
+        """Set the window cursor if it differs from the last hover choice."""
+        if self._hover_cursor == cursor:
+            return
+        window = context.window
+        if window is None:
+            return
+        window.cursor_set(cursor)
+        self._hover_cursor = cursor
+
+    def _update_hover_cursor(
+        self,
+        context: bpy.types.Context,
+        event,
+        region,
+    ) -> None:
+        """VP-line cursors: paint-cross draw, hand-point select, hand ends, closed drag."""
+        if self.mode == "LINE":
+            # Grab cursor only while actually drawing or dragging an endpoint.
+            if self._drag_kind in {"LINE_ENDPOINT", "NEW_LINE"}:
+                self._apply_hover_cursor(context, "HAND_CLOSED")
+                return
+            # Click-select (body hit) is not a grab — show selected-body cursor.
+            if self._drag_kind == "SELECT":
+                self._apply_hover_cursor(context, "DEFAULT")
+                return
+            cursor = "PAINT_CROSS"
+            if scene.is_camera_view(context):
+                settings = _session(context)
+                mouse = Vector((event.mouse_x - region.x, event.mouse_y - region.y))
+                hit_index, endpoint = self._hit_line(context, mouse)
+                if hit_index >= 0:
+                    if endpoint:
+                        # Control-point handle on the selected line.
+                        cursor = "HAND"
+                    elif (
+                        settings is not None
+                        and hit_index == settings.selected_line_index
+                    ):
+                        # Already selected segment body — no special action.
+                        cursor = "DEFAULT"
+                    else:
+                        # Click will select this unselected line.
+                        cursor = "HAND_POINT"
+            self._apply_hover_cursor(context, cursor)
+            return
+
+        if self._drag_kind:
+            return
+        cursor = _interact_cursor_for_mode(self.mode, context)
+        if scene.is_camera_view(context):
+            mouse = Vector((event.mouse_x - region.x, event.mouse_y - region.y))
+            if self.mode == "LANDMARK":
+                landmark = scene.active_landmark(context)
+                if landmark is not None and landmark.kind == "LINE":
+                    if self._hit_landmark_line(context, mouse) != 0:
+                        cursor = "HAND"
+        self._apply_hover_cursor(context, cursor)
 
     def _status_prompt(self) -> str:
         if self.mode == "LINE":
@@ -1170,11 +1242,24 @@ class PM_OT_interact(bpy.types.Operator):
     def _complete_drag(self, context, image_point: tuple[float, float]) -> None:
         settings = _session(context)
         snap_status: str | None = None
-        if self._drag_kind == "NEW_LINE" and self._start is not None:
-            if math.hypot(image_point[0] - self._start[0], image_point[1] - self._start[1]) >= 8.0:
+        drag_kind = self._drag_kind
+        start = self._start
+        edit_index = self._edit_index
+
+        # End the gesture before refine/plate work so the closed-hand cursor
+        # cannot stick for the duration of that (sometimes multi-second) work.
+        self._drag_kind = ""
+        self._start = None
+        self._original = None
+        overlay.clear_preview(context)
+        if drag_kind in {"NEW_LINE", "LINE_ENDPOINT"}:
+            self._apply_hover_cursor(context, "WAIT")
+
+        if drag_kind == "NEW_LINE" and start is not None:
+            if math.hypot(image_point[0] - start[0], image_point[1] - start[1]) >= 8.0:
                 start_point, end_point, snap_status = _maybe_snap_vp_segment(
                     context,
-                    self._start,
+                    start,
                     image_point,
                 )
                 line = settings.lines.add()
@@ -1184,8 +1269,8 @@ class PM_OT_interact(bpy.types.Operator):
                 line.x2, line.y2 = end_point
                 settings.selected_line_index = len(settings.lines) - 1
                 _refine_if_ready(context)
-        elif self._drag_kind == "LINE_ENDPOINT":
-            line = settings.lines[self._edit_index]
+        elif drag_kind == "LINE_ENDPOINT":
+            line = settings.lines[edit_index]
             start_point, end_point, snap_status = _maybe_snap_vp_segment(
                 context,
                 (line.x1, line.y1),
@@ -1194,7 +1279,7 @@ class PM_OT_interact(bpy.types.Operator):
             line.x1, line.y1 = start_point
             line.x2, line.y2 = end_point
             _refine_if_ready(context)
-        elif self._drag_kind == "PP":
+        elif drag_kind == "PP":
             try:
                 scene.set_principal_point(context, image_point, finalize=True)
             except Exception as error:
@@ -1204,10 +1289,6 @@ class PM_OT_interact(bpy.types.Operator):
         if snap_status is not None and settings is not None:
             settings.status = snap_status
             properties.tag_viewport_redraw(context)
-        self._drag_kind = ""
-        self._start = None
-        self._original = None
-        overlay.clear_preview(context)
 
     def _cancel_drag(self, context) -> bool:
         if not self._drag_kind:
@@ -1287,6 +1368,10 @@ class PM_OT_interact(bpy.types.Operator):
                     self._cancel_drag(context)
                     return {"RUNNING_MODAL"}
                 return {"RUNNING_MODAL"}
+            # Drop the hover hand when the pointer leaves the 3D View window.
+            self._apply_hover_cursor(
+                context, _interact_cursor_for_mode(self.mode, context)
+            )
             return {"PASS_THROUGH"}
 
         with context.temp_override(area=area, region=region, space_data=space):
@@ -1294,6 +1379,7 @@ class PM_OT_interact(bpy.types.Operator):
             if event.type == "MIDDLEMOUSE":
                 return {"PASS_THROUGH"}
             if event.type == "MOUSEMOVE" and not self._drag_kind:
+                self._update_hover_cursor(context, event, region)
                 return {"PASS_THROUGH"}
 
             # LMB / active drag: pin back to the match camera if navigation left it.
@@ -1306,6 +1392,7 @@ class PM_OT_interact(bpy.types.Operator):
             if event.type == "MOUSEMOVE" and self._drag_kind:
                 if image_point is not None:
                     self._update_drag(context, image_point)
+                self._update_hover_cursor(context, event, region)
                 return {"RUNNING_MODAL"}
             if event.type == "LEFTMOUSE" and event.value == "PRESS":
                 # Consume LMB so Blender object selection cannot race the tool.
@@ -1357,6 +1444,7 @@ class PM_OT_interact(bpy.types.Operator):
                     properties.tag_viewport_redraw(context)
                     return {"RUNNING_MODAL"}
                 self._begin_drag(context, event, image_point, region)
+                self._update_hover_cursor(context, event, region)
                 return {"RUNNING_MODAL"}
             if event.type == "LEFTMOUSE" and event.value == "RELEASE" and self._drag_kind:
                 if image_point is not None:
@@ -1369,6 +1457,8 @@ class PM_OT_interact(bpy.types.Operator):
                         self._complete_drag(context, image_point)
                 else:
                     self._cancel_drag(context)
+                # Refresh after the gesture so release without move is correct.
+                self._update_hover_cursor(context, event, region)
                 return {"RUNNING_MODAL"}
             return {"PASS_THROUGH"}
 
