@@ -331,6 +331,45 @@ class PMLandmarkObservation(bpy.types.PropertyGroup):
     )
 
 
+class PMAutoTrackObservation(bpy.types.PropertyGroup):
+    """One auto-feature pick inside a single match still."""
+
+    match_root: bpy.props.PointerProperty(
+        name="Match",
+        type=bpy.types.Object,
+    )
+    # Denormalized name so overlay lookup survives pointer quirks.
+    match_name: bpy.props.StringProperty(default="", options={"HIDDEN"})
+    x: bpy.props.FloatProperty(default=0.0)
+    y: bpy.props.FloatProperty(default=0.0)
+    is_set: bpy.props.BoolProperty(default=False)
+
+
+class PMAutoTrack(bpy.types.PropertyGroup):
+    """Anonymous automatic feature track (not shown in the personal landmark list)."""
+
+    track_id: bpy.props.StringProperty(default="", options={"HIDDEN"})
+    multi_view: bpy.props.BoolProperty(
+        name="Multi-view",
+        description="True when this feature was matched in at least two stills",
+        default=False,
+        options={"HIDDEN"},
+    )
+    residual_px: bpy.props.FloatProperty(
+        name="Residual",
+        description="Mean epipolar residual from pairwise matching (pixels)",
+        default=0.0,
+        options={"HIDDEN"},
+    )
+    # Multi-view tracks default on; orphans stay out of the sync graph.
+    use_in_sync: bpy.props.BoolProperty(
+        name="Use in Sync",
+        description="Include this auto track in Solve Sync when auto features are enabled",
+        default=True,
+    )
+    observations: bpy.props.CollectionProperty(type=PMAutoTrackObservation)
+
+
 class PMLandmark(bpy.types.PropertyGroup):
     """Named 3D landmark with per-match image observations."""
 
@@ -524,7 +563,7 @@ class PMSession(bpy.types.PropertyGroup):
     )
     overlay_opacity: bpy.props.FloatProperty(
         name="Overlay Opacity",
-        description="Opacity for VP guides, handles, origin marker, and landmark picks",
+        description="Opacity for VP guides, handles, origin marker, landmark picks, and auto feature dots",
         default=0.9,
         min=0.05,
         max=1.0,
@@ -642,6 +681,106 @@ class PMWorkspace(bpy.types.PropertyGroup):
         min=0,
         options={"HIDDEN"},
     )
+    # Automatic ORB/SIFT tracks — parallel to personal landmarks, denser overlay.
+    auto_tracks: bpy.props.CollectionProperty(type=PMAutoTrack)
+    show_auto_features: bpy.props.BoolProperty(
+        name="Auto Feature Guides",
+        description=(
+            "Show automatically detected feature dots on the reference plate "
+            "(independent of landmark overlays)"
+        ),
+        default=True,
+        update=_redraw,
+    )
+    use_auto_features_in_sync: bpy.props.BoolProperty(
+        name="Use Auto Features in Sync",
+        description=(
+            "Include multi-view auto tracks in Solve Sync / Diagnose "
+            "(down-weighted vs manual landmarks)"
+        ),
+        default=True,
+        update=_redraw,
+    )
+    auto_feature_detector: bpy.props.EnumProperty(
+        name="Detector",
+        description="OpenCV feature detector used by Find Auto Features",
+        items=(
+            ("ORB", "ORB", "Fast binary features — default"),
+            ("SIFT", "SIFT", "Slower; sometimes stronger under scale change"),
+        ),
+        default="ORB",
+    )
+    auto_feature_max_features: bpy.props.IntProperty(
+        name="Max Features",
+        description="Maximum keypoints detected per still",
+        default=1500,
+        min=100,
+        soft_max=4000,
+        max=8000,
+    )
+    auto_feature_match_ratio: bpy.props.FloatProperty(
+        name="Match Ratio",
+        description=(
+            "Lowe ratio test for descriptor matching. "
+            "Higher (e.g. 0.85) keeps more raw matches; lower is stricter"
+        ),
+        default=0.75,
+        min=0.50,
+        max=0.95,
+        soft_min=0.60,
+        soft_max=0.90,
+        step=1,
+        precision=2,
+    )
+    auto_feature_ransac_px: bpy.props.FloatProperty(
+        name="RANSAC px",
+        description=(
+            "Geometric inlier threshold in pixels (fundamental / homography). "
+            "Raise on soft or slightly misaligned stills"
+        ),
+        default=3.0,
+        min=0.5,
+        max=20.0,
+        soft_min=1.0,
+        soft_max=8.0,
+        step=10,
+        precision=1,
+    )
+    auto_feature_keep_percent: bpy.props.FloatProperty(
+        name="Keep %",
+        description=(
+            "After RANSAC, keep this percentile of multi-view tracks by residual "
+            "(lower = drop more weak tracks)"
+        ),
+        default=80.0,
+        min=10.0,
+        max=100.0,
+        soft_min=50.0,
+        soft_max=100.0,
+        step=100,
+        precision=0,
+    )
+    auto_feature_max_orphans: bpy.props.IntProperty(
+        name="Max Orphans",
+        description=(
+            "Maximum unmatched (orphan) feature dots drawn per still. "
+            "Does not affect Sync — visualization only"
+        ),
+        default=120,
+        min=0,
+        soft_max=400,
+        max=2000,
+    )
+    auto_feature_progress: bpy.props.FloatProperty(
+        name="Auto Feature Progress",
+        description="Progress of the running Find Auto Features job",
+        default=0.0,
+        min=0.0,
+        max=1.0,
+        subtype="FACTOR",
+        options={"SKIP_SAVE"},
+    )
+    auto_feature_status: bpy.props.StringProperty(default="", options={"SKIP_SAVE"})
     landmarks_sort_alphabetical: bpy.props.BoolProperty(
         name="Sort A–Z",
         description=(
@@ -757,6 +896,8 @@ CLASSES = (
     PMLineSegment,
     PMLandmarkObservation,
     PMLandmark,
+    PMAutoTrackObservation,
+    PMAutoTrack,
     PMSession,
     PMWorkspace,
 )

@@ -13,7 +13,7 @@ import bpy
 from bpy_extras.io_utils import ImportHelper
 from mathutils import Vector
 
-from . import apriltag_detect, core, distortion, overlay, properties, scene
+from . import apriltag_detect, core, distortion, feature_detect, overlay, properties, scene
 
 
 def _session(context: bpy.types.Context):
@@ -109,15 +109,36 @@ _lens_refine_running = False
 _lens_refine_progress = {"step": 0, "total": 1, "label": ""}
 _lens_refine_result_box: dict = {}
 
+# Background Find Auto Features job (OpenCV in a worker thread; bpy apply on main).
+_auto_feature_lock = threading.Lock()
+_auto_feature_cancel: threading.Event | None = None
+_auto_feature_running = False
+_auto_feature_progress = {"step": 0, "total": 1, "label": ""}
+_auto_feature_result_box: dict = {}
+
 
 def lens_refine_is_running() -> bool:
     """True while a Refine Lenses modal/worker is active."""
     return bool(_lens_refine_running)
 
 
+def auto_feature_is_running() -> bool:
+    """True while a Find Auto Features modal/worker is active."""
+    return bool(_auto_feature_running)
+
+
 def request_lens_refine_cancel() -> bool:
     """Signal the running Refine Lenses worker to stop. True if one was running."""
     event = _lens_refine_cancel
+    if event is None:
+        return False
+    event.set()
+    return True
+
+
+def request_auto_feature_cancel() -> bool:
+    """Signal the running Find Auto Features worker to stop. True if one was running."""
+    event = _auto_feature_cancel
     if event is None:
         return False
     event.set()
@@ -1728,6 +1749,310 @@ class PM_OT_find_apriltag_landmarks(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class PM_OT_find_auto_features(bpy.types.Operator):
+    """Detect and match automatic features across sync-enabled stills (background)."""
+
+    bl_idname = "perspective_match.find_auto_features"
+    bl_label = "Find Auto Features"
+    bl_description = (
+        "Detect ORB/SIFT features in sync-enabled stills, match them with RANSAC, "
+        "and store anonymous auto tracks (runs in the background — Esc to cancel)"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    _timer = None
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        if auto_feature_is_running() or lens_refine_is_running():
+            return False
+        roots = [
+            root
+            for root in properties.iter_sync_enabled_roots()
+            if root.pm_session.image is not None
+        ]
+        return len(roots) >= 2
+
+    def invoke(self, context: bpy.types.Context, _event) -> set[str]:
+        global _auto_feature_cancel, _auto_feature_running, _auto_feature_result_box
+        global _auto_feature_progress
+
+        workspace = _workspace(context)
+        # Prefer on-disk paths so cv2.imread runs in the worker (keeps UI free).
+        # Only pull Blender pixels on the main thread when no readable path exists.
+        sources: list[feature_detect.ImageSource] = []
+        try:
+            feature_detect._import_cv2()
+            for root in properties.iter_sync_enabled_roots():
+                session = root.pm_session
+                if session.image is None:
+                    continue
+                image_path = (getattr(session, "image_path", "") or "").strip()
+                path_ok = False
+                if image_path:
+                    path_ok = Path(image_path).expanduser().is_file()
+                if path_ok:
+                    sources.append(
+                        feature_detect.ImageSource(
+                            match_id=root.name,
+                            image_path=image_path,
+                        )
+                    )
+                    continue
+                # Blender buffer — must be read on the main thread.
+                gray = feature_detect.load_match_gray(session)
+                sources.append(
+                    feature_detect.ImageSource(
+                        match_id=root.name,
+                        gray=gray,
+                    )
+                )
+        except feature_detect.FeatureDetectDependencyError as error:
+            return _report_exception(self, error)
+        except Exception as error:
+            return _report_exception(self, error)
+
+        if len(sources) < 2:
+            self.report({"WARNING"}, "Need at least two sync-enabled stills")
+            return {"CANCELLED"}
+
+        detector = workspace.auto_feature_detector
+        max_features = int(workspace.auto_feature_max_features)
+        match_ratio = float(workspace.auto_feature_match_ratio)
+        ransac_px = float(workspace.auto_feature_ransac_px)
+        keep_percentile = float(workspace.auto_feature_keep_percent)
+        max_orphans = int(workspace.auto_feature_max_orphans)
+        cancel_event = threading.Event()
+        result_box: dict = {"done": False}
+        progress_state = {"step": 0, "total": 1, "label": "Starting…"}
+
+        with _auto_feature_lock:
+            if _auto_feature_running:
+                self.report({"WARNING"}, "Find Auto Features already running")
+                return {"CANCELLED"}
+            _auto_feature_cancel = cancel_event
+            _auto_feature_running = True
+            _auto_feature_result_box = result_box
+            _auto_feature_progress = progress_state
+
+        workspace.auto_feature_progress = 0.0
+        workspace.auto_feature_status = "Find Auto Features running… Esc to cancel"
+        workspace.sync_status = workspace.auto_feature_status
+        properties.tag_viewport_redraw(context)
+
+        def _on_progress(step: int, total_steps: int, label: str) -> None:
+            progress_state["step"] = int(step)
+            progress_state["total"] = max(int(total_steps), 1)
+            progress_state["label"] = str(label)
+
+        def _worker() -> None:
+            try:
+                job_result = feature_detect.build_tracks_from_sources(
+                    sources,
+                    detector=detector,
+                    max_features=max_features,
+                    ratio=match_ratio,
+                    ransac_px=ransac_px,
+                    keep_percentile=keep_percentile,
+                    max_orphans_per_match=max_orphans,
+                    cancel_check=cancel_event.is_set,
+                    progress_callback=_on_progress,
+                )
+                result_box["result"] = job_result
+            except Exception as error:
+                result_box["error"] = error
+            finally:
+                result_box["done"] = True
+
+        thread = threading.Thread(
+            target=_worker,
+            name="PM-AutoFeatures",
+            daemon=True,
+        )
+        thread.start()
+
+        window_manager = context.window_manager
+        window_manager.progress_begin(0, 100)
+        self._timer = window_manager.event_timer_add(0.1, window=context.window)
+        window_manager.modal_handler_add(self)
+        return {"RUNNING_MODAL"}
+
+    def _finish_job(self, context: bpy.types.Context, *, cancelled: bool) -> set[str]:
+        global _auto_feature_cancel, _auto_feature_running
+
+        window_manager = context.window_manager
+        if self._timer is not None:
+            window_manager.event_timer_remove(self._timer)
+            self._timer = None
+        try:
+            window_manager.progress_end()
+        except Exception:
+            pass
+
+        workspace = _workspace(context)
+        result_box = _auto_feature_result_box
+
+        with _auto_feature_lock:
+            _auto_feature_running = False
+            _auto_feature_cancel = None
+
+        if result_box.get("error") is not None:
+            error = result_box["error"]
+            workspace.auto_feature_progress = 0.0
+            workspace.auto_feature_status = str(error)
+            workspace.sync_status = str(error)
+            properties.tag_viewport_redraw(context)
+            return _report_exception(
+                self,
+                error if isinstance(error, Exception) else Exception(str(error)),
+            )
+
+        job_result = result_box.get("result")
+        if job_result is None or cancelled:
+            workspace.auto_feature_progress = 0.0
+            message = "Auto feature detection cancelled"
+            workspace.auto_feature_status = message
+            workspace.sync_status = message
+            properties.tag_viewport_redraw(context)
+            self.report({"WARNING"}, message)
+            return {"CANCELLED"}
+
+        try:
+            feature_detect.apply_feature_tracks(context, job_result)
+        except Exception as error:
+            return _report_exception(self, error)
+
+        workspace.auto_feature_progress = 0.0
+        workspace.sync_status = job_result.message
+        self.report({"INFO"}, job_result.message)
+        return {"FINISHED"}
+
+    def modal(self, context: bpy.types.Context, event) -> set[str]:
+        workspace = _workspace(context)
+        if event.type in {"ESC"} and event.value == "PRESS":
+            request_auto_feature_cancel()
+            workspace.auto_feature_status = "Cancelling auto features…"
+            workspace.sync_status = workspace.auto_feature_status
+            properties.tag_viewport_redraw(context)
+            return {"RUNNING_MODAL"}
+
+        if event.type != "TIMER":
+            return {"PASS_THROUGH"}
+
+        progress = _auto_feature_progress
+        total = max(int(progress.get("total", 1)), 1)
+        step = int(progress.get("step", 0))
+        label = str(progress.get("label", ""))
+        workspace.auto_feature_progress = min(max(step / total, 0.0), 1.0)
+        if label:
+            status = f"Auto features {step}/{total} · {label}"
+            workspace.auto_feature_status = status
+            workspace.sync_status = status
+        try:
+            context.window_manager.progress_update(min(int(100 * step / total), 100))
+        except Exception:
+            pass
+        properties.tag_viewport_redraw(context)
+
+        if not _auto_feature_result_box.get("done"):
+            return {"PASS_THROUGH"}
+
+        return self._finish_job(
+            context,
+            cancelled=bool(_auto_feature_cancel and _auto_feature_cancel.is_set()),
+        )
+
+    def cancel(self, context: bpy.types.Context) -> None:
+        request_auto_feature_cancel()
+        for _ in range(50):
+            if _auto_feature_result_box.get("done"):
+                break
+            time.sleep(0.02)
+        self._finish_job(context, cancelled=True)
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        # Sidebar / redo should still use the background modal path.
+        if context.window is not None:
+            return self.invoke(context, None)
+        workspace = _workspace(context)
+        try:
+            sources = []
+            for root in properties.iter_sync_enabled_roots():
+                session = root.pm_session
+                if session.image is None:
+                    continue
+                sources.append(
+                    feature_detect.ImageSource(
+                        match_id=root.name,
+                        image_path=getattr(session, "image_path", "") or "",
+                        gray=feature_detect.load_match_gray(session),
+                    )
+                )
+            if len(sources) < 2:
+                self.report({"WARNING"}, "Need at least two sync-enabled stills")
+                return {"CANCELLED"}
+            job_result = feature_detect.build_tracks_from_sources(
+                sources,
+                detector=workspace.auto_feature_detector,
+                max_features=int(workspace.auto_feature_max_features),
+                ratio=float(workspace.auto_feature_match_ratio),
+                ransac_px=float(workspace.auto_feature_ransac_px),
+                keep_percentile=float(workspace.auto_feature_keep_percent),
+                max_orphans_per_match=int(workspace.auto_feature_max_orphans),
+            )
+            feature_detect.apply_feature_tracks(context, job_result)
+        except Exception as error:
+            return _report_exception(self, error)
+        workspace.sync_status = job_result.message
+        self.report({"INFO"}, job_result.message)
+        return {"FINISHED"}
+
+
+class PM_OT_cancel_auto_features(bpy.types.Operator):
+    """Stop the running Find Auto Features background job."""
+
+    bl_idname = "perspective_match.cancel_auto_features"
+    bl_label = "Cancel Auto Features"
+    bl_description = "Cancel the running Find Auto Features job (Esc also works)"
+    bl_options = {"REGISTER"}
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        return auto_feature_is_running()
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        if not request_auto_feature_cancel():
+            return {"CANCELLED"}
+        workspace = _workspace(context)
+        workspace.auto_feature_status = "Cancelling auto features…"
+        workspace.sync_status = workspace.auto_feature_status
+        properties.tag_viewport_redraw(context)
+        self.report({"INFO"}, "Cancelling Find Auto Features…")
+        return {"FINISHED"}
+
+
+class PM_OT_clear_auto_features(bpy.types.Operator):
+    """Remove all automatic feature tracks."""
+
+    bl_idname = "perspective_match.clear_auto_features"
+    bl_label = "Clear Auto Features"
+    bl_description = "Remove all automatically detected feature tracks"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        if auto_feature_is_running():
+            return False
+        return len(properties.workspace(context).auto_tracks) > 0
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        count = feature_detect.clear_auto_tracks(context)
+        message = f"Cleared {count} auto tracks" if count else "No auto tracks"
+        _workspace(context).sync_status = message
+        self.report({"INFO"}, message)
+        return {"FINISHED"}
+
+
 class PM_OT_duplicate_landmark(bpy.types.Operator):
     """Duplicate the active landmark without picks, Known 3D links, or solved positions."""
 
@@ -1820,7 +2145,7 @@ class PM_OT_solve_sync(bpy.types.Operator):
             anchor is not None
             and properties.match_sync_enabled(anchor)
             and len(properties.iter_sync_enabled_roots()) >= 2
-            and len(properties.workspace(context).landmarks) >= 1
+            and scene.sync_has_usable_features(context)
         )
 
     def execute(self, context: bpy.types.Context) -> set[str]:
@@ -2161,6 +2486,9 @@ CLASSES = (
     PM_OT_landmark_clear_known,
     PM_OT_remove_landmark,
     PM_OT_find_apriltag_landmarks,
+    PM_OT_find_auto_features,
+    PM_OT_cancel_auto_features,
+    PM_OT_clear_auto_features,
     PM_OT_duplicate_landmark,
     PM_OT_clear_landmark_observation,
     PM_OT_solve_sync,

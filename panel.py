@@ -473,8 +473,13 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             text="",
             icon_value=icons.icon_id("april_tag"),
         )
-        
-        
+        list_column.operator_context = "INVOKE_REGION_WIN"
+        list_column.operator(
+            "perspective_match.find_auto_features",
+            text="",
+            icon="TRACKING_FORWARDS",
+        )
+
         # Separate control group: list display / overlay helpers (not storage).
         list_column.separator()
 
@@ -584,6 +589,70 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
                 else:
                     detail += " · diagnose/reject"
                 sync_body.label(text=detail, icon="EMPTY_AXIS")
+
+        # Auto features live outside the personal landmark list.
+        auto_box = sync_body.box()
+        auto_header = auto_box.row(align=True)
+        auto_header.label(text="Auto Features", icon="TRACKING_FORWARDS")
+        auto_header.prop(
+            workspace,
+            "show_auto_features",
+            text="",
+            icon="HIDE_OFF" if workspace.show_auto_features else "HIDE_ON",
+            emboss=False,
+        )
+        if operators.auto_feature_is_running():
+            progress = auto_box.row(align=True)
+            progress.enabled = False
+            progress.prop(
+                workspace,
+                "auto_feature_progress",
+                text="Detecting",
+                slider=True,
+            )
+            auto_box.operator(
+                "perspective_match.cancel_auto_features",
+                text="Cancel",
+                icon="X",
+            )
+        else:
+            controls = auto_box.row(align=True)
+            controls.operator_context = "INVOKE_REGION_WIN"
+            controls.operator(
+                "perspective_match.find_auto_features",
+                icon="TRACKING_FORWARDS",
+            )
+            controls.operator(
+                "perspective_match.clear_auto_features",
+                text="",
+                icon="X",
+            )
+            opts = auto_box.row(align=True)
+            opts.prop(workspace, "auto_feature_detector", text="")
+            opts.prop(workspace, "auto_feature_max_features", text="Max")
+            tune = auto_box.grid_flow(
+                row_major=True,
+                columns=2,
+                even_columns=True,
+                align=True,
+            )
+            tune.prop(workspace, "auto_feature_match_ratio", text="Ratio")
+            tune.prop(workspace, "auto_feature_ransac_px", text="RANSAC")
+            tune.prop(workspace, "auto_feature_keep_percent", text="Keep %")
+            tune.prop(workspace, "auto_feature_max_orphans", text="Orphans")
+            auto_box.prop(workspace, "use_auto_features_in_sync")
+            multi_view = sum(
+                1 for track in workspace.auto_tracks if track.multi_view
+            )
+            orphans = len(workspace.auto_tracks) - multi_view
+            if workspace.auto_tracks:
+                auto_box.label(
+                    text=f"{multi_view} multi-view · {orphans} orphans",
+                    icon="INFO",
+                )
+                auto_box.label(text="Dots draw in Camera view for the active match")
+            if workspace.auto_feature_status:
+                auto_box.label(text=workspace.auto_feature_status)
 
         row = sync_body.row(align=True)
         row.operator("perspective_match.solve_sync", icon="FILE_REFRESH")

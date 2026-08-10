@@ -756,6 +756,43 @@ def _draw_landmarks(context: bpy.types.Context, fill_shader, settings) -> None:
         _draw_crosshair(fill_shader, point, color, 9.0 if is_active else 6.0)
 
 
+def _draw_auto_features(context: bpy.types.Context, fill_shader, settings) -> None:
+    """Draw automatic feature dots for the active match (Metashape-style)."""
+    from . import feature_detect
+
+    space = properties.workspace(context)
+    if not getattr(space, "show_auto_features", True):
+        return
+    root = properties.active_root(context)
+    if root is None:
+        return
+    opacity = settings.overlay_opacity
+    # Multi-view: warm amber; orphans (single still): cool cyan — both bright.
+    multi_color = (1.0, 0.62, 0.08, 1.0)
+    orphan_color = (0.35, 0.85, 1.0, 1.0)
+    outline = (0.05, 0.05, 0.05, 1.0)
+    for track in space.auto_tracks:
+        observation = feature_detect.auto_track_observation_for_match(track, root)
+        if observation is None:
+            continue
+        point = scene.image_to_region(context, observation.x, observation.y)
+        if point is None:
+            continue
+        multi_view = bool(getattr(track, "multi_view", False))
+        base = multi_color if multi_view else orphan_color
+        draw_opacity = opacity
+        if multi_view and not getattr(space, "use_auto_features_in_sync", True):
+            draw_opacity *= 0.35
+        elif multi_view and not getattr(track, "use_in_sync", True):
+            draw_opacity *= 0.35
+        color = _with_alpha(base, draw_opacity)
+        ring = _with_alpha(outline, draw_opacity)
+        # Orphans were nearly invisible at ~2px slate; keep Metashape-ish but readable.
+        radius = 5.5 if multi_view else 4.5
+        _draw_circle(fill_shader, point, radius + 1.5, ring, filled=False)
+        _draw_circle(fill_shader, point, radius, color, filled=True)
+
+
 def _draw_landmark_labels(context: bpy.types.Context, settings) -> None:
     """Name labels beside each pick in the active match (when toggled on)."""
     space = properties.workspace(context)
@@ -965,6 +1002,7 @@ def _draw_callback() -> None:
         _draw_vp_geometry(context, fill_shader, settings)
         _draw_placement(context, fill_shader, settings)
         _draw_landmarks(context, fill_shader, settings)
+        _draw_auto_features(context, fill_shader, settings)
         _draw_preview(context, settings)
         # After GPU geometry so blf cannot wipe landmark / preview alpha blending.
         _draw_landmark_labels(context, settings)

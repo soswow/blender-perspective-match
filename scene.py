@@ -243,12 +243,20 @@ def unload_match(context: bpy.types.Context) -> None:
 def _clear_observations_for_root(
     context: bpy.types.Context, root: bpy.types.Object
 ) -> None:
-    """Drop landmark picks that pointed at a match about to be deleted."""
+    """Drop landmark / auto-track picks that pointed at a match about to be deleted."""
     space = properties.workspace(context)
     for landmark in space.landmarks:
         for index in range(len(landmark.observations) - 1, -1, -1):
             if landmark.observations[index].match_root == root:
                 landmark.observations.remove(index)
+    # Drop empty auto tracks after removing this match's observations.
+    for track_index in range(len(space.auto_tracks) - 1, -1, -1):
+        track = space.auto_tracks[track_index]
+        for index in range(len(track.observations) - 1, -1, -1):
+            if track.observations[index].match_root == root:
+                track.observations.remove(index)
+        if not any(observation.is_set for observation in track.observations):
+            space.auto_tracks.remove(track_index)
 
 
 def delete_match(
@@ -1808,6 +1816,19 @@ def clear_landmark_observation_for_active(context: bpy.types.Context) -> bool:
     return False
 
 
+def sync_has_usable_features(context: bpy.types.Context) -> bool:
+    """True when manual landmarks or multi-view auto tracks can feed Solve Sync."""
+    space = properties.workspace(context)
+    if len(space.landmarks) >= 1:
+        return True
+    if not getattr(space, "use_auto_features_in_sync", True):
+        return False
+    return any(
+        getattr(track, "multi_view", False) and getattr(track, "use_in_sync", True)
+        for track in space.auto_tracks
+    )
+
+
 def build_sync_problem(context: bpy.types.Context):
     """Collect frozen match calibrations, landmark observations, and known 3D."""
     from . import sync as sync_module
@@ -1911,6 +1932,35 @@ def build_sync_problem(context: bpy.types.Context):
                         on_ground=bool(landmark.on_ground),
                         landmark_name=landmark.name or landmark.item_id,
                         weight=sync_module.confidence_weight(observation.confidence),
+                    )
+                )
+    # Anonymous multi-view auto tracks (down-weighted; bulk opt-in on workspace).
+    if getattr(space, "use_auto_features_in_sync", True):
+        from . import feature_detect
+
+        for track in space.auto_tracks:
+            if not getattr(track, "use_in_sync", True):
+                continue
+            if not getattr(track, "multi_view", False):
+                continue
+            for observation in track.observations:
+                root = observation.match_root
+                match_id = ""
+                if root is not None and root.name in match_ids:
+                    match_id = root.name
+                elif getattr(observation, "match_name", "") in match_ids:
+                    match_id = observation.match_name
+                if not observation.is_set or not match_id:
+                    continue
+                observations.append(
+                    sync_module.SyncObservation(
+                        match_id=match_id,
+                        landmark_id=track.track_id,
+                        u=float(observation.x),
+                        v=float(observation.y),
+                        on_ground=False,
+                        landmark_name=track.track_id[:12],
+                        weight=feature_detect.AUTO_FEATURE_SYNC_WEIGHT,
                     )
                 )
     return (

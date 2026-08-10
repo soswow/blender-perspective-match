@@ -23,6 +23,7 @@ _RELOAD_SUBMODULES = (
     "sync",
     "lens_refine",
     "apriltag_detect",
+    "feature_detect",
     "properties",
     "scene",
     "distortion",
@@ -82,12 +83,16 @@ def _reset_modal_state(_dummy=None) -> None:
     operators.request_lens_refine_cancel()
     operators._lens_refine_running = False
     operators._lens_refine_cancel = None
+    operators.request_auto_feature_cancel()
+    operators._auto_feature_running = False
+    operators._auto_feature_cancel = None
     for scene_block in bpy.data.scenes:
         workspace = getattr(scene_block, "match_perspective", None)
         if workspace is None:
             continue
         workspace.is_modal = False
         workspace.work_mode = "NONE"
+        workspace.auto_feature_progress = 0.0
         # Backfill creation_index so Sort A–Z off restores saved add order.
         properties.ensure_landmark_creation_indices(workspace)
     # Re-bind overlay callback + rehydrate active match after .blend load.
@@ -227,6 +232,7 @@ def unregister() -> None:
         bpy.app.handlers.load_post.remove(_reset_modal_state)
     operators._active_interact = None
     operators.request_lens_refine_cancel()
+    operators.request_auto_feature_cancel()
     overlay.unregister_viewport_draw_handler()
     if hasattr(bpy.types.Object, "pm_session"):
         del bpy.types.Object.pm_session
