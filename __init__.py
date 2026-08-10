@@ -23,6 +23,7 @@ _RELOAD_SUBMODULES = (
     "sync",
     "lens_refine",
     "apriltag_detect",
+    "line_snap",
     "properties",
     "scene",
     "distortion",

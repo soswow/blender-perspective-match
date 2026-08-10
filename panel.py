@@ -261,6 +261,7 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             operator.mode = "LINE"
             row.operator("perspective_match.delete_selected", text="", icon="TRASH")
             row.operator("perspective_match.clear_axis", text="", icon="X")
+            line_body.prop(settings, "snap_vp_lines_to_edges")
             line_body.prop(settings, "show_vp_error_labels")
 
         _header, origin = _section(layout, "PM_origin", "Origin", "PIVOT_CURSOR")

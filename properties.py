@@ -522,6 +522,14 @@ class PMSession(bpy.types.PropertyGroup):
         default=False,
         update=_redraw,
     )
+    snap_vp_lines_to_edges: bpy.props.BoolProperty(
+        name="Snap to Edges",
+        description=(
+            "After releasing a VP line (or endpoint), refine it onto a nearby "
+            "image edge or thin dark/bright line along the stroke"
+        ),
+        default=False,
+    )
     overlay_opacity: bpy.props.FloatProperty(
         name="Overlay Opacity",
         description="Opacity for VP guides, handles, origin marker, and landmark picks",

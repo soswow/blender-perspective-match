@@ -13,7 +13,15 @@ import bpy
 from bpy_extras.io_utils import ImportHelper
 from mathutils import Vector
 
-from . import apriltag_detect, core, distortion, overlay, properties, scene
+from . import (
+    apriltag_detect,
+    core,
+    distortion,
+    line_snap,
+    overlay,
+    properties,
+    scene,
+)
 
 
 def _session(context: bpy.types.Context):
@@ -77,6 +85,31 @@ def _refine_if_ready(context: bpy.types.Context) -> None:
     else:
         settings.status = _lines_needed_message(settings)
         properties.tag_viewport_redraw(context)
+
+
+def _maybe_snap_vp_segment(
+    context: bpy.types.Context,
+    point_a: tuple[float, float],
+    point_b: tuple[float, float],
+) -> tuple[tuple[float, float], tuple[float, float], str | None]:
+    """Optionally snap a VP segment; returns endpoints and a status suffix."""
+    settings = _session(context)
+    if settings is None or not settings.snap_vp_lines_to_edges:
+        return point_a, point_b, None
+    try:
+        snapped = line_snap.snap_segment_in_session(settings, point_a, point_b)
+    except Exception as error:
+        settings.status = f"Edge snap skipped: {error}"
+        properties.tag_viewport_redraw(context)
+        return point_a, point_b, None
+    if snapped is None:
+        return point_a, point_b, None
+    label = line_snap.kind_label(snapped.kind)
+    return (
+        snapped.point_a,
+        snapped.point_b,
+        f"Snapped to {label} ({snapped.mean_shift_px:.1f}px)",
+    )
 
 
 def _view3d_under_event(context: bpy.types.Context, event):
@@ -1115,16 +1148,30 @@ class PM_OT_interact(bpy.types.Operator):
 
     def _complete_drag(self, context, image_point: tuple[float, float]) -> None:
         settings = _session(context)
+        snap_status: str | None = None
         if self._drag_kind == "NEW_LINE" and self._start is not None:
             if math.hypot(image_point[0] - self._start[0], image_point[1] - self._start[1]) >= 8.0:
+                start_point, end_point, snap_status = _maybe_snap_vp_segment(
+                    context,
+                    self._start,
+                    image_point,
+                )
                 line = settings.lines.add()
                 line.item_id = f"blender-line-{uuid4().hex}"
                 line.axis = settings.active_axis
-                line.x1, line.y1 = self._start
-                line.x2, line.y2 = image_point
+                line.x1, line.y1 = start_point
+                line.x2, line.y2 = end_point
                 settings.selected_line_index = len(settings.lines) - 1
                 _refine_if_ready(context)
         elif self._drag_kind == "LINE_ENDPOINT":
+            line = settings.lines[self._edit_index]
+            start_point, end_point, snap_status = _maybe_snap_vp_segment(
+                context,
+                (line.x1, line.y1),
+                (line.x2, line.y2),
+            )
+            line.x1, line.y1 = start_point
+            line.x2, line.y2 = end_point
             _refine_if_ready(context)
         elif self._drag_kind == "PP":
             try:
@@ -1133,6 +1180,9 @@ class PM_OT_interact(bpy.types.Operator):
                 self.report({"ERROR"}, str(error))
             if settings is not None:
                 settings.status = self._status_prompt()
+        if snap_status is not None and settings is not None:
+            settings.status = snap_status
+            properties.tag_viewport_redraw(context)
         self._drag_kind = ""
         self._start = None
         self._original = None

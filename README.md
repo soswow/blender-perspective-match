@@ -139,9 +139,9 @@ Axis mapping matches Blender’s gizmos:
 Then draw lines:
 
 1. Choose the colored axis.
-2. Click **Draw / Edit Lines**. Optional: enable **Show Error Label** to see each segment’s residual (px) beside the stroke.
+2. Click **Draw / Edit Lines**. Optional: enable **Snap to Edges** to refine each stroke on release onto a nearby image edge or thin dark/bright line (grout, painted strokes) along the whole segment — both endpoints move onto the fitted feature. Undo with Blender’s normal undo. Optional: enable **Show Error Label** to see each segment’s residual (px) beside the stroke.
 3. Drag over straight edges that belong to that axis (clicks must land inside the camera frame).
-4. Click a line to select it; drag either endpoint handle to edit.
+4. Click a line to select it; drag either endpoint handle to edit (release also re-snaps when Snap to Edges is on).
 5. Press **Delete/Backspace** to remove the selected line.
 6. Press **Esc** (or right-click) to leave the tool.
 
