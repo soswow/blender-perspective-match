@@ -112,21 +112,42 @@ def _maybe_snap_vp_segment(
     )
 
 
+def _region_contains(region, mouse_x: int, mouse_y: int) -> bool:
+    """True when window coords fall inside a visible region rect."""
+    # Collapsed sidebars report width/height 1 — treat as not hittable.
+    if region.width <= 1 or region.height <= 1:
+        return False
+    return (
+        region.x <= mouse_x < region.x + region.width
+        and region.y <= mouse_y < region.y + region.height
+    )
+
+
 def _view3d_under_event(context: bpy.types.Context, event):
-    """Return (area, region, space) for the 3D View WINDOW under the mouse."""
+    """Return (area, region, space) for the 3D View WINDOW under the mouse.
+
+    With Preferences → Interface → Region Overlap, the N-panel / Toolbar float
+    over the WINDOW region (same pixel rect). Prefer those overlay regions so
+    sidebar clicks PASS_THROUGH to Blender UI instead of hitting the plate.
+    """
     screen = context.screen
     if screen is None:
         return None, None, None
+    mouse_x = event.mouse_x
+    mouse_y = event.mouse_y
     for area in screen.areas:
         if area.type != "VIEW_3D":
             continue
+        # Overlay regions sit on top of WINDOW when region overlap is on.
+        for region in area.regions:
+            if region.type == "WINDOW":
+                continue
+            if _region_contains(region, mouse_x, mouse_y):
+                return None, None, None
         for region in area.regions:
             if region.type != "WINDOW":
                 continue
-            if (
-                region.x <= event.mouse_x < region.x + region.width
-                and region.y <= event.mouse_y < region.y + region.height
-            ):
+            if _region_contains(region, mouse_x, mouse_y):
                 space = area.spaces.active
                 return area, region, space
     return None, None, None
@@ -1257,7 +1278,8 @@ class PM_OT_interact(bpy.types.Operator):
             return {"PASS_THROUGH"}
 
         area, region, space = _view3d_under_event(context, event)
-        # Sidebar / other editors keep normal UI while the tool is idle.
+        # Sidebar / toolbar / other editors: pass through so UI stays clickable
+        # (critical with Region Overlap, where N-panel floats over WINDOW).
         if area is None or region is None or space is None:
             if self._drag_kind:
                 # Drag left the viewport — cancel the in-progress gesture.

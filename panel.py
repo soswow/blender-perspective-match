@@ -132,7 +132,7 @@ def _mode_tool_active(workspace, mode: str) -> bool:
 
 
 def _draw_active_tool_banner(layout, workspace) -> None:
-    """Non-clickable reminder — sidebar clicks are not a reliable exit path."""
+    """Reminder while a Draw / Pick tool owns 3D View clicks (Esc exits)."""
     if not workspace.is_modal:
         return
     title = overlay.interact_mode_label(workspace.work_mode)
