@@ -511,14 +511,31 @@ def rotation_from_orthogonal_lines(
     candidates: list[np.ndarray] = []
 
     if fixed_count == 3:
-        measured = np.column_stack([fixed[0], fixed[1], fixed[2]])
-        u_matrix, _singular, v_transpose = np.linalg.svd(measured)
-        rotation = u_matrix @ v_transpose
-        if float(np.linalg.det(rotation)) < 0.0:
-            u_matrix = u_matrix.copy()
-            u_matrix[:, -1] *= -1.0
-            rotation = u_matrix @ v_transpose
-        candidates.append(rotation)
+        # Each axis nullspace direction has an arbitrary SVD sign. Trying only
+        # (+,+,+) can Procrustes into a wrong SO(3) basin that polish cannot
+        # escape (Detect VP Lines: many inliers/axis → crazy orientation until
+        # a tiny edit flips a sign). Enumerate all eight sign patterns; cost
+        # scoring below keeps the consistent ones.
+        direction_x = np.asarray(fixed[0], dtype=np.float64)
+        direction_y = np.asarray(fixed[1], dtype=np.float64)
+        direction_z = np.asarray(fixed[2], dtype=np.float64)
+        for sign_x in (1.0, -1.0):
+            for sign_y in (1.0, -1.0):
+                for sign_z in (1.0, -1.0):
+                    measured = np.column_stack(
+                        [
+                            sign_x * direction_x,
+                            sign_y * direction_y,
+                            sign_z * direction_z,
+                        ]
+                    )
+                    u_matrix, _singular, v_transpose = np.linalg.svd(measured)
+                    rotation = u_matrix @ v_transpose
+                    if float(np.linalg.det(rotation)) < 0.0:
+                        u_matrix = u_matrix.copy()
+                        u_matrix[:, -1] *= -1.0
+                        rotation = u_matrix @ v_transpose
+                    candidates.append(rotation)
     elif fixed_count == 2:
         missing = next(column for column in (0, 1, 2) if fixed[column] is None)
         kept = [column for column in (0, 1, 2) if column != missing]
@@ -613,28 +630,34 @@ def rotation_from_orthogonal_lines(
                         rotation[:, order[2]] *= -1.0
                     candidates.append(rotation)
 
-    if initial_rotation is not None:
-        candidates.append(np.asarray(initial_rotation, dtype=np.float64))
-
     if not candidates:
         return None
 
-    # Several SO(3) frames can place each axis in its plane; pick the min-cost
-    # seed closest to the prior (or identity), polish with every line, upright.
+    # Several SO(3) frames can place each axis in its plane. Polish every seed
+    # first, then pick by residual — use the prior only to break ties among
+    # near-equal costs (sign / discrete flip). Never keep an unpolished prior:
+    # its cost can look better than a polished update and freeze orientation
+    # when lines change under Manual FOV / known K.
     reference = (
         np.asarray(initial_rotation, dtype=np.float64)
         if initial_rotation is not None
         else np.eye(3, dtype=np.float64)
     )
+    if float(np.linalg.det(reference)) < 0.0:
+        reference = reference.copy()
+        reference[:, 2] *= -1.0
+
     scored_candidates: list[tuple[float, float, np.ndarray]] = []
     for candidate in candidates:
         rotation = np.asarray(candidate, dtype=np.float64)
         if float(np.linalg.det(rotation)) < 0.0:
             rotation = rotation.copy()
             rotation[:, 2] *= -1.0
-        cost = _orthogonal_line_constraint_cost(rotation, column_normals)
-        alignment = float(np.trace(rotation.T @ reference))
-        scored_candidates.append((cost, alignment, rotation))
+        polished = _polish_rotation_from_line_normals(rotation, column_normals)
+        cost = _orthogonal_line_constraint_cost(polished, column_normals)
+        alignment = float(np.trace(polished.T @ reference))
+        scored_candidates.append((cost, alignment, polished))
+
     best_cost = min(cost for cost, _alignment, _rotation in scored_candidates)
     cost_tolerance = max(1.0e-8, 1.0e-4 * best_cost + 1.0e-8)
 
@@ -648,12 +671,6 @@ def rotation_from_orthogonal_lines(
             best_rotation = rotation
     if best_rotation is None:
         return None
-    polished = _polish_rotation_from_line_normals(best_rotation, column_normals)
-    # Keep the seed if polish somehow worsened the joint residual.
-    if _orthogonal_line_constraint_cost(
-        polished, column_normals
-    ) <= _orthogonal_line_constraint_cost(best_rotation, column_normals) + 1.0e-12:
-        best_rotation = polished
     return _upright_rotation(best_rotation)
 
 

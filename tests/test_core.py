@@ -259,6 +259,55 @@ class CoreGeometryTests(unittest.TestCase):
             abs(float(np.dot(from_single[:, 0], rotation[:, 0]))),
         )
 
+    def test_known_k_three_fixed_axes_tries_svd_sign_patterns(self) -> None:
+        """2+ lines/axis must not lock onto a single bad SVD sign pattern.
+
+        Fixture: auto-detected bundles from a real still where the default
+        (+,+,+) Procrustes seed polished to ~87° residual; other sign patterns
+        recover ~0°. Regression for Detect VP Lines → crazy orientation.
+        """
+        intrinsics = core.CameraIntrinsics(
+            fx=1583.8,
+            fy=1583.8,
+            cx=1500.0,
+            cy=2000.0,
+            image_width=3000,
+            image_height=4000,
+        )
+        bundles = {
+            "x": [
+                core.LineSegment(2940.2264, 3473.6702, 1875.6214, 2597.3209),
+                core.LineSegment(112.2659, 3322.0963, 167.7556, 2349.4858),
+                core.LineSegment(2994.7651, 669.0202, 1657.4890, 946.9968),
+                core.LineSegment(1367.8397, 3447.8317, 1479.4957, 3665.5128),
+                core.LineSegment(2080.1317, 2005.7297, 2262.3186, 2081.0768),
+                core.LineSegment(1080.5143, 2224.7454, 1381.6463, 2571.5824),
+            ],
+            "y": [
+                core.LineSegment(-3.6395, 1164.2616, 314.2606, 1990.3084),
+                core.LineSegment(2835.0988, 2317.1093, 2715.1560, 2584.9987),
+                core.LineSegment(1708.2521, 986.1470, 1679.7289, 1716.7223),
+                core.LineSegment(1230.0238, 3541.4795, 1269.1778, 3743.8313),
+            ],
+            "z": [
+                core.LineSegment(1.7521, 765.5633, 1700.8734, 946.1683),
+                core.LineSegment(988.6050, 3386.4552, 1334.8075, 3131.9792),
+                core.LineSegment(1460.3174, 1971.0899, 1638.5843, 1915.7333),
+                core.LineSegment(1005.5682, 1475.5297, 1232.6378, 1453.3864),
+            ],
+        }
+        rotation = core.rotation_from_orthogonal_lines(bundles, intrinsics)
+        self.assertIsNotNone(rotation)
+        calibration = core.Calibration(
+            intrinsics=intrinsics,
+            rotation_w2c=rotation,
+            camera_center=core.default_camera_center(rotation),
+            division_lambda=0.0,
+        )
+        # Pre-fix default sign pattern scored ~2000 px / ~87° on this fixture.
+        self.assertLess(core.vp_line_residual_rms(calibration, bundles), 20.0)
+        self.assertLess(core.vp_angular_residual_degrees(calibration, bundles), 1.0)
+
 
 if __name__ == "__main__":
     unittest.main()

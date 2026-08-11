@@ -249,6 +249,27 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             operator.mode = "LINE"
             row.operator("perspective_match.delete_selected", text="", icon="TRASH")
             row.operator("perspective_match.clear_axis", text="", icon="X")
+            detect_row = line_body.row(align=True)
+            detect_row.operator_context = "INVOKE_DEFAULT"
+            detect_row.operator(
+                "perspective_match.detect_vp_lines",
+                text="Detect VP Lines",
+                icon="VIEWZOOM",
+            )
+            line_body.prop(
+                settings,
+                "vp_detect_sensitivity",
+                text="Edge Sensitivity",
+                slider=True,
+            )
+            debug_row = line_body.row(align=True)
+            debug_row.operator_context = "INVOKE_DEFAULT"
+            debug_row.operator(
+                "perspective_match.toggle_vp_detect_debug",
+                text="Debug auto detected edges",
+                icon="SEQ_HISTOGRAM",
+                depress=bool(settings.view_vp_detect_debug),
+            )
             line_body.prop(settings, "snap_vp_lines_to_edges")
             line_body.prop(settings, "show_vp_error_labels")
 

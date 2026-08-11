@@ -10,6 +10,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import bpy
+import numpy as np
 from bpy_extras.io_utils import ImportHelper
 from mathutils import Vector
 
@@ -21,6 +22,7 @@ from . import (
     overlay,
     properties,
     scene,
+    vp_line_detect,
 )
 
 
@@ -101,6 +103,27 @@ def _refine_if_ready(context: bpy.types.Context) -> None:
         properties.tag_viewport_redraw(context)
 
 
+def _refine_after_vp_detect(context: bpy.types.Context) -> str:
+    """Solve/apply camera from the lines Detect just wrote. Returns status text."""
+    settings = _session(context)
+    if settings is None:
+        return "No active match"
+    if not _required_lines_ready(settings):
+        return _lines_needed_message(settings)
+    calibration = scene.refine_match(context)
+    distortion.sync_undistorted_plate_after_refine(context)
+    # Same as Auto from VPs: make sure the matched camera is what the view shows.
+    scene.enter_camera_view(context)
+    return (
+        f"Camera matched · HFOV {calibration.hfov_degrees:.2f}°"
+        + (
+            f" · λ {calibration.division_lambda:.4f}"
+            if abs(calibration.division_lambda) > 1.0e-6
+            else ""
+        )
+    )
+
+
 def _maybe_snap_vp_segment(
     context: bpy.types.Context,
     point_a: tuple[float, float],
@@ -124,6 +147,26 @@ def _maybe_snap_vp_segment(
         snapped.point_b,
         f"Snapped to {label} ({snapped.mean_shift_px:.1f}px)",
     )
+
+
+def _log_selected_vp_line(
+    settings,
+    index: int,
+    operator: bpy.types.Operator | None = None,
+) -> None:
+    """Report the selected VP line id into Blender's Info editor."""
+    if not (0 <= index < len(settings.lines)):
+        return
+    line = settings.lines[index]
+    # Older strokes / some imports may lack an id — mint one on first select.
+    if not (line.item_id or "").strip():
+        line.item_id = f"blender-line-{uuid4().hex}"
+    axis_ui = {"x": "X", "z": "Y", "y": "Z"}.get(line.axis, line.axis)
+    message = f"VP line [{index}] id={line.item_id} axis={axis_ui}"
+    if operator is not None:
+        operator.report({"INFO"}, message)
+    else:
+        print(f"Perspective Match: {message}")
 
 
 def _region_contains(region, mouse_x: int, mouse_y: int) -> bool:
@@ -177,10 +220,30 @@ _lens_refine_running = False
 _lens_refine_progress = {"step": 0, "total": 1, "label": ""}
 _lens_refine_result_box: dict = {}
 
+_vp_detect_lock = threading.Lock()
+_vp_detect_cancel: threading.Event | None = None
+_vp_detect_running = False
+_vp_detect_progress = {"label": ""}
+_vp_detect_result_box: dict = {}
+
 
 def lens_refine_is_running() -> bool:
     """True while a Refine Lenses modal/worker is active."""
     return bool(_lens_refine_running)
+
+
+def vp_detect_is_running() -> bool:
+    """True while Detect VP Lines is running in the background."""
+    return bool(_vp_detect_running)
+
+
+def request_vp_detect_cancel() -> bool:
+    """Ask the Detect VP Lines worker to stop; True if a job was signalled."""
+    event = _vp_detect_cancel
+    if event is None:
+        return False
+    event.set()
+    return True
 
 
 def request_lens_refine_cancel() -> bool:
@@ -660,6 +723,447 @@ class PM_OT_clear_axis(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class PM_OT_detect_vp_lines(bpy.types.Operator):
+    """Detect vanishing-point line bundles automatically (3-point mode only)."""
+
+    bl_idname = "perspective_match.detect_vp_lines"
+    bl_label = "Detect VP Lines"
+    bl_description = (
+        "Find straight edges, cluster them into three vanishing points, and "
+        "replace the current VP lines (3-point perspective only). "
+        "Runs in the background — Esc to cancel. "
+        "Applies the matched camera when enough lines exist. "
+        "Edit or delete strokes afterward as usual"
+    )
+    # No UNDO on the long modal: Blender's modal undo often keeps CollectionProperty
+    # line edits but rolls back Object.matrix_local from apply_camera. We push an
+    # explicit undo step in _finish_job covering lines + camera together.
+    bl_options = {"REGISTER"}
+
+    _timer = None
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        if vp_detect_is_running():
+            return False
+        settings = properties.active_session(context)
+        return (
+            settings is not None
+            and settings.image is not None
+            and str(settings.vp_mode) == "3"
+            and properties.active_root(context) is not None
+        )
+
+    def invoke(self, context: bpy.types.Context, _event) -> set[str]:
+        global _vp_detect_cancel, _vp_detect_running, _vp_detect_result_box
+        global _vp_detect_progress
+
+        settings = properties.active_session(context)
+        if settings is None:
+            return {"CANCELLED"}
+
+        try:
+            # Copy pixels on the main thread — bpy / Image access is not thread-safe.
+            gray = vp_line_detect.load_detection_gray(settings)
+        except vp_line_detect.VpLineDependencyError as error:
+            return _report_exception(self, error)
+        except Exception as error:
+            return _report_exception(self, error)
+
+        # Detach so the worker owns a contiguous buffer with no Blender aliases.
+        gray = np.ascontiguousarray(gray.copy())
+        sensitivity = float(settings.vp_detect_sensitivity)
+        cancel_event = threading.Event()
+        result_box: dict = {"done": False}
+        progress_state = {"label": "Detecting edges…"}
+
+        with _vp_detect_lock:
+            if _vp_detect_running:
+                self.report({"WARNING"}, "Detect VP Lines already running")
+                return {"CANCELLED"}
+            _vp_detect_cancel = cancel_event
+            _vp_detect_running = True
+            _vp_detect_result_box = result_box
+            _vp_detect_progress = progress_state
+
+        settings.status = "Detect VP Lines running… Esc to cancel"
+        settings.error = ""
+        properties.tag_viewport_redraw(context)
+
+        def _worker() -> None:
+            try:
+                if cancel_event.is_set():
+                    result_box["cancelled"] = True
+                    return
+                progress_state["label"] = "Detecting edges…"
+                outcome = vp_line_detect.detect_vp_line_bundles(
+                    gray,
+                    sensitivity=sensitivity,
+                )
+                if cancel_event.is_set():
+                    result_box["cancelled"] = True
+                    return
+                progress_state["label"] = "Building debug plate…"
+                debug_rgba = vp_line_detect.render_debug_rgba(
+                    int(gray.shape[1]),
+                    int(gray.shape[0]),
+                    outcome.candidates,
+                )
+                result_box["outcome"] = outcome
+                result_box["debug_rgba"] = debug_rgba
+                result_box["sensitivity"] = sensitivity
+            except Exception as error:
+                result_box["error"] = error
+            finally:
+                result_box["done"] = True
+
+        thread = threading.Thread(
+            target=_worker,
+            name="PM-DetectVpLines",
+            daemon=True,
+        )
+        thread.start()
+
+        window_manager = context.window_manager
+        window_manager.progress_begin(0, 100)
+        self._timer = window_manager.event_timer_add(0.1, window=context.window)
+        window_manager.modal_handler_add(self)
+        return {"RUNNING_MODAL"}
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        # Scripted calls may use EXEC_DEFAULT; still run as a background modal.
+        return self.invoke(context, None)
+
+    def _finish_job(self, context: bpy.types.Context, *, cancelled: bool) -> set[str]:
+        global _vp_detect_cancel, _vp_detect_running
+
+        window_manager = context.window_manager
+        if self._timer is not None:
+            window_manager.event_timer_remove(self._timer)
+            self._timer = None
+        try:
+            window_manager.progress_end()
+        except Exception:
+            pass
+
+        result_box = _vp_detect_result_box
+        with _vp_detect_lock:
+            _vp_detect_running = False
+            _vp_detect_cancel = None
+
+        settings = properties.active_session(context)
+        if result_box.get("error") is not None:
+            error = result_box["error"]
+            if settings is not None:
+                settings.status = str(error)
+            properties.tag_viewport_redraw(context)
+            return _report_exception(
+                self,
+                error if isinstance(error, Exception) else Exception(str(error)),
+            )
+
+        if cancelled or result_box.get("cancelled"):
+            message = "Detect VP Lines cancelled"
+            if settings is not None:
+                settings.status = message
+            properties.tag_viewport_redraw(context)
+            self.report({"WARNING"}, message)
+            return {"CANCELLED"}
+
+        outcome = result_box.get("outcome")
+        debug_rgba = result_box.get("debug_rgba")
+        if outcome is None or settings is None:
+            message = "Detect VP Lines failed"
+            if settings is not None:
+                settings.status = message
+            self.report({"ERROR"}, message)
+            return {"CANCELLED"}
+
+        try:
+            # One undo step for lines + camera (modal UNDO is unreliable for pose).
+            try:
+                bpy.ops.ed.undo_push(message="Detect VP Lines")
+            except Exception:
+                pass
+            vp_line_detect.apply_vp_line_bundles(settings, outcome.bundles)
+            if debug_rgba is not None:
+                vp_line_detect.install_debug_rgba_plate(settings, debug_rgba)
+                settings.vp_detect_sensitivity_baked = float(
+                    result_box.get("sensitivity", settings.vp_detect_sensitivity)
+                )
+                if settings.view_vp_detect_debug:
+                    scene.refresh_background_projection(context)
+            refine_status = _refine_after_vp_detect(context)
+        except Exception as error:
+            return _report_exception(self, error)
+
+        counts = outcome.result.counts
+        # UI axis order: X (red) · Y (green/internal z) · Z (blue/internal y).
+        detect_message = (
+            f"Detected VP lines · X {counts.get('x', 0)} · "
+            f"Y {counts.get('z', 0)} · Z {counts.get('y', 0)} "
+            f"({outcome.result.candidates} edges → {outcome.result.clusters} clusters)"
+        )
+        settings.error = ""
+        if refine_status.startswith("Camera matched"):
+            settings.status = f"{detect_message} · {refine_status}"
+            self.report({"INFO"}, settings.status)
+        else:
+            # Lines written but orientation still blocked — surface both facts.
+            settings.status = f"{detect_message} · {refine_status}"
+            self.report({"WARNING"}, settings.status)
+        return {"FINISHED"}
+
+    def modal(self, context: bpy.types.Context, event) -> set[str]:
+        settings = properties.active_session(context)
+        if event.type in {"ESC"} and event.value == "PRESS":
+            request_vp_detect_cancel()
+            if settings is not None:
+                settings.status = "Cancelling Detect VP Lines…"
+            properties.tag_viewport_redraw(context)
+            return {"RUNNING_MODAL"}
+
+        if event.type != "TIMER":
+            return {"PASS_THROUGH"}
+
+        label = str(_vp_detect_progress.get("label", ""))
+        if settings is not None and label:
+            settings.status = f"Detect VP Lines · {label}"
+        try:
+            context.window_manager.progress_update(50)
+        except Exception:
+            pass
+        properties.tag_viewport_redraw(context)
+
+        if not _vp_detect_result_box.get("done"):
+            return {"PASS_THROUGH"}
+
+        return self._finish_job(
+            context,
+            cancelled=bool(_vp_detect_cancel and _vp_detect_cancel.is_set()),
+        )
+
+
+class PM_OT_toggle_vp_detect_debug(bpy.types.Operator):
+    """Toggle the black/white auto-detected edge debug plate."""
+
+    bl_idname = "perspective_match.toggle_vp_detect_debug"
+    bl_label = "Debug auto detected edges"
+    bl_description = (
+        "Toggle a black plate with white strokes for every auto-detected edge. "
+        "Runs edge detection on first use, then reuses that plate. Esc cancels"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    _timer = None
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        if vp_detect_is_running():
+            return False
+        settings = properties.active_session(context)
+        return (
+            settings is not None
+            and settings.image is not None
+            and properties.active_root(context) is not None
+        )
+
+    def _show_or_hide(self, context: bpy.types.Context, enabling: bool) -> set[str]:
+        settings = properties.active_session(context)
+        if settings is None:
+            return {"CANCELLED"}
+        try:
+            vp_line_detect.set_vp_detect_debug_view(context, enabling)
+        except Exception as error:
+            return _report_exception(self, error)
+        message = (
+            "Debug auto detected edges on"
+            if enabling
+            else "Debug auto detected edges off"
+        )
+        settings.status = message
+        self.report({"INFO"}, message)
+        return {"FINISHED"}
+
+    def invoke(self, context: bpy.types.Context, _event) -> set[str]:
+        global _vp_detect_cancel, _vp_detect_running, _vp_detect_result_box
+        global _vp_detect_progress
+
+        settings = properties.active_session(context)
+        if settings is None:
+            return {"CANCELLED"}
+
+        # Already showing → hide and reuse the cached plate next time.
+        if settings.view_vp_detect_debug:
+            return self._show_or_hide(context, False)
+
+        # Plate from a prior Detect / debug scan at the same sensitivity → show it.
+        plate_matches = (
+            settings.vp_detect_debug_image is not None
+            and abs(
+                float(settings.vp_detect_sensitivity_baked)
+                - float(settings.vp_detect_sensitivity)
+            )
+            < 1.0e-4
+        )
+        if plate_matches:
+            return self._show_or_hide(context, True)
+
+        # First use (or sensitivity changed): detect edges, then show the plate.
+        try:
+            gray = vp_line_detect.load_detection_gray(settings)
+        except vp_line_detect.VpLineDependencyError as error:
+            return _report_exception(self, error)
+        except Exception as error:
+            return _report_exception(self, error)
+
+        gray = np.ascontiguousarray(gray.copy())
+        sensitivity = float(settings.vp_detect_sensitivity)
+        cancel_event = threading.Event()
+        result_box: dict = {"done": False, "mode": "edges_only"}
+        progress_state = {"label": "Detecting edges…"}
+
+        with _vp_detect_lock:
+            if _vp_detect_running:
+                self.report({"WARNING"}, "Edge detection already running")
+                return {"CANCELLED"}
+            _vp_detect_cancel = cancel_event
+            _vp_detect_running = True
+            _vp_detect_result_box = result_box
+            _vp_detect_progress = progress_state
+
+        settings.status = "Detecting edges for debug… Esc to cancel"
+        settings.error = ""
+        properties.tag_viewport_redraw(context)
+
+        def _worker() -> None:
+            try:
+                if cancel_event.is_set():
+                    result_box["cancelled"] = True
+                    return
+                _candidates, debug_rgba = vp_line_detect.detect_edges_for_debug(
+                    gray,
+                    sensitivity=sensitivity,
+                )
+                if cancel_event.is_set():
+                    result_box["cancelled"] = True
+                    return
+                result_box["debug_rgba"] = debug_rgba
+                result_box["edge_count"] = len(_candidates)
+                result_box["sensitivity"] = sensitivity
+            except Exception as error:
+                result_box["error"] = error
+            finally:
+                result_box["done"] = True
+
+        thread = threading.Thread(
+            target=_worker,
+            name="PM-DetectVpEdgesDebug",
+            daemon=True,
+        )
+        thread.start()
+
+        window_manager = context.window_manager
+        window_manager.progress_begin(0, 100)
+        self._timer = window_manager.event_timer_add(0.1, window=context.window)
+        window_manager.modal_handler_add(self)
+        return {"RUNNING_MODAL"}
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        return self.invoke(context, None)
+
+    def _finish_edge_scan(
+        self, context: bpy.types.Context, *, cancelled: bool
+    ) -> set[str]:
+        global _vp_detect_cancel, _vp_detect_running
+
+        window_manager = context.window_manager
+        if self._timer is not None:
+            window_manager.event_timer_remove(self._timer)
+            self._timer = None
+        try:
+            window_manager.progress_end()
+        except Exception:
+            pass
+
+        result_box = _vp_detect_result_box
+        with _vp_detect_lock:
+            _vp_detect_running = False
+            _vp_detect_cancel = None
+
+        settings = properties.active_session(context)
+        if result_box.get("error") is not None:
+            error = result_box["error"]
+            if settings is not None:
+                settings.status = str(error)
+            properties.tag_viewport_redraw(context)
+            return _report_exception(
+                self,
+                error if isinstance(error, Exception) else Exception(str(error)),
+            )
+
+        if cancelled or result_box.get("cancelled"):
+            message = "Edge debug scan cancelled"
+            if settings is not None:
+                settings.status = message
+            properties.tag_viewport_redraw(context)
+            self.report({"WARNING"}, message)
+            return {"CANCELLED"}
+
+        debug_rgba = result_box.get("debug_rgba")
+        if debug_rgba is None or settings is None:
+            message = "Edge debug scan failed"
+            if settings is not None:
+                settings.status = message
+            self.report({"ERROR"}, message)
+            return {"CANCELLED"}
+
+        try:
+            vp_line_detect.install_debug_rgba_plate(settings, debug_rgba)
+            settings.vp_detect_sensitivity_baked = float(
+                result_box.get("sensitivity", settings.vp_detect_sensitivity)
+            )
+            vp_line_detect.set_vp_detect_debug_view(context, True)
+        except Exception as error:
+            return _report_exception(self, error)
+
+        edge_count = int(result_box.get("edge_count", 0))
+        message = f"Debug auto detected edges on · {edge_count} edges"
+        settings.status = message
+        settings.error = ""
+        self.report({"INFO"}, message)
+        return {"FINISHED"}
+
+    def modal(self, context: bpy.types.Context, event) -> set[str]:
+        settings = properties.active_session(context)
+        if event.type in {"ESC"} and event.value == "PRESS":
+            request_vp_detect_cancel()
+            if settings is not None:
+                settings.status = "Cancelling edge debug scan…"
+            properties.tag_viewport_redraw(context)
+            return {"RUNNING_MODAL"}
+
+        if event.type != "TIMER":
+            return {"PASS_THROUGH"}
+
+        label = str(_vp_detect_progress.get("label", ""))
+        if settings is not None and label:
+            settings.status = f"Debug edges · {label}"
+        try:
+            context.window_manager.progress_update(50)
+        except Exception:
+            pass
+        properties.tag_viewport_redraw(context)
+
+        if not _vp_detect_result_box.get("done"):
+            return {"PASS_THROUGH"}
+
+        return self._finish_edge_scan(
+            context,
+            cancelled=bool(_vp_detect_cancel and _vp_detect_cancel.is_set()),
+        )
+
+
 class PM_OT_delete_selected(bpy.types.Operator):
     """Delete the selected VP line."""
 
@@ -1128,6 +1632,7 @@ class PM_OT_interact(bpy.types.Operator):
         if hit_index >= 0:
             settings.selected_line_index = hit_index
             settings.active_axis = settings.lines[hit_index].axis
+            _log_selected_vp_line(settings, hit_index, self)
             self._edit_index = hit_index
             if endpoint:
                 line = settings.lines[hit_index]
@@ -1313,6 +1818,7 @@ class PM_OT_interact(bpy.types.Operator):
                 line.x1, line.y1 = start_point
                 line.x2, line.y2 = end_point
                 settings.selected_line_index = len(settings.lines) - 1
+                _log_selected_vp_line(settings, settings.selected_line_index, self)
                 _refine_if_ready(context)
         elif drag_kind == "LINE_ENDPOINT":
             line = settings.lines[edit_index]
@@ -2354,6 +2860,8 @@ CLASSES = (
     PM_OT_reset_camera,
     PM_OT_edit_pp_offset,
     PM_OT_clear_axis,
+    PM_OT_detect_vp_lines,
+    PM_OT_toggle_vp_detect_debug,
     PM_OT_delete_selected,
     PM_OT_clear_placement,
     PM_OT_generate_undistorted,

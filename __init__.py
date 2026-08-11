@@ -23,6 +23,7 @@ _RELOAD_SUBMODULES = (
     "sync",
     "lens_refine",
     "apriltag_detect",
+    "vp_line_detect",
     "line_snap",
     "properties",
     "scene",
@@ -81,8 +82,11 @@ def _reset_modal_state(_dummy=None) -> None:
     """Clear transient modal flags after file load (safe outside register())."""
     operators._active_interact = None
     operators.request_lens_refine_cancel()
+    operators.request_vp_detect_cancel()
     operators._lens_refine_running = False
     operators._lens_refine_cancel = None
+    operators._vp_detect_running = False
+    operators._vp_detect_cancel = None
     for scene_block in bpy.data.scenes:
         workspace = getattr(scene_block, "match_perspective", None)
         if workspace is None:
@@ -228,6 +232,7 @@ def unregister() -> None:
         bpy.app.handlers.load_post.remove(_reset_modal_state)
     operators._active_interact = None
     operators.request_lens_refine_cancel()
+    operators.request_vp_detect_cancel()
     overlay.unregister_viewport_draw_handler()
     if hasattr(bpy.types.Object, "pm_session"):
         del bpy.types.Object.pm_session

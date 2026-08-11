@@ -35,6 +35,34 @@ def tag_viewport_redraw(context: bpy.types.Context | None = None) -> None:
                 area.tag_redraw()
 
 
+def _update_vp_detect_sensitivity(self, context: bpy.types.Context) -> None:
+    """Sensitivity changed — drop the cached edge plate so Debug/Detect re-run."""
+    import bpy as _bpy
+
+    cached = self.vp_detect_debug_image
+    was_debug = bool(self.view_vp_detect_debug)
+    self.view_vp_detect_debug = False
+    self.vp_detect_debug_image = None
+    self.vp_detect_debug_path = ""
+    # Force Debug to re-scan even if a stale Image datablock lingered.
+    self.vp_detect_sensitivity_baked = -1.0
+    if cached is not None:
+        try:
+            if cached.users == 0:
+                _bpy.data.images.remove(cached)
+        except ReferenceError:
+            pass
+    if was_debug:
+        try:
+            from . import scene
+
+            scene.refresh_background_projection(context)
+        except Exception:
+            pass
+    self.status = "Edge sensitivity changed — run Detect or Debug again"
+    tag_viewport_redraw(context)
+
+
 def _redraw(_self, context: bpy.types.Context) -> None:
     tag_viewport_redraw(context)
 
@@ -529,6 +557,46 @@ class PMSession(bpy.types.PropertyGroup):
             "image edge or thin dark/bright line along the stroke"
         ),
         default=False,
+    )
+    vp_detect_sensitivity: bpy.props.FloatProperty(
+        name="Edge Sensitivity",
+        description=(
+            "How eagerly auto edge detection picks faint lines. "
+            "Higher finds lower-contrast edges (more noise). "
+            "Lower keeps only strong edges. "
+            "Changing this clears the debug edge plate"
+        ),
+        default=0.5,
+        min=0.0,
+        max=1.0,
+        soft_min=0.0,
+        soft_max=1.0,
+        step=1,
+        precision=2,
+        subtype="FACTOR",
+        update=_update_vp_detect_sensitivity,
+    )
+    # Sensitivity used to build vp_detect_debug_image (-1 = none / stale).
+    vp_detect_sensitivity_baked: bpy.props.FloatProperty(
+        default=-1.0,
+        options={"HIDDEN"},
+    )
+    view_vp_detect_debug: bpy.props.BoolProperty(
+        name="Debug auto detected edges",
+        description=(
+            "Show a black debug plate with every auto-detected edge as a white "
+            "stroke. First use runs edge detection; later toggles reuse the plate"
+        ),
+        default=False,
+        options={"HIDDEN"},
+    )
+    vp_detect_debug_image: bpy.props.PointerProperty(
+        type=bpy.types.Image,
+        options={"HIDDEN"},
+    )
+    vp_detect_debug_path: bpy.props.StringProperty(
+        subtype="FILE_PATH",
+        options={"HIDDEN"},
     )
     overlay_opacity: bpy.props.FloatProperty(
         name="Overlay Opacity",

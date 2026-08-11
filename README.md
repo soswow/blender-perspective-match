@@ -12,6 +12,7 @@ The extension is a native port of the manual workflow from Perspective Match Stu
 - Load a still directly as a Blender camera background on the active match only.
 - Replace the plate on an existing match without clearing VP lines, origin, or landmarks (same pixel size).
 - Choose 1-, 2-, or 3-point perspective.
+- In **3 Point** mode, **Detect VP Lines** finds edge segments (OpenCV LSD, background job), clusters them into three well-separated vanishing points, and fills editable axis-colored strokes (upright → Z; horizontals assigned by orthogonal focal consistency). **Edge Sensitivity** trades faint-edge recall vs noise. **Debug auto detected edges** previews every surviving edge on a black plate (runs edge detection on first use, then reuses the plate).
 - Draw, select, edit, and delete axis-colored VP segments in camera view.
 - Optionally label each VP segment with its residual (px) to the current camera.
 - Extend VP guides, horizon, and VP markers past the plate to finite vanishing points (capped when lines are nearly parallel).
@@ -137,7 +138,7 @@ Axis mapping matches Blender’s gizmos:
 - Green → Blender Y
 - Blue → Blender Z (up)
 
-Then draw lines:
+Then draw lines (or auto-detect in 3-point mode):
 
 1. Choose the colored axis.
 2. Click **Draw / Edit Lines**. Optional: enable **Snap to Edges** to refine each stroke on release onto a nearby image edge or thin dark/bright line (grout, painted strokes) along the whole segment — both endpoints move onto the fitted feature. Undo with Blender’s normal undo. Optional: enable **Show Error Label** to see each segment’s residual (px) beside the stroke.
@@ -145,6 +146,8 @@ Then draw lines:
 4. Click a line to select it; drag either endpoint handle to edit (release also re-snaps when Snap to Edges is on).
 5. Press **Delete/Backspace** to remove the selected line.
 6. Press **Esc** (or right-click) to leave the tool.
+
+**Detect VP Lines** (3 Point only): runs in the background (Esc to cancel). Replaces the current strokes with automatically found bundles — well-spread inliers per axis (angularly far at the VP; near-duplicate edges skipped) that prefer well-separated vanishing points — then the usual camera refine when enough lines exist. **Edge Sensitivity** (0–1) controls how eagerly faint lines are kept — raise it when human-visible edges are missing, lower it to cut noise. Short edge fragments are filtered out. Treat it as a starting point: delete wrong strokes, reassign axes by clearing and redrawing, or run again after changing the plate. **Debug auto detected edges** toggles a black plate with every surviving edge in white — first press runs edge detection if needed, later presses reuse that plate (changing sensitivity clears the cache). Needs clear man-made edges; cluttered foliage or curved architecture will miss or mis-label axes. Disabled in 1- and 2-point modes.
 
 While the tool is active, left-clicks on the visible plate belong to Perspective Match (object selection is blocked). Sidebar / toolbar / header clicks still go to Blender UI — including when **Region Overlap** draws those panels over the viewport. Mode feedback: a color-coded viewport banner + side/bottom frame, and a depressed tool button. Exit with **Esc** (or finish the pick / drag). Cursors also switch per tool (paint-cross for VP lines and origin, scroll for principal point, knife/dot for landmarks). In VP line mode the cursor refines on hover: hand-point over an unselected line, default over a selected segment, open hand over endpoint handles, and closed hand while dragging; empty plate stays paint-cross. Clicking **Draw / Edit Lines** or **Pick Origin** again refreshes the active tool instead of getting stuck. If you orbit out of camera view, the next line/origin click switches back to the match camera.
 
@@ -201,7 +204,7 @@ Press **Estimate Distortion** in the **Camera** section. With a successful VP so
 ## Limitations
 
 - Initial FOV is manual. GeoCalib automatic FOV/gravity estimation is intentionally omitted.
-- Vanishing lines are not detected automatically.
+- Automatic VP lines are 3-point only (LSD + RANSAC clustering); 1- and 2-point still need hand-drawn strokes. Detection can mis-label axes on ambiguous stills — edit afterward.
 - The workflow assumes square pixels and zero skew.
 - 1-point perspective cannot determine focal length from VP geometry alone.
 - Distortion uses one radial division parameter, not Blender's full tracking-camera lens models.
@@ -222,6 +225,7 @@ match_perspective/
   sync.py                 # Multi-match landmark graph registration
   lens_refine.py          # Outer fx search (VP prior + sync RMSE)
   apriltag_detect.py      # AprilTag 25h9 → landmark picks (bundled OpenCV wheel)
+  vp_line_detect.py       # Auto VP lines (LSD + RANSAC clusters, 3-point)
   scene.py                # Camera/background integration and coordinate mapping
   overlay.py              # Camera-view GPU drawing
   operators.py            # File, solve, and modal interaction operators
@@ -236,6 +240,7 @@ match_perspective/
   tests/test_sync.py      # Landmark sync regressions
   tests/test_lens_refine.py  # VP residual + locked-focal helper
   tests/test_apriltag_detect.py  # AprilTag naming / matching helpers
+  tests/test_vp_line_detect.py  # Auto VP clustering / axis assignment
   tools/print-apriltags/  # Generate A4/A3 AprilTag print sheets (standalone)
   tools/explore-vp-intrinsics/  # FOV×PP diagnostic plotter (standalone)
   link-dev.sh             # Symlink checkout into Blender 5.1 for live reload

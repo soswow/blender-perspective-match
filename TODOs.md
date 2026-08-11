@@ -1,4 +1,5 @@
 TODOs to be done:
+- Question about retina display scaling.
 
 Done TODOs:
 - Remove numbers from section headers. 

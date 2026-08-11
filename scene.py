@@ -166,6 +166,10 @@ def create_match_camera(context: bpy.types.Context) -> bpy.types.Object:
     session.view_contrast = 1.0
     session.view_baked_exposure = 0.0
     session.view_baked_contrast = 1.0
+    session.view_vp_detect_debug = False
+    session.vp_detect_debug_image = None
+    session.vp_detect_debug_path = ""
+    session.vp_detect_sensitivity_baked = -1.0
     session.error = ""
     session.status = "Load a reference image"
 
@@ -415,7 +419,7 @@ def rename_match(
 
 
 def _clear_derived_plates(session: properties.PMSession) -> None:
-    """Drop view-lighting / undistorted caches without touching lines or origin."""
+    """Drop view-lighting / undistorted / VP-detect debug caches without touching lines."""
     invalidate_undistorted_cache(session)
     cached_view = session.view_image
     session.view_lighting_applied = False
@@ -427,6 +431,13 @@ def _clear_derived_plates(session: properties.PMSession) -> None:
     session.view_baked_contrast = 1.0
     if cached_view is not None and cached_view.users == 0:
         bpy.data.images.remove(cached_view)
+    cached_debug = session.vp_detect_debug_image
+    session.view_vp_detect_debug = False
+    session.vp_detect_debug_image = None
+    session.vp_detect_debug_path = ""
+    session.vp_detect_sensitivity_baked = -1.0
+    if cached_debug is not None and cached_debug.users == 0:
+        bpy.data.images.remove(cached_debug)
 
 
 def _reset_session_edit_state(session: properties.PMSession) -> None:
@@ -609,7 +620,12 @@ def apply_camera(
     camera_data.shift_x = (plate_width * 0.5 - plate_cx) / plate_width
     camera_data.shift_y = (plate_cy - plate_height * 0.5) / plate_width
     if len(camera_data.background_images) > 0 and settings.image is not None:
-        if use_undistorted:
+        if (
+            settings.view_vp_detect_debug
+            and settings.vp_detect_debug_image is not None
+        ):
+            camera_data.background_images[0].image = settings.vp_detect_debug_image
+        elif use_undistorted:
             camera_data.background_images[0].image = settings.undistorted_image
         elif (
             settings.view_lighting_applied
@@ -620,14 +636,32 @@ def apply_camera(
             camera_data.background_images[0].image = settings.image
 
     # Private pose as local; root Empty carries optional sync similarity.
+    # Write loc/rot/scale explicitly — assigning matrix_local alone can leave the
+    # evaluated transform stale until a depsgraph update, so the viewport keeps
+    # the old camera pose while RNA calibration already changed (Manual FOV /
+    # known-K refines looked like no-ops).
     camera_object.matrix_parent_inverse = Matrix.Identity(4)
-    camera_object.matrix_local = private_camera_matrix(calibration)
+    matrix_local = private_camera_matrix(calibration)
+    location, rotation, scale = matrix_local.decompose()
+    camera_object.location = location
+    if camera_object.rotation_mode == "QUATERNION":
+        camera_object.rotation_quaternion = rotation
+    elif camera_object.rotation_mode == "AXIS_ANGLE":
+        axis, angle = rotation.to_axis_angle()
+        camera_object.rotation_axis_angle = (angle, axis.x, axis.y, axis.z)
+    else:
+        camera_object.rotation_euler = rotation.to_euler(camera_object.rotation_mode)
+    camera_object.scale = scale
     store_calibration(settings, calibration)
     if update_scene_camera:
         blender_scene.camera = camera_object
         blender_scene.render.resolution_x = int(plate_width)
         blender_scene.render.resolution_y = plate_height
         blender_scene.render.resolution_percentage = 100
+    # Flush evaluated pose for the active view layer when available.
+    view_layer = getattr(bpy.context, "view_layer", None)
+    if view_layer is not None:
+        view_layer.update()
 
 
 def private_camera_matrix(calibration: core.Calibration) -> Matrix:
@@ -1164,10 +1198,17 @@ def _is_derived_display_image(
         return True
     if settings.undistorted_image is not None and image == settings.undistorted_image:
         return True
+    if (
+        settings.vp_detect_debug_image is not None
+        and image == settings.vp_detect_debug_image
+    ):
+        return True
     name = (image.name or "").lower()
     if (
         name.endswith(".pm-view")
         or ".pm-view." in name
+        or name.endswith(".pm-vp-edges")
+        or ".pm-vp-edges." in name
         or name.endswith(".undistorted")
         or ".undistorted." in name
     ):
@@ -1181,7 +1222,11 @@ def _is_derived_display_image(
         ).lower()
     except Exception:
         return False
-    return resolved.endswith("-pm-view.png") or resolved.endswith(".undistorted.png")
+    return (
+        resolved.endswith("-pm-view.png")
+        or resolved.endswith("-pm-vp-edges.png")
+        or resolved.endswith(".undistorted.png")
+    )
 
 
 def _resolved_source_image_path(settings: properties.PMSession) -> str | None:
