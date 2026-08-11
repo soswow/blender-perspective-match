@@ -6,7 +6,7 @@ from pathlib import Path
 
 import bpy
 
-from . import icons, operators, overlay, properties, scene
+from . import icons, operators, properties, scene
 
 
 def _axis_counts(settings) -> dict[str, int]:
@@ -131,17 +131,6 @@ def _mode_tool_active(workspace, mode: str) -> bool:
     return bool(workspace.is_modal and workspace.work_mode == mode)
 
 
-def _draw_active_tool_banner(layout, workspace) -> None:
-    """Reminder while a Draw / Pick tool owns 3D View clicks (Esc exits)."""
-    if not workspace.is_modal:
-        return
-    title = overlay.interact_mode_label(workspace.work_mode)
-    banner = layout.column(align=True)
-    banner.alert = True
-    banner.label(text=f"{title} tool active — Esc exits", icon="INFO")
-    layout.separator()
-
-
 class VIEW3D_PT_perspective_match(bpy.types.Panel):
     """Perspective Match sidebar panel."""
 
@@ -158,7 +147,6 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
         layout.use_property_split = True
         layout.use_property_decorate = False
 
-        _draw_active_tool_banner(layout, workspace)
         _cameras_header, cameras = _section(
             layout, "PM_match_cameras", "Match Cameras", "CAMERA_DATA"
         )

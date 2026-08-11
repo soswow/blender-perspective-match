@@ -621,11 +621,18 @@ def _draw_vp_geometry(context: bpy.types.Context, fill_shader, settings) -> None
             )
 
         if line_index == settings.selected_line_index:
-            handle_color = _with_alpha(color, opacity)
-            _draw_circle(fill_shader, point_a, 7.0, _with_alpha(handle_color, 0.45), filled=True)
-            _draw_circle(fill_shader, point_a, 7.0, handle_color, filled=False)
-            _draw_circle(fill_shader, point_b, 7.0, _with_alpha(handle_color, 0.45), filled=True)
-            _draw_circle(fill_shader, point_b, 7.0, handle_color, filled=False)
+            # Endpoint handles only while Draw / Edit Lines owns the viewport.
+            workspace = properties.workspace(context)
+            if workspace.is_modal and workspace.work_mode == "LINE":
+                handle_color = _with_alpha(color, opacity)
+                _draw_circle(
+                    fill_shader, point_a, 7.0, _with_alpha(handle_color, 0.45), filled=True
+                )
+                _draw_circle(fill_shader, point_a, 7.0, handle_color, filled=False)
+                _draw_circle(
+                    fill_shader, point_b, 7.0, _with_alpha(handle_color, 0.45), filled=True
+                )
+                _draw_circle(fill_shader, point_b, 7.0, handle_color, filled=False)
 
     drawable_vps: dict[str, np.ndarray] = {}
     for axis, vanishing in overlay_vanishing_points.items():

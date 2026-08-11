@@ -196,6 +196,17 @@ def _clear_interact_flags(context: bpy.types.Context) -> None:
     workspace = _workspace(context)
     workspace.is_modal = False
     workspace.work_mode = "NONE"
+    _clear_vp_line_selection(context)
+
+
+def _clear_vp_line_selection(context: bpy.types.Context) -> None:
+    """Drop the selected VP line so endpoint handles disappear outside edit mode."""
+    settings = _session(context)
+    if settings is None:
+        return
+    if settings.selected_line_index != -1:
+        settings.selected_line_index = -1
+        properties.tag_viewport_redraw(context)
 
 
 def _interact_cursor_for_mode(mode: str, context: bpy.types.Context) -> str:
@@ -221,22 +232,23 @@ def _set_interact_cursor(
     *,
     modal: bool,
 ) -> None:
-    """Apply the mode cursor; ``modal=True`` stacks via cursor_modal_set."""
+    """Start/refresh the modal cursor stack; plate hover owns the visible cursor.
+
+    ``modal=True`` pushes DEFAULT so later ``cursor_set("DEFAULT")`` is a real
+    arrow (Blender remaps DEFAULT → win->modalcursor while modal is set).
+    Do not force the mode cursor here — invoke often runs over a sidebar button,
+    and the first plate hover applies PAINT_CROSS / etc.
+    """
+    del mode  # Mode cursor comes from hover hit-testing, not from this helper.
     window = context.window
     if window is None:
         return
-    cursor = _interact_cursor_for_mode(mode, context)
     if modal:
-        # Push DEFAULT as the modal cursor so later cursor_set("DEFAULT") shows a
-        # real arrow. Blender remaps DEFAULT → win->modalcursor while modal is set
-        # (see WM_cursor_set in wm_cursors.cc).
+        # See WM_cursor_set in wm_cursors.cc: DEFAULT remaps to modalcursor.
         window.cursor_modal_set("DEFAULT")
-        window.cursor_set(cursor)
-    else:
-        window.cursor_set(cursor)
-    # Keep hover-cursor tracking in sync when the tool mode is (re)applied.
+    # Forget any cached id so the next plate hover always calls cursor_set.
     if _active_interact is not None:
-        _active_interact._hover_cursor = cursor
+        _active_interact._hover_cursor = ""
 
 
 def _restore_interact_cursor(context: bpy.types.Context) -> None:
@@ -920,12 +932,17 @@ class PM_OT_interact(bpy.types.Operator):
         # Re-click while a live tool runs: switch mode / refresh instead of stacking.
         if _active_interact is not None:
             active = _active_interact
+            previous_mode = active.mode
             active.mode = self.mode
             workspace.work_mode = self.mode
             workspace.is_modal = True
             scene.enter_camera_view(context)
-            # Already inside a modal_set session — swap cursor without nesting.
+            # Leaving VP edit drops selection so handles do not linger in other tools.
+            if previous_mode == "LINE" and self.mode != "LINE":
+                _clear_vp_line_selection(context)
+            # Already inside a modal_set session — refresh stack without nesting.
             _set_interact_cursor(context, self.mode, modal=False)
+            active._refresh_cursor_for_event(context, event)
             settings.status = active._status_prompt()
             properties.tag_viewport_redraw(context)
             self.report({"INFO"}, "Perspective Match tool already active")
@@ -944,19 +961,34 @@ class PM_OT_interact(bpy.types.Operator):
         _active_interact = self
         context.window_manager.modal_handler_add(self)
         _set_interact_cursor(context, self.mode, modal=True)
+        # Button/keymap invoke: apply hover only when already over the plate.
+        self._refresh_cursor_for_event(context, event)
         settings.status = self._status_prompt()
         properties.tag_viewport_redraw(context)
         return {"RUNNING_MODAL"}
 
     def _apply_hover_cursor(self, context: bpy.types.Context, cursor: str) -> None:
-        """Set the window cursor if it differs from the last hover choice."""
-        if self._hover_cursor == cursor:
-            return
+        """Set the window cursor (always; Blender no-ops if it is already set)."""
+        # Do not skip when self._hover_cursor matches — Blender UI can change the
+        # visible cursor (sidebar DEFAULT) without updating our cache.
         window = context.window
         if window is None:
             return
         window.cursor_set(cursor)
         self._hover_cursor = cursor
+
+    def _refresh_cursor_for_event(
+        self,
+        context: bpy.types.Context,
+        event,
+    ) -> None:
+        """Apply plate hover cursor when the event is over the 3D View window."""
+        area, region, space = _view3d_under_event(context, event)
+        if area is None or region is None or space is None:
+            self._hover_cursor = ""
+            return
+        with context.temp_override(area=area, region=region, space_data=space):
+            self._update_hover_cursor(context, event, region)
 
     def _update_hover_cursor(
         self,
@@ -1037,9 +1069,8 @@ class PM_OT_interact(bpy.types.Operator):
                 if area.type == "VIEW_3D":
                     area.header_text_set(None)
         overlay.clear_preview(context)
-        # Leaving the line tool clears selection so handles don't linger.
-        if settings is not None and self.mode == "LINE":
-            settings.selected_line_index = -1
+        # Always clear VP selection on exit — handles must not linger after Esc.
+        _clear_vp_line_selection(context)
         if not cancelled and settings is not None:
             settings.status = "Perspective Match tool finished"
         properties.tag_viewport_redraw(context)
@@ -1368,10 +1399,10 @@ class PM_OT_interact(bpy.types.Operator):
                     self._cancel_drag(context)
                     return {"RUNNING_MODAL"}
                 return {"RUNNING_MODAL"}
-            # Drop the hover hand when the pointer leaves the 3D View window.
-            self._apply_hover_cursor(
-                context, _interact_cursor_for_mode(self.mode, context)
-            )
+            # Blender owns the cursor over UI (DEFAULT). Forget our last id so
+            # returning to the plate always re-applies PAINT_CROSS / hover state
+            # instead of skipping cursor_set as a no-op.
+            self._hover_cursor = ""
             return {"PASS_THROUGH"}
 
         with context.temp_override(area=area, region=region, space_data=space):
