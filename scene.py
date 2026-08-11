@@ -1335,13 +1335,15 @@ def image_to_region(
     context: bpy.types.Context,
     image_x: float,
     image_y: float,
+    *,
+    bounds: tuple[float, float, float, float] | None = None,
 ) -> Vector | None:
     """Map top-left-origin image pixels into current camera-view region pixels."""
-    bounds = camera_frame_bounds(context)
+    frame = bounds if bounds is not None else camera_frame_bounds(context)
     settings = properties.active_session(context)
-    if bounds is None or settings is None or settings.image_width <= 0 or settings.image_height <= 0:
+    if frame is None or settings is None or settings.image_width <= 0 or settings.image_height <= 0:
         return None
-    left, right, bottom, top = bounds
+    left, right, bottom, top = frame
     display_x, display_y, display_width, display_height = _storage_to_display(
         settings,
         image_x,
@@ -1359,16 +1361,18 @@ def ideal_to_region(
     context: bpy.types.Context,
     ideal_x: float,
     ideal_y: float,
+    *,
+    bounds: tuple[float, float, float, float] | None = None,
 ) -> Vector | None:
     """Map ideal pinhole pixels to the active original or undistorted plate."""
     settings = properties.active_session(context)
     if settings is None:
         return None
+    frame = bounds if bounds is not None else camera_frame_bounds(context)
+    if frame is None:
+        return None
     if settings.view_undistorted:
-        bounds = camera_frame_bounds(context)
-        if bounds is None:
-            return None
-        left, right, bottom, top = bounds
+        left, right, bottom, top = frame
         display_width, display_height = _display_size(settings)
         display_x = ideal_x - settings.undistorted_offset_x
         display_y = ideal_y - settings.undistorted_offset_y
@@ -1386,7 +1390,12 @@ def ideal_to_region(
         settings.cy,
         settings.division_lambda,
     )[0]
-    return image_to_region(context, float(storage[0]), float(storage[1]))
+    return image_to_region(
+        context,
+        float(storage[0]),
+        float(storage[1]),
+        bounds=frame,
+    )
 
 
 def region_to_image(

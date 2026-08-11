@@ -73,6 +73,55 @@ _preview: dict[str, object] = {
     "area_pointer": 0,
 }
 
+# Recompute Huber VP fits only when line / intrinsics RNA changes.
+_vp_solve_cache: dict[str, object] = {
+    "key": None,
+    "vanishing_points": {},
+    "overlay_vanishing_points": {},
+    "ideal_endpoints": (),
+}
+
+# While set, polyline draws accumulate into one GPU batch per color/width.
+_active_line_batcher: "_LineBatcher | None" = None
+
+
+class _LineBatcher:
+    """Collect screen-space line segments and flush as few GPU draws as possible."""
+
+    def __init__(self) -> None:
+        self._groups: dict[tuple, list[tuple[float, float, float]]] = {}
+
+    def add_segment(
+        self,
+        point_a: Vector,
+        point_b: Vector,
+        color,
+        thickness: float,
+    ) -> None:
+        key = (color, float(thickness))
+        bucket = self._groups.get(key)
+        if bucket is None:
+            bucket = []
+            self._groups[key] = bucket
+        bucket.append(_as_pos3(point_a))
+        bucket.append(_as_pos3(point_b))
+
+    def flush(self) -> None:
+        if not self._groups:
+            return
+        shader = _line_shader()
+        viewport = gpu.state.viewport_get()[2:]
+        shader.bind()
+        shader.uniform_float("viewportSize", viewport)
+        for (color, thickness), positions in self._groups.items():
+            if len(positions) < 2:
+                continue
+            batch = batch_for_shader(shader, "LINES", {"pos": positions})
+            shader.uniform_float("lineWidth", thickness)
+            shader.uniform_float("color", color)
+            batch.draw(shader)
+        self._groups.clear()
+
 
 def set_preview(
     context: bpy.types.Context,
@@ -128,6 +177,9 @@ def _draw_line(
 ) -> None:
     """Draw an antialiased thick stroke with Blender's polyline shader."""
     if point_a is None or point_b is None:
+        return
+    if _active_line_batcher is not None:
+        _active_line_batcher.add_segment(point_a, point_b, color, thickness)
         return
     shader = _line_shader()
     batch = batch_for_shader(
@@ -227,6 +279,7 @@ def _ideal_screen_chains(
     *,
     samples: int,
     clip_bounds: tuple[float, float, float, float],
+    frame_bounds: tuple[float, float, float, float] | None = None,
 ) -> list[list[Vector]]:
     """Map an ideal segment to clipped screen-space polylines."""
     settings = properties.active_session(context)
@@ -234,13 +287,19 @@ def _ideal_screen_chains(
         return []
     first = np.asarray(point_a, dtype=np.float64)
     second = np.asarray(point_b, dtype=np.float64)
+    # Straight in ideal space when λ≈0 — two samples are enough.
     sample_count = 2 if abs(settings.division_lambda) < 1.0e-12 else max(3, samples)
     chains: list[list[Vector]] = []
     current: list[Vector] = []
     previous = None
     for ratio in np.linspace(0.0, 1.0, sample_count):
         point = first * (1.0 - ratio) + second * ratio
-        screen = scene.ideal_to_region(context, float(point[0]), float(point[1]))
+        screen = scene.ideal_to_region(
+            context,
+            float(point[0]),
+            float(point[1]),
+            bounds=frame_bounds,
+        )
         if previous is not None and screen is not None:
             clipped = _clip_segment_to_bounds(previous, screen, clip_bounds)
             if clipped is None:
@@ -301,6 +360,7 @@ def _draw_ideal_segment(
     *,
     samples: int = 20,
     clip_bounds: tuple[float, float, float, float] | None = None,
+    frame_bounds: tuple[float, float, float, float] | None = None,
     dash_pattern=None,
     dash_slot_lengths: list[float] | None = None,
 ) -> None:
@@ -308,15 +368,19 @@ def _draw_ideal_segment(
     settings = properties.active_session(context)
     if settings is None:
         return
-    bounds = clip_bounds if clip_bounds is not None else scene.camera_frame_bounds(context)
+    bounds = clip_bounds if clip_bounds is not None else frame_bounds
+    if bounds is None:
+        bounds = scene.camera_frame_bounds(context)
     if bounds is None:
         return
+    plate_bounds = frame_bounds if frame_bounds is not None else bounds
     chains = _ideal_screen_chains(
         context,
         point_a,
         point_b,
         samples=samples,
         clip_bounds=bounds,
+        frame_bounds=plate_bounds,
     )
     if not dash_pattern:
         for chain in chains:
@@ -332,6 +396,13 @@ def _draw_ideal_segment(
         )
 
 
+def _guide_sample_count(settings) -> int:
+    """Dense enough for curved λ≠0 guides; cheap when the plate is linear."""
+    if abs(settings.division_lambda) < 1.0e-12:
+        return 2
+    return 24
+
+
 def _draw_ideal_guide_line(
     context: bpy.types.Context,
     ideal_point: np.ndarray,
@@ -340,6 +411,7 @@ def _draw_ideal_guide_line(
     thickness: float,
     *,
     target_xy: np.ndarray | None = None,
+    frame_bounds: tuple[float, float, float, float] | None = None,
     dash_pattern=None,
     dash_slot_lengths: list[float] | None = None,
 ) -> None:
@@ -355,6 +427,7 @@ def _draw_ideal_guide_line(
     region_bounds = _region_bounds(context)
     if region_bounds is None:
         return
+    plate_bounds = frame_bounds if frame_bounds is not None else scene.camera_frame_bounds(context)
     image_center = np.array((settings.image_width * 0.5, settings.image_height * 0.5))
     point = np.asarray(ideal_point, dtype=np.float64)
     anchor = point + direction * float(np.dot(image_center - point, direction))
@@ -385,8 +458,9 @@ def _draw_ideal_guide_line(
         end,
         color,
         thickness,
-        samples=96,
+        samples=_guide_sample_count(settings),
         clip_bounds=region_bounds,
+        frame_bounds=plate_bounds,
         dash_pattern=pattern,
         dash_slot_lengths=slots,
     )
@@ -524,29 +598,26 @@ def _draw_vp_error_labels(context: bpy.types.Context, settings) -> None:
     region_bounds = _region_bounds(context)
     if region_bounds is None:
         return
+    bounds = scene.camera_frame_bounds(context)
+    if bounds is None:
+        return
     calibration = scene.calibration_from_settings(settings)
+    _vanishing, _overlay_vps, ideal_endpoints = _cached_vp_overlay_solve(settings)
     opacity = settings.overlay_opacity
-    for line in settings.lines:
-        point_a = scene.image_to_region(context, line.x1, line.y1)
-        point_b = scene.image_to_region(context, line.x2, line.y2)
+    for line_index, (axis, ideal_a, ideal_b) in enumerate(ideal_endpoints):
+        line = settings.lines[line_index]
+        point_a = scene.image_to_region(context, line.x1, line.y1, bounds=bounds)
+        point_b = scene.image_to_region(context, line.x2, line.y2, bounds=bounds)
         if point_a is None or point_b is None:
             continue
-        ideal_endpoints = core.undistort_points(
-            np.array([[line.x1, line.y1], [line.x2, line.y2]], dtype=np.float64),
-            calibration.intrinsics.fx,
-            calibration.intrinsics.fy,
-            calibration.intrinsics.cx,
-            calibration.intrinsics.cy,
-            calibration.division_lambda,
-        )
         residual = core.vp_ideal_segment_residual_px(
             calibration,
-            line.axis,
+            axis,
             core.LineSegment(
-                float(ideal_endpoints[0][0]),
-                float(ideal_endpoints[0][1]),
-                float(ideal_endpoints[1][0]),
-                float(ideal_endpoints[1][1]),
+                float(ideal_a[0]),
+                float(ideal_a[1]),
+                float(ideal_b[0]),
+                float(ideal_b[1]),
             ),
         )
         if residual is None:
@@ -559,7 +630,73 @@ def _draw_vp_error_labels(context: bpy.types.Context, settings) -> None:
     gpu.state.blend_set("ALPHA")
 
 
+def _vp_overlay_cache_key(settings) -> tuple:
+    """Fingerprint line geometry + intrinsics that affect overlay VP solves."""
+    parts: list = [
+        settings.vp_mode,
+        float(settings.fx),
+        float(settings.fy),
+        float(settings.cx),
+        float(settings.cy),
+        float(settings.division_lambda),
+        int(settings.image_width),
+        int(settings.image_height),
+        int(len(settings.lines)),
+    ]
+    for line in settings.lines:
+        parts.extend(
+            (
+                line.axis,
+                float(line.x1),
+                float(line.y1),
+                float(line.x2),
+                float(line.y2),
+            )
+        )
+    return tuple(parts)
+
+
+def _cached_vp_overlay_solve(settings) -> tuple[dict, dict, tuple]:
+    """Return vanishing points and ideal endpoints, recomputed only when needed."""
+    key = _vp_overlay_cache_key(settings)
+    if _vp_solve_cache["key"] == key:
+        return (
+            _vp_solve_cache["vanishing_points"],
+            _vp_solve_cache["overlay_vanishing_points"],
+            _vp_solve_cache["ideal_endpoints"],
+        )
+    line_bundles = scene.line_bundles_from_settings(settings)
+    calibration = scene.calibration_from_settings(settings)
+    ideal_line_bundles = core.undistort_line_bundles(
+        line_bundles,
+        calibration.intrinsics,
+        calibration.division_lambda,
+    )
+    vanishing_points = core.collect_vanishing_points(ideal_line_bundles)
+    overlay_vanishing_points = core.complete_vanishing_points(
+        vanishing_points,
+        calibration.intrinsics,
+    )
+    ideal_endpoints = []
+    for line in settings.lines:
+        endpoints = core.undistort_points(
+            np.array([[line.x1, line.y1], [line.x2, line.y2]], dtype=np.float64),
+            calibration.intrinsics.fx,
+            calibration.intrinsics.fy,
+            calibration.intrinsics.cx,
+            calibration.intrinsics.cy,
+            calibration.division_lambda,
+        )
+        ideal_endpoints.append((line.axis, endpoints[0].copy(), endpoints[1].copy()))
+    _vp_solve_cache["key"] = key
+    _vp_solve_cache["vanishing_points"] = vanishing_points
+    _vp_solve_cache["overlay_vanishing_points"] = overlay_vanishing_points
+    _vp_solve_cache["ideal_endpoints"] = tuple(ideal_endpoints)
+    return vanishing_points, overlay_vanishing_points, _vp_solve_cache["ideal_endpoints"]
+
+
 def _draw_vp_geometry(context: bpy.types.Context, fill_shader, settings) -> None:
+    global _active_line_batcher
     if not settings.show_vp_overlay:
         return
     opacity = settings.overlay_opacity
@@ -569,129 +706,135 @@ def _draw_vp_geometry(context: bpy.types.Context, fill_shader, settings) -> None
     region_bounds = _region_bounds(context)
     if region_bounds is None:
         return
-    line_bundles = scene.line_bundles_from_settings(settings)
-    calibration = scene.calibration_from_settings(settings)
-    ideal_line_bundles = core.undistort_line_bundles(
-        line_bundles,
-        calibration.intrinsics,
-        calibration.division_lambda,
+    vanishing_points, overlay_vanishing_points, ideal_endpoints = _cached_vp_overlay_solve(
+        settings
     )
-    vanishing_points = core.collect_vanishing_points(ideal_line_bundles)
-    # Derive missing orthogonal VPs so the horizon still appears with only one horizontal.
-    overlay_vanishing_points = core.complete_vanishing_points(
-        vanishing_points,
-        calibration.intrinsics,
-    )
-
-    for line_index, line in enumerate(settings.lines):
-        color = _with_alpha(AXIS_COLORS[line.axis], opacity)
-        point_a = scene.image_to_region(context, line.x1, line.y1)
-        point_b = scene.image_to_region(context, line.x2, line.y2)
-        ideal_endpoints = core.undistort_points(
-            np.array([[line.x1, line.y1], [line.x2, line.y2]], dtype=np.float64),
-            calibration.intrinsics.fx,
-            calibration.intrinsics.fy,
-            calibration.intrinsics.cx,
-            calibration.intrinsics.cy,
-            calibration.division_lambda,
-        )
-        _draw_ideal_segment(
-            context,
-            ideal_endpoints[0],
-            ideal_endpoints[1],
-            color,
-            2.4 if line_index == settings.selected_line_index else 1.8,
-        )
-
-        vanishing = vanishing_points.get(line.axis)
-        if vanishing is not None:
-            midpoint = 0.5 * (ideal_endpoints[0] + ideal_endpoints[1])
-            target_xy = _finite_vanishing_xy(vanishing)
-            if target_xy is None:
-                direction = vanishing[:2]
-            else:
-                direction = target_xy - midpoint
-            _draw_ideal_guide_line(
-                context,
-                midpoint,
-                direction,
-                _with_alpha(color, 0.42),
-                _GUIDE_LINE_THICKNESS,
-                target_xy=target_xy,
+    guide_samples = _guide_sample_count(settings)
+    batcher = _LineBatcher()
+    _active_line_batcher = batcher
+    try:
+        for line_index, (axis, ideal_a, ideal_b) in enumerate(ideal_endpoints):
+            color = _with_alpha(AXIS_COLORS[axis], opacity)
+            line = settings.lines[line_index]
+            point_a = scene.image_to_region(
+                context, line.x1, line.y1, bounds=bounds
             )
-
-        if line_index == settings.selected_line_index:
-            # Endpoint handles only while Draw / Edit Lines owns the viewport.
-            workspace = properties.workspace(context)
-            if workspace.is_modal and workspace.work_mode == "LINE":
-                handle_color = _with_alpha(color, opacity)
-                _draw_circle(
-                    fill_shader, point_a, 7.0, _with_alpha(handle_color, 0.45), filled=True
-                )
-                _draw_circle(fill_shader, point_a, 7.0, handle_color, filled=False)
-                _draw_circle(
-                    fill_shader, point_b, 7.0, _with_alpha(handle_color, 0.45), filled=True
-                )
-                _draw_circle(fill_shader, point_b, 7.0, handle_color, filled=False)
-
-    drawable_vps: dict[str, np.ndarray] = {}
-    for axis, vanishing in overlay_vanishing_points.items():
-        ideal_xy = _finite_vanishing_xy(vanishing)
-        if ideal_xy is None or not _vanishing_within_draw_limit(settings, ideal_xy):
-            continue
-        drawable_vps[axis] = ideal_xy
-        # Measured VPs always; implied ones only when they complete the horizon.
-        if axis not in vanishing_points and axis not in ("x", "z"):
-            continue
-        marker = scene.ideal_to_region(
-            context,
-            float(ideal_xy[0]),
-            float(ideal_xy[1]),
-        )
-        # Allow markers outside the plate, but still inside the 3D View region.
-        if marker is not None and _point_in_bounds(marker, region_bounds):
-            marker_opacity = opacity if axis in vanishing_points else opacity * 0.7
-            _draw_crosshair(
-                fill_shader,
-                marker,
-                _with_alpha(AXIS_COLORS[axis], marker_opacity),
+            point_b = scene.image_to_region(
+                context, line.x2, line.y2, bounds=bounds
             )
-
-    if "x" in overlay_vanishing_points and "z" in overlay_vanishing_points:
-        first_xy = drawable_vps.get("x")
-        second_xy = drawable_vps.get("z")
-        horizon_red = _with_alpha(AXIS_COLORS["x"], opacity)
-        horizon_green = _with_alpha(AXIS_COLORS["z"], opacity)
-        # red · empty · green · empty …
-        horizon_pattern = (horizon_red, None, horizon_green, None)
-        horizon_slots = [_HORIZON_SLOT_LENGTH] * 4
-        if first_xy is not None and second_xy is not None:
             _draw_ideal_segment(
                 context,
-                first_xy,
-                second_xy,
-                horizon_red,
-                _GUIDE_LINE_THICKNESS,
-                samples=96,
-                clip_bounds=region_bounds,
-                dash_pattern=horizon_pattern,
-                dash_slot_lengths=horizon_slots,
+                ideal_a,
+                ideal_b,
+                color,
+                2.4 if line_index == settings.selected_line_index else 1.8,
+                frame_bounds=bounds,
             )
-        else:
-            first = overlay_vanishing_points["x"]
-            second = overlay_vanishing_points["z"]
-            first_xy_raw = _finite_vanishing_xy(first)
-            second_xy_raw = _finite_vanishing_xy(second)
-            if first_xy_raw is not None and second_xy_raw is not None:
+
+            vanishing = vanishing_points.get(axis)
+            if vanishing is not None:
+                midpoint = 0.5 * (ideal_a + ideal_b)
+                target_xy = _finite_vanishing_xy(vanishing)
+                if target_xy is None:
+                    direction = vanishing[:2]
+                else:
+                    direction = target_xy - midpoint
                 _draw_ideal_guide_line(
                     context,
-                    0.5 * (first_xy_raw + second_xy_raw),
-                    second_xy_raw - first_xy_raw,
+                    midpoint,
+                    direction,
+                    _with_alpha(color, 0.42),
+                    _GUIDE_LINE_THICKNESS,
+                    target_xy=target_xy,
+                    frame_bounds=bounds,
+                )
+
+            if line_index == settings.selected_line_index:
+                # Endpoint handles only while Draw / Edit Lines owns the viewport.
+                workspace = properties.workspace(context)
+                if workspace.is_modal and workspace.work_mode == "LINE":
+                    handle_color = _with_alpha(color, opacity)
+                    _draw_circle(
+                        fill_shader,
+                        point_a,
+                        7.0,
+                        _with_alpha(handle_color, 0.45),
+                        filled=True,
+                    )
+                    _draw_circle(fill_shader, point_a, 7.0, handle_color, filled=False)
+                    _draw_circle(
+                        fill_shader,
+                        point_b,
+                        7.0,
+                        _with_alpha(handle_color, 0.45),
+                        filled=True,
+                    )
+                    _draw_circle(fill_shader, point_b, 7.0, handle_color, filled=False)
+
+        drawable_vps: dict[str, np.ndarray] = {}
+        for axis, vanishing in overlay_vanishing_points.items():
+            ideal_xy = _finite_vanishing_xy(vanishing)
+            if ideal_xy is None or not _vanishing_within_draw_limit(settings, ideal_xy):
+                continue
+            drawable_vps[axis] = ideal_xy
+            # Measured VPs always; implied ones only when they complete the horizon.
+            if axis not in vanishing_points and axis not in ("x", "z"):
+                continue
+            marker = scene.ideal_to_region(
+                context,
+                float(ideal_xy[0]),
+                float(ideal_xy[1]),
+                bounds=bounds,
+            )
+            # Allow markers outside the plate, but still inside the 3D View region.
+            if marker is not None and _point_in_bounds(marker, region_bounds):
+                marker_opacity = opacity if axis in vanishing_points else opacity * 0.7
+                _draw_crosshair(
+                    fill_shader,
+                    marker,
+                    _with_alpha(AXIS_COLORS[axis], marker_opacity),
+                )
+
+        if "x" in overlay_vanishing_points and "z" in overlay_vanishing_points:
+            first_xy = drawable_vps.get("x")
+            second_xy = drawable_vps.get("z")
+            horizon_red = _with_alpha(AXIS_COLORS["x"], opacity)
+            horizon_green = _with_alpha(AXIS_COLORS["z"], opacity)
+            # red · empty · green · empty …
+            horizon_pattern = (horizon_red, None, horizon_green, None)
+            horizon_slots = [_HORIZON_SLOT_LENGTH] * 4
+            if first_xy is not None and second_xy is not None:
+                _draw_ideal_segment(
+                    context,
+                    first_xy,
+                    second_xy,
                     horizon_red,
                     _GUIDE_LINE_THICKNESS,
+                    samples=guide_samples,
+                    clip_bounds=region_bounds,
+                    frame_bounds=bounds,
                     dash_pattern=horizon_pattern,
                     dash_slot_lengths=horizon_slots,
                 )
+            else:
+                first = overlay_vanishing_points["x"]
+                second = overlay_vanishing_points["z"]
+                first_xy_raw = _finite_vanishing_xy(first)
+                second_xy_raw = _finite_vanishing_xy(second)
+                if first_xy_raw is not None and second_xy_raw is not None:
+                    _draw_ideal_guide_line(
+                        context,
+                        0.5 * (first_xy_raw + second_xy_raw),
+                        second_xy_raw - first_xy_raw,
+                        horizon_red,
+                        _GUIDE_LINE_THICKNESS,
+                        frame_bounds=bounds,
+                        dash_pattern=horizon_pattern,
+                        dash_slot_lengths=horizon_slots,
+                    )
+    finally:
+        batcher.flush()
+        _active_line_batcher = None
 
 
 def _draw_placement(context: bpy.types.Context, fill_shader, settings) -> None:
