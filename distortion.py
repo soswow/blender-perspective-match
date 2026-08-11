@@ -551,8 +551,12 @@ def revert_to_original_plate(context: bpy.types.Context) -> None:
     settings.lambda_saturated = False
     scene.invalidate_undistorted_cache(settings)
     line_bundles = scene.line_bundles_from_settings(settings)
-    ready_axes = sum(1 for segments in line_bundles.values() if len(segments) >= 2)
-    if ready_axes >= 2:
+    lock_focal = bool(settings.lock_focal or settings.vp_mode == "1")
+    if core.can_solve_orientation(
+        line_bundles,
+        lock_focal=lock_focal,
+        vp_mode=settings.vp_mode,
+    ):
         scene.refine_match(context)
     else:
         scene.apply_manual_fov(context)
@@ -575,11 +579,15 @@ def estimate_distortion(context: bpy.types.Context) -> None:
         raise ValueError("Load a reference image first")
     # Keep Manual FOV if set — λ is estimated at the locked focal.
     line_bundles = scene.line_bundles_from_settings(settings)
-    ready_axes = sum(1 for segments in line_bundles.values() if len(segments) >= 2)
-    if ready_axes < 2:
+    lock_focal = bool(settings.lock_focal or settings.vp_mode == "1")
+    if not core.can_solve_orientation(
+        line_bundles,
+        lock_focal=lock_focal,
+        vp_mode=settings.vp_mode,
+    ):
         tip = (
             "draw VP lines, then Apply Manual FOV / Auto from VPs"
-            if settings.lock_focal or settings.vp_mode == "1"
+            if lock_focal
             else "draw VP lines, then Auto from VPs"
         )
         raise ValueError(f"Need enough VP lines first — {tip}")

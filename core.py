@@ -287,13 +287,407 @@ def estimate_division_lambda(
 def collect_vanishing_points(
     line_bundles: dict[AxisId, list[LineSegment]],
 ) -> dict[AxisId, np.ndarray]:
-    """Fit every usable axis bundle."""
+    """Fit every usable axis bundle (≥2 concurrent segments per axis)."""
     output: dict[AxisId, np.ndarray] = {}
     for axis, segments in line_bundles.items():
         vanishing = vanishing_point_from_lines(segments)
         if vanishing is not None:
             output[axis] = vanishing
     return output
+
+
+def axis_line_counts(
+    line_bundles: dict[AxisId, list[LineSegment]],
+) -> dict[AxisId, int]:
+    """Return how many segments are drawn on each colored axis."""
+    return {
+        "x": len(line_bundles.get("x", [])),
+        "y": len(line_bundles.get("y", [])),
+        "z": len(line_bundles.get("z", [])),
+    }
+
+
+def can_solve_orientation(
+    line_bundles: dict[AxisId, list[LineSegment]],
+    *,
+    lock_focal: bool,
+    vp_mode: str,
+) -> bool:
+    """Whether drawn VP lines are sufficient to recover camera orientation.
+
+    Classic path: ≥2 concurrent segments on each of two axes (mode-dependent).
+    Known-K path (3-point + Manual FOV / imported intrinsics): ≥1 segment on
+    every axis — orthogonality + full K locate the three vanishing points.
+    """
+    counts = axis_line_counts(line_bundles)
+    if vp_mode == "1":
+        return counts["y"] >= 2 and counts["z"] >= 2
+    if vp_mode == "2":
+        return counts["x"] >= 2 and counts["z"] >= 2
+    # 3-point: two bundles of ≥2 lines, or known K with one line per axis.
+    if sum(1 for axis in ("x", "y", "z") if counts[axis] >= 2) >= 2:
+        return True
+    if lock_focal and all(counts[axis] >= 1 for axis in ("x", "y", "z")):
+        return True
+    return False
+
+
+def orientation_solve_hint(
+    line_bundles: dict[AxisId, list[LineSegment]],
+    *,
+    lock_focal: bool,
+    vp_mode: str,
+) -> str:
+    """Human-readable tip when orientation cannot be solved yet."""
+    counts = axis_line_counts(line_bundles)
+    summary = f"X {counts['x']} · Y {counts['z']} · Z {counts['y']}"
+    if vp_mode == "1":
+        return f"1-point needs 2+ Y and 2+ Z lines ({summary})"
+    if vp_mode == "2":
+        return f"2-point needs 2+ X and 2+ Y lines ({summary})"
+    if lock_focal:
+        return (
+            "3-point with known K needs 1+ line on each axis, "
+            f"or 2+ lines on any two axes ({summary})"
+        )
+    return (
+        "3-point needs 2+ lines on any two axes "
+        f"(or Manual FOV / Import YAML + 1 line per axis) ({summary})"
+    )
+
+
+def _line_plane_normal(
+    segment: LineSegment,
+    intrinsics: CameraIntrinsics,
+) -> tuple[np.ndarray, float] | None:
+    """Back-project an image line to a camera-space plane normal + length weight."""
+    line = _line_homogeneous(segment)
+    # n = K^T ℓ — rays in that plane are orthogonal to n.
+    normal = np.array(
+        [
+            intrinsics.fx * line[0],
+            intrinsics.fy * line[1],
+            intrinsics.cx * line[0] + intrinsics.cy * line[1] + line[2],
+        ],
+        dtype=np.float64,
+    )
+    length = float(np.linalg.norm(normal))
+    if length < 1.0e-12:
+        return None
+    return normal / length, max(segment_length(segment), 1.0)
+
+
+def _upright_rotation(rotation: np.ndarray) -> np.ndarray:
+    """Match orthonormalize_axes handedness / upright conventions."""
+    result = np.asarray(rotation, dtype=np.float64).copy()
+    if result[1, 2] > 0.0:
+        result[:, 1] *= -1.0
+        result[:, 2] *= -1.0
+    if float(np.linalg.det(result)) < 0.0:
+        result[:, 1] *= -1.0
+    return result
+
+
+def _orthogonal_line_constraint_cost(
+    rotation: np.ndarray,
+    column_normals: dict[int, list[tuple[np.ndarray, float]]],
+) -> float:
+    """Length-weighted sum of (plane-normal · axis-direction)²."""
+    cost = 0.0
+    for column, weighted_normals in column_normals.items():
+        direction = rotation[:, column]
+        for normal, weight in weighted_normals:
+            residual = float(np.dot(normal, direction))
+            cost += weight * residual * residual
+    return cost
+
+
+def _polish_rotation_from_line_normals(
+    rotation: np.ndarray,
+    column_normals: dict[int, list[tuple[np.ndarray, float]]],
+    *,
+    iterations: int = 24,
+) -> np.ndarray:
+    """Alternating LS polish: each axis → best direction for its lines, then Procrustes.
+
+    One line leaves a free plane (project the current column). Two or more pin a
+    direction via the smallest eigenvector of Σ w nnᵀ — so adding segments on an
+    axis continuously nudges orientation even before every axis has a pair.
+    """
+    polished = np.asarray(rotation, dtype=np.float64).copy()
+    if float(np.linalg.det(polished)) < 0.0:
+        polished[:, 2] *= -1.0
+
+    for _iteration in range(iterations):
+        measured = np.zeros((3, 3), dtype=np.float64)
+        for column in (0, 1, 2):
+            weighted = column_normals[column]
+            accumulator = np.zeros((3, 3), dtype=np.float64)
+            for normal, weight in weighted:
+                accumulator += weight * np.outer(normal, normal)
+            eigenvalues, eigenvectors = np.linalg.eigh(accumulator)
+            # Rank-1 (single plane): whole tangent plane is null — project current.
+            if float(eigenvalues[1]) <= 1.0e-10 * max(float(eigenvalues[2]), 1.0e-12):
+                normal = weighted[0][0]
+                direction = polished[:, column] - normal * float(
+                    np.dot(normal, polished[:, column])
+                )
+                if float(np.linalg.norm(direction)) < 1.0e-12:
+                    direction = eigenvectors[:, 0]
+            else:
+                direction = eigenvectors[:, 0]
+            direction = direction / max(float(np.linalg.norm(direction)), 1.0e-12)
+            if float(np.dot(direction, polished[:, column])) < 0.0:
+                direction = -direction
+            measured[:, column] = direction
+
+        u_matrix, _singular, v_transpose = np.linalg.svd(measured)
+        candidate = u_matrix @ v_transpose
+        if float(np.linalg.det(candidate)) < 0.0:
+            u_matrix = u_matrix.copy()
+            u_matrix[:, -1] *= -1.0
+            candidate = u_matrix @ v_transpose
+        if float(np.max(np.abs(candidate - polished))) < 1.0e-12:
+            polished = candidate
+            break
+        polished = candidate
+    return polished
+
+
+def rotation_from_orthogonal_lines(
+    line_bundles: dict[AxisId, list[LineSegment]],
+    intrinsics: CameraIntrinsics,
+    *,
+    initial_rotation: np.ndarray | None = None,
+) -> np.ndarray | None:
+    """Recover world-to-camera rotation from ≥1 line on each axis with known K.
+
+    Each image line back-projects to a plane through the camera; the matching
+    world-axis direction must lie in that plane. With three mutually orthogonal
+    axes this pins orientation (discrete sign flips resolved by convention).
+    Extra lines on any axis are folded in by a joint LS polish after the
+    closed-form seed, so 2+1+1 already averages the doubled axis.
+    """
+    if not all(len(line_bundles.get(axis, [])) >= 1 for axis in ("x", "y", "z")):
+        return None
+
+    # UI axis → rotation column (X, Blender-Y/UI-z, Blender-Z/UI-y).
+    axis_columns: tuple[tuple[AxisId, int], ...] = (("x", 0), ("z", 1), ("y", 2))
+    column_normals: dict[int, list[tuple[np.ndarray, float]]] = {0: [], 1: [], 2: []}
+    for axis, column in axis_columns:
+        for segment in line_bundles[axis]:
+            mapped = _line_plane_normal(segment, intrinsics)
+            if mapped is not None:
+                column_normals[column].append(mapped)
+    if any(not column_normals[column] for column in (0, 1, 2)):
+        return None
+
+    def fixed_direction(column: int) -> np.ndarray | None:
+        """Nullspace direction when ≥2 planes pin the axis; else None."""
+        weighted = column_normals[column]
+        if len(weighted) < 2:
+            return None
+        matrix = np.stack(
+            [normal * np.sqrt(weight) for normal, weight in weighted],
+            axis=0,
+        )
+        _u_matrix, _singular, v_transpose = np.linalg.svd(matrix, full_matrices=True)
+        direction = v_transpose[-1]
+        return direction / max(float(np.linalg.norm(direction)), 1.0e-12)
+
+    def primary_normal(column: int) -> np.ndarray:
+        weighted = column_normals[column]
+        if len(weighted) == 1:
+            return weighted[0][0]
+        # Length-weighted average normal for soft single-plane fallback.
+        accumulator = np.zeros(3, dtype=np.float64)
+        for normal, weight in weighted:
+            accumulator += weight * normal
+        return accumulator / max(float(np.linalg.norm(accumulator)), 1.0e-12)
+
+    fixed = {column: fixed_direction(column) for column in (0, 1, 2)}
+    fixed_count = sum(1 for direction in fixed.values() if direction is not None)
+
+    candidates: list[np.ndarray] = []
+
+    if fixed_count == 3:
+        measured = np.column_stack([fixed[0], fixed[1], fixed[2]])
+        u_matrix, _singular, v_transpose = np.linalg.svd(measured)
+        rotation = u_matrix @ v_transpose
+        if float(np.linalg.det(rotation)) < 0.0:
+            u_matrix = u_matrix.copy()
+            u_matrix[:, -1] *= -1.0
+            rotation = u_matrix @ v_transpose
+        candidates.append(rotation)
+    elif fixed_count == 2:
+        missing = next(column for column in (0, 1, 2) if fixed[column] is None)
+        kept = [column for column in (0, 1, 2) if column != missing]
+        direction_a = np.asarray(fixed[kept[0]], dtype=np.float64)
+        direction_b = np.asarray(fixed[kept[1]], dtype=np.float64)
+        direction_a = direction_a / max(float(np.linalg.norm(direction_a)), 1.0e-12)
+        direction_b = direction_b - direction_a * float(np.dot(direction_a, direction_b))
+        if float(np.linalg.norm(direction_b)) < 1.0e-12:
+            return None
+        direction_b = direction_b / float(np.linalg.norm(direction_b))
+        for sign_a in (1.0, -1.0):
+            for sign_b in (1.0, -1.0):
+                trial = np.zeros((3, 3), dtype=np.float64)
+                trial[:, kept[0]] = sign_a * direction_a
+                trial[:, kept[1]] = sign_b * direction_b
+                if missing == 2:
+                    trial[:, 2] = np.cross(trial[:, 0], trial[:, 1])
+                elif missing == 0:
+                    trial[:, 0] = np.cross(trial[:, 1], trial[:, 2])
+                else:
+                    trial[:, 1] = np.cross(trial[:, 2], trial[:, 0])
+                if float(np.linalg.det(trial)) < 0.0:
+                    trial[:, missing] *= -1.0
+                candidates.append(trial)
+    else:
+        # ≤1 axis fully pinned: solve the free plane angle analytically.
+        # d0 = cosθ u + sinθ v in plane 0; d1 ∥ d0 × n1; d2 = d0 × d1.
+        # Orthogonality n2·d2 = 0 ⇒ trig equation in 2θ.
+        free_columns = [
+            column for column in (0, 1, 2) if fixed[column] is None
+        ] or [0, 1, 2]
+        for free_column in free_columns:
+            order = [free_column, (free_column + 1) % 3, (free_column + 2) % 3]
+            normal_a = primary_normal(order[0])
+            normal_b = primary_normal(order[1])
+            normal_c = primary_normal(order[2])
+            helper = (
+                np.array([1.0, 0.0, 0.0])
+                if abs(float(normal_a[0])) < 0.9
+                else np.array([0.0, 1.0, 0.0])
+            )
+            basis_u = np.cross(normal_a, helper)
+            if float(np.linalg.norm(basis_u)) < 1.0e-12:
+                helper = np.array([0.0, 0.0, 1.0])
+                basis_u = np.cross(normal_a, helper)
+            basis_u = basis_u / max(float(np.linalg.norm(basis_u)), 1.0e-12)
+            basis_v = np.cross(normal_a, basis_u)
+            basis_v = basis_v / max(float(np.linalg.norm(basis_v)), 1.0e-12)
+
+            # (d0·nb)(nc·d0) = nc·nb with d0 = c u + s v.
+            coeff_a = float(np.dot(basis_u, normal_b))
+            coeff_b = float(np.dot(basis_v, normal_b))
+            coeff_d = float(np.dot(normal_c, basis_u))
+            coeff_e = float(np.dot(normal_c, basis_v))
+            coeff_f = float(np.dot(normal_c, normal_b))
+            # C1 cos 2θ + C2 sin 2θ = -C0
+            coeff_c0 = 0.5 * (coeff_a * coeff_d + coeff_b * coeff_e) - coeff_f
+            coeff_c1 = 0.5 * (coeff_a * coeff_d - coeff_b * coeff_e)
+            coeff_c2 = 0.5 * (coeff_a * coeff_e + coeff_b * coeff_d)
+            radius = float(np.hypot(coeff_c1, coeff_c2))
+            angles: list[float] = []
+            if radius < 1.0e-14:
+                if abs(coeff_c0) < 1.0e-10:
+                    angles.extend(
+                        float(index * np.pi / 8.0) for index in range(16)
+                    )
+            else:
+                ratio = float(np.clip(-coeff_c0 / radius, -1.0, 1.0))
+                offset = float(np.arccos(ratio))
+                phase = float(np.arctan2(coeff_c2, coeff_c1))
+                for double_angle in (phase + offset, phase - offset):
+                    angles.append(0.5 * double_angle)
+                    angles.append(0.5 * double_angle + np.pi)
+
+            for angle in angles:
+                direction_a = np.cos(angle) * basis_u + np.sin(angle) * basis_v
+                cross_ab = np.cross(direction_a, normal_b)
+                if float(np.linalg.norm(cross_ab)) < 1.0e-9:
+                    continue
+                direction_b = cross_ab / float(np.linalg.norm(cross_ab))
+                for sign_b in (1.0, -1.0):
+                    axis_b = sign_b * direction_b
+                    axis_c = np.cross(direction_a, axis_b)
+                    if float(np.linalg.norm(axis_c)) < 1.0e-9:
+                        continue
+                    axis_c = axis_c / float(np.linalg.norm(axis_c))
+                    rotation = np.zeros((3, 3), dtype=np.float64)
+                    rotation[:, order[0]] = direction_a
+                    rotation[:, order[1]] = axis_b
+                    rotation[:, order[2]] = axis_c
+                    if float(np.linalg.det(rotation)) < 0.0:
+                        rotation[:, order[2]] *= -1.0
+                    candidates.append(rotation)
+
+    if initial_rotation is not None:
+        candidates.append(np.asarray(initial_rotation, dtype=np.float64))
+
+    if not candidates:
+        return None
+
+    # Several SO(3) frames can place each axis in its plane; pick the min-cost
+    # seed closest to the prior (or identity), polish with every line, upright.
+    reference = (
+        np.asarray(initial_rotation, dtype=np.float64)
+        if initial_rotation is not None
+        else np.eye(3, dtype=np.float64)
+    )
+    scored_candidates: list[tuple[float, float, np.ndarray]] = []
+    for candidate in candidates:
+        rotation = np.asarray(candidate, dtype=np.float64)
+        if float(np.linalg.det(rotation)) < 0.0:
+            rotation = rotation.copy()
+            rotation[:, 2] *= -1.0
+        cost = _orthogonal_line_constraint_cost(rotation, column_normals)
+        alignment = float(np.trace(rotation.T @ reference))
+        scored_candidates.append((cost, alignment, rotation))
+    best_cost = min(cost for cost, _alignment, _rotation in scored_candidates)
+    cost_tolerance = max(1.0e-8, 1.0e-4 * best_cost + 1.0e-8)
+
+    best_rotation: np.ndarray | None = None
+    best_alignment = -float("inf")
+    for cost, alignment, rotation in scored_candidates:
+        if cost > best_cost + cost_tolerance:
+            continue
+        if alignment > best_alignment:
+            best_alignment = alignment
+            best_rotation = rotation
+    if best_rotation is None:
+        return None
+    polished = _polish_rotation_from_line_normals(best_rotation, column_normals)
+    # Keep the seed if polish somehow worsened the joint residual.
+    if _orthogonal_line_constraint_cost(
+        polished, column_normals
+    ) <= _orthogonal_line_constraint_cost(best_rotation, column_normals) + 1.0e-12:
+        best_rotation = polished
+    return _upright_rotation(best_rotation)
+
+
+def vanishing_points_from_known_intrinsics(
+    line_bundles: dict[AxisId, list[LineSegment]],
+    intrinsics: CameraIntrinsics,
+    *,
+    initial_rotation: np.ndarray | None = None,
+) -> dict[AxisId, np.ndarray]:
+    """Estimate all three VPs when K is known and each axis has ≥1 line.
+
+    Prefer classic multi-line fits when an axis already has concurrent segments;
+    fill any remaining axes from the joint orthogonal solve.
+    """
+    output = collect_vanishing_points(line_bundles)
+    if all(axis in output for axis in ("x", "y", "z")):
+        return output
+    if not all(len(line_bundles.get(axis, [])) >= 1 for axis in ("x", "y", "z")):
+        return output
+
+    rotation = rotation_from_orthogonal_lines(
+        line_bundles,
+        intrinsics,
+        initial_rotation=initial_rotation,
+    )
+    if rotation is None:
+        return output
+    # Emit VPs for every axis from the joint orientation (overrides partial classic
+    # fits so single-line axes stay consistent with orthogonality + K).
+    return {
+        "x": vanishing_from_camera_direction(rotation[:, 0], intrinsics),
+        "z": vanishing_from_camera_direction(rotation[:, 1], intrinsics),
+        "y": vanishing_from_camera_direction(rotation[:, 2], intrinsics),
+    }
 
 
 def _finite_xy(vanishing: np.ndarray) -> np.ndarray | None:
@@ -467,12 +861,19 @@ def refine_camera(
     estimate_principal_point: bool = True,
     estimate_distortion: bool = False,
     initial_division_lambda: float = 0.0,
+    initial_rotation: np.ndarray | None = None,
 ) -> Calibration:
-    """Refine focal, principal point, radial λ, and orientation from line bundles."""
+    """Refine focal, principal point, radial λ, and orientation from line bundles.
+
+    With ``lock_focal`` and ≥1 line on each axis, orientation comes from the
+    known-K orthogonal-line solve (vanishing points need not be intersected
+    from parallel pairs).
+    """
     current = CameraIntrinsics(**intrinsics.__dict__)
     division_lambda = float(initial_division_lambda)
     lambda_saturated = False
     vanishing_points: dict[AxisId, np.ndarray] = {}
+    known_k_rotation: np.ndarray | None = None
 
     for _pass_index in range(1 if lock_focal else 8):
         previous = (
@@ -488,7 +889,26 @@ def refine_camera(
             if lambda_saturated:
                 division_lambda = 0.0
         working = undistort_line_bundles(line_bundles, current, division_lambda)
-        vanishing_points = collect_vanishing_points(working)
+        use_known_k = lock_focal and all(
+            len(working.get(axis, [])) >= 1 for axis in ("x", "y", "z")
+        )
+        if use_known_k:
+            known_k_rotation = rotation_from_orthogonal_lines(
+                working,
+                current,
+                initial_rotation=initial_rotation if known_k_rotation is None else known_k_rotation,
+            )
+            if known_k_rotation is not None:
+                vanishing_points = {
+                    "x": vanishing_from_camera_direction(known_k_rotation[:, 0], current),
+                    "z": vanishing_from_camera_direction(known_k_rotation[:, 1], current),
+                    "y": vanishing_from_camera_direction(known_k_rotation[:, 2], current),
+                }
+            else:
+                vanishing_points = collect_vanishing_points(working)
+        else:
+            known_k_rotation = None
+            vanishing_points = collect_vanishing_points(working)
         if estimate_principal_point:
             principal = principal_point_from_three_vps(
                 vanishing_points,
@@ -513,11 +933,14 @@ def refine_camera(
         ) < 1.0e-4:
             break
 
-    directions = {
-        axis: _normalized_direction(vanishing, current)
-        for axis, vanishing in vanishing_points.items()
-    }
-    rotation = orthonormalize_axes(directions)
+    if known_k_rotation is not None:
+        rotation = known_k_rotation
+    else:
+        directions = {
+            axis: _normalized_direction(vanishing, current)
+            for axis, vanishing in vanishing_points.items()
+        }
+        rotation = orthonormalize_axes(directions)
     return Calibration(
         intrinsics=current,
         rotation_w2c=rotation,

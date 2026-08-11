@@ -45,34 +45,48 @@ def _report_exception(operator: bpy.types.Operator, error: Exception) -> set[str
     return {"CANCELLED"}
 
 
-def _axis_line_counts(settings) -> dict[str, int]:
-    counts = {"x": 0, "y": 0, "z": 0}
+def _line_bundles_for_ready_check(settings) -> dict[str, list]:
+    """Build solver line bundles, filtered like scene.line_bundles_from_settings."""
+    line_bundles: dict[str, list] = {"x": [], "y": [], "z": []}
     for line in settings.lines:
-        counts[line.axis] += 1
-    return counts
-
-
-def _required_lines_ready(settings) -> bool:
-    counts = _axis_line_counts(settings)
+        line_bundles[line.axis].append(
+            core.LineSegment(line.x1, line.y1, line.x2, line.y2)
+        )
     if settings.vp_mode == "1":
-        # Depth (Blender Z / axis y) + horizontals on Y (axis z).
-        return counts["y"] >= 2 and counts["z"] >= 2
-    if settings.vp_mode == "2":
-        # Two horizontals (X × Y); uprights are parallel / not a finite VP.
-        return counts["x"] >= 2 and counts["z"] >= 2
-    # 3-point: any two axes with ≥2 lines; the third world axis is derived.
-    return sum(1 for axis in ("x", "y", "z") if counts[axis] >= 2) >= 2
+        line_bundles["x"] = []
+    elif settings.vp_mode == "2":
+        line_bundles["y"] = []
+    return line_bundles
 
 
-def _lines_needed_message(settings) -> str:
-    """Human-readable reason Auto-from-VPs cannot run yet."""
-    counts = _axis_line_counts(settings)
-    summary = f"X {counts['x']} · Y {counts['z']} · Z {counts['y']}"
-    if settings.vp_mode == "1":
-        return f"1-point needs 2+ Y and 2+ Z lines ({summary})"
-    if settings.vp_mode == "2":
-        return f"2-point needs 2+ X and 2+ Y lines ({summary})"
-    return f"3-point needs 2+ lines on any two axes ({summary})"
+def _required_lines_ready(settings, *, for_auto_fov: bool = False) -> bool:
+    """True when orientation can be solved from current VP lines.
+
+    ``for_auto_fov=True`` requires the classic multi-line path (focal will be
+    unlocked). Otherwise Manual FOV / YAML may use one line per axis.
+    """
+    line_bundles = _line_bundles_for_ready_check(settings)
+    lock_focal = False if for_auto_fov else bool(
+        settings.lock_focal or settings.vp_mode == "1"
+    )
+    return core.can_solve_orientation(
+        line_bundles,
+        lock_focal=lock_focal,
+        vp_mode=settings.vp_mode,
+    )
+
+
+def _lines_needed_message(settings, *, for_auto_fov: bool = False) -> str:
+    """Human-readable reason a VP solve cannot run yet."""
+    line_bundles = _line_bundles_for_ready_check(settings)
+    lock_focal = False if for_auto_fov else bool(
+        settings.lock_focal or settings.vp_mode == "1"
+    )
+    return core.orientation_solve_hint(
+        line_bundles,
+        lock_focal=lock_focal,
+        vp_mode=settings.vp_mode,
+    )
 
 
 def _refine_if_ready(context: bpy.types.Context) -> None:
@@ -217,7 +231,7 @@ def _interact_cursor_for_mode(mode: str, context: bpy.types.Context) -> str:
     if mode == "PP":
         return "SCROLL_XY"
     if mode == "ORIGIN":
-        return "PICK_AREA"
+        return "PAINT_CROSS"
     if mode == "LANDMARK":
         landmark = scene.active_landmark(context)
         if landmark is not None and landmark.kind == "LINE":
@@ -455,8 +469,8 @@ class PM_OT_refine(bpy.types.Operator):
         if settings is None or settings.image is None:
             self.report({"ERROR"}, "Load a reference image first")
             return {"CANCELLED"}
-        if not _required_lines_ready(settings):
-            message = _lines_needed_message(settings)
+        if not _required_lines_ready(settings, for_auto_fov=True):
+            message = _lines_needed_message(settings, for_auto_fov=True)
             settings.status = message
             self.report({"WARNING"}, message)
             return {"CANCELLED"}

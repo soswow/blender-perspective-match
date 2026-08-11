@@ -654,13 +654,23 @@ def refine_match(
     if settings.image is None:
         raise ValueError("Load a reference image first")
     line_bundles = line_bundles_from_settings(settings)
-    ready_axes = sum(1 for segments in line_bundles.values() if len(segments) >= 2)
-    if ready_axes < 2:
-        raise ValueError("Draw at least two lines on each of two axes")
+    lock_focal = bool(settings.lock_focal or settings.vp_mode == "1")
+    if not core.can_solve_orientation(
+        line_bundles,
+        lock_focal=lock_focal,
+        vp_mode=settings.vp_mode,
+    ):
+        raise ValueError(
+            core.orientation_solve_hint(
+                line_bundles,
+                lock_focal=lock_focal,
+                vp_mode=settings.vp_mode,
+            )
+        )
 
     previous_calibration = calibration_from_settings(settings)
     intrinsics = previous_calibration.intrinsics
-    if settings.lock_focal or settings.vp_mode == "1":
+    if lock_focal:
         focal = core.focal_from_hfov(settings.hfov_degrees, intrinsics.image_width)
         intrinsics.fx = focal
         intrinsics.fy = focal
@@ -668,11 +678,12 @@ def refine_match(
     calibration = core.refine_camera(
         line_bundles,
         intrinsics,
-        lock_focal=settings.lock_focal or settings.vp_mode == "1",
+        lock_focal=lock_focal,
         estimate_principal_point=settings.vp_mode == "3" and not settings.lock_focal,
         # λ is button-only; locked Manual FOV still allows a one-shot estimate.
         estimate_distortion=bool(estimate_distortion),
         initial_division_lambda=previous_calibration.division_lambda,
+        initial_rotation=previous_calibration.rotation_w2c,
     )
 
     if settings.origin_is_set:
@@ -752,9 +763,12 @@ def apply_manual_fov(context: bpy.types.Context) -> None:
         raise ValueError("Create or activate a match camera first")
     settings.lock_focal = True
     line_bundles = line_bundles_from_settings(settings)
-    ready_axes = sum(1 for segments in line_bundles.values() if len(segments) >= 2)
     # With enough lines, re-orient at the locked FOV (keeps stored λ; no re-fit).
-    if ready_axes >= 2:
+    if core.can_solve_orientation(
+        line_bundles,
+        lock_focal=True,
+        vp_mode=settings.vp_mode,
+    ):
         refine_match(context)
         from . import distortion
 
@@ -815,8 +829,11 @@ def apply_ros_camera_info_yaml(context: bpy.types.Context, filepath: str) -> str
         settings.lambda_saturated = False
 
     line_bundles = line_bundles_from_settings(settings)
-    ready_axes = sum(1 for segments in line_bundles.values() if len(segments) >= 2)
-    if ready_axes >= 2:
+    if core.can_solve_orientation(
+        line_bundles,
+        lock_focal=True,
+        vp_mode=settings.vp_mode,
+    ):
         # Locked FOV + imported PP; keep YAML λ (do not re-fit from VP lines).
         refine_match(context, estimate_distortion=False)
     else:
@@ -956,9 +973,13 @@ def set_principal_point(
     settings.cy = cy
 
     line_bundles = line_bundles_from_settings(settings)
-    ready_axes = sum(1 for segments in line_bundles.values() if len(segments) >= 2)
+    can_orient = core.can_solve_orientation(
+        line_bundles,
+        lock_focal=True,
+        vp_mode=settings.vp_mode,
+    )
 
-    if finalize and ready_axes >= 2:
+    if finalize and can_orient:
         intrinsics = previous.intrinsics
         intrinsics.cx = cx
         intrinsics.cy = cy
@@ -969,6 +990,7 @@ def set_principal_point(
             estimate_principal_point=False,
             estimate_distortion=False,
             initial_division_lambda=previous.division_lambda,
+            initial_rotation=previous.rotation_w2c,
         )
         calibration.division_lambda = previous.division_lambda
         calibration.lambda_saturated = previous.lambda_saturated
@@ -2267,8 +2289,12 @@ def prepare_lens_refine(context: bpy.types.Context) -> LensRefinePrep:
             continue
         settings = root.pm_session
         line_bundles = line_bundles_from_settings(settings)
-        ready_axes = sum(1 for segments in line_bundles.values() if len(segments) >= 2)
-        freeze = settings.vp_mode == "1" or ready_axes < 2
+        can_orient = core.can_solve_orientation(
+            line_bundles,
+            lock_focal=True,
+            vp_mode=settings.vp_mode,
+        )
+        freeze = settings.vp_mode == "1" or not can_orient
         # Manual FOV matches stay searchable — Refine Lenses exists to adjust fx.
         origin_image = None
         if settings.origin_is_set:

@@ -155,6 +155,11 @@ def calibration_at_focal(
         estimate_principal_point=False,
         estimate_distortion=False,
         initial_division_lambda=float(match.division_lambda),
+        initial_rotation=(
+            None
+            if match.base_calibration is None
+            else match.base_calibration.rotation_w2c
+        ),
     )
     if match.origin_image is not None:
         calibration.camera_center, _scale = core.apply_origin_and_scale(
