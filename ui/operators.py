@@ -2202,8 +2202,10 @@ class PM_OT_reload(bpy.types.Operator):
     def execute(self, context: bpy.types.Context) -> set[str]:
         # Never unregister from inside this operator — that can SIGSEGV Blender.
         # Schedule the tear-down on a timer so this execute can return first.
-        package = sys.modules[__package__]
-        if not package.schedule_reload():
+        # Operators live under ui/; schedule_reload is on the extension root package.
+        from .. import schedule_reload
+
+        if not schedule_reload():
             self.report({"WARNING"}, "Perspective Match reload already queued")
             return {"CANCELLED"}
         self.report({"INFO"}, "Perspective Match reload queued")

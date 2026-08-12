@@ -148,6 +148,8 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
         layout.use_property_split = True
         layout.use_property_decorate = False
 
+        # Match Cameras stays open; other sections default closed so a new
+        # match with an image does not flood the sidebar.
         _cameras_header, cameras = _section(
             layout, "PM_match_cameras", "Match Cameras", "CAMERA_DATA"
         )
@@ -189,7 +191,11 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
 
     def _draw_active_match(self, layout, context, workspace, settings) -> None:
         _image_header, image = _section(
-            layout, "PM_reference_image", "Reference Image", "IMAGE_DATA"
+            layout,
+            "PM_reference_image",
+            "Reference Image",
+            "IMAGE_DATA",
+            default_closed=True,
         )
         if image is not None:
             if settings.image is not None:
@@ -224,6 +230,7 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             "PM_vp_lines",
             "Vanishing Point Lines",
             icon_value=icons.icon_id("vp_lines"),
+            default_closed=True,
         )
         line_header.prop(
             settings,
@@ -274,7 +281,9 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             line_body.prop(settings, "snap_vp_lines_to_edges")
             line_body.prop(settings, "show_vp_error_labels")
 
-        _header, origin = _section(layout, "PM_origin", "Origin", "PIVOT_CURSOR")
+        _header, origin = _section(
+            layout, "PM_origin", "Origin", "PIVOT_CURSOR", default_closed=True
+        )
         if origin is not None:
             row = origin.row(align=True)
             pick_row = row.row(align=True)
@@ -293,7 +302,9 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             )
 
 
-        _header, camera = _section(layout, "PM_camera", "Camera", "CAMERA_DATA")
+        _header, camera = _section(
+            layout, "PM_camera", "Camera", "CAMERA_DATA", default_closed=True
+        )
         if camera is not None:
             # Full-width toolbar: property_split would shrink buttons to the value column.
             camera_actions = camera.column(align=True)
@@ -413,7 +424,7 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
 
     def _draw_sync(self, layout, context, workspace, settings) -> None:
         sync_header, sync_body = _section(
-            layout, "PM_sync", "Sync Matches", "LINKED"
+            layout, "PM_sync", "Sync Matches", "LINKED", default_closed=True
         )
         sync_header.prop(
             workspace,

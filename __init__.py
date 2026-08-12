@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import importlib
+import importlib.util
 import sys
 import traceback
+from pathlib import Path
 
 import bpy
 from bpy.app.handlers import persistent
@@ -16,27 +18,6 @@ CLASSES = (
     *properties.CLASSES,
     *operators.CLASSES,
     *panel.CLASSES,
-)
-
-# Dependency order for importlib.reload during development.
-_RELOAD_SUBMODULES = (
-    "core.geometry",
-    "core.sync",
-    "core.lens_refine",
-    "core.ros_camera_info",
-    "core",
-    "detect.apriltags",
-    "detect.vp_lines",
-    "detect.line_snap",
-    "detect",
-    "properties",
-    "scene.distortion",
-    "scene",
-    "ui.icons",
-    "ui.overlay",
-    "ui.operators",
-    "ui.panel",
-    "ui",
 )
 
 _reload_pending = False
@@ -142,26 +123,41 @@ def _clear_modal_flags() -> None:
 
 
 def reload_addon() -> None:
-    """Unregister, reload package modules from disk, then register again.
+    """Unregister, drop cached modules, import fresh from disk, register again.
 
     Must not run from inside an operator/panel stack belonging to this add-on —
     call ``schedule_reload()`` instead so Blender can finish the current event.
+
+    Drops every ``{package}.*`` entry from ``sys.modules`` (instead of only
+    ``importlib.reload``) so package-layout moves — e.g. ``scene.py`` →
+    ``scene/`` — do not leave a stale module object that shadows the new package.
     """
     package_name = __package__
     if not package_name:
         raise RuntimeError("Perspective Match reload requires a package context")
 
+    package_path = Path(sys.modules[package_name].__file__).resolve().parent
+
     _clear_modal_flags()
     unregister()
 
-    for submodule_name in _RELOAD_SUBMODULES:
-        module_name = f"{package_name}.{submodule_name}"
-        module = sys.modules.get(module_name)
-        if module is not None:
-            importlib.reload(module)
+    # Purge the package and all nested modules so the next import sees disk layout.
+    prefix = package_name + "."
+    for module_name in list(sys.modules):
+        if module_name == package_name or module_name.startswith(prefix):
+            del sys.modules[module_name]
 
-    importlib.reload(sys.modules[package_name])
-    sys.modules[package_name].register()
+    spec = importlib.util.spec_from_file_location(
+        package_name,
+        package_path / "__init__.py",
+        submodule_search_locations=[str(package_path)],
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Perspective Match reload could not load {package_path}")
+    package = importlib.util.module_from_spec(spec)
+    sys.modules[package_name] = package
+    spec.loader.exec_module(package)
+    package.register()
 
     window_manager = bpy.context.window_manager
     if window_manager is not None:

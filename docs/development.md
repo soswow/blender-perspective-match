@@ -16,7 +16,7 @@ Daily loop:
 2. In Blender: click **Reload Perspective Match** at the bottom of the sidebar (or **F3 → Reload Perspective Match**). Prefer this over System → Reload Scripts—that often leaves panels and PropertyGroups on stale class objects.
 3. Test. Watch the system console for `Perspective Match: reloaded from disk` (the button only queues the reload; the tear-down runs a moment later so Blender does not crash).
 
-Exit any running Draw / Pick Origin modal before reloading. After adding, renaming, or removing RNA properties on `PMSession` / `PMWorkspace`, **restart Blender**—property schema changes are not reliably hot-reloadable. If you still see duplicate panels or `already registered`, disable/re-enable the extension or restart.
+Exit any running Draw / Pick Origin modal before reloading. After adding, renaming, or removing RNA properties on `PMSession` / `PMWorkspace`, **restart Blender**—property schema changes are not reliably hot-reloadable. The same applies the first time after a package-layout change (modules moved into subpackages): **fully quit Blender**, then reopen — disable/re-enable alone can leave a stale `scene` / `core` module object in memory. If you still see duplicate panels or `already registered`, disable/re-enable the extension or restart.
 
 Re-run `./scripts/link-dev.sh` if you later **Install from Disk** and Blender overwrites the symlink with a ZIP extract.
 
