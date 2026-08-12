@@ -1,7 +1,8 @@
 TODOs to be done:
-- Question about retina display scaling.
+- (none)
 
 Done TODOs:
+- Retina / HiDPI: scale overlay strokes, handles, fonts, and hit radii by `system.ui_scale`.
 - Remove numbers from section headers. 
 - Creating new PM should open image loading dialog automatically.
 - VP Lines -> "Vanishing Point Lines"

@@ -1601,14 +1601,17 @@ class PM_OT_interact(bpy.types.Operator):
     def _hit_line(self, context, mouse: Vector) -> tuple[int, int]:
         settings = _session(context)
         selected = settings.selected_line_index
+        # Screen-space grab radii track Retina / UI scale with the overlay handles.
+        handle_radius = 12.0 * overlay.ui_scale()
+        body_radius = 11.0 * overlay.ui_scale()
         if 0 <= selected < len(settings.lines):
             line = settings.lines[selected]
             for endpoint_index, image_point in enumerate(((line.x1, line.y1), (line.x2, line.y2))):
                 screen = scene.image_to_region(context, image_point[0], image_point[1])
-                if screen is not None and (screen - mouse).length <= 12.0:
+                if screen is not None and (screen - mouse).length <= handle_radius:
                     return selected, endpoint_index + 1
         best_index = -1
-        best_distance = 11.0
+        best_distance = body_radius
         for index, line in enumerate(settings.lines):
             point_a = scene.image_to_region(context, line.x1, line.y1)
             point_b = scene.image_to_region(context, line.x2, line.y2)
@@ -1660,13 +1663,13 @@ class PM_OT_interact(bpy.types.Operator):
             ((observation.x, observation.y), (observation.x2, observation.y2))
         ):
             screen = scene.image_to_region(context, image_point[0], image_point[1])
-            if screen is not None and (screen - mouse).length <= 12.0:
+            if screen is not None and (screen - mouse).length <= 12.0 * overlay.ui_scale():
                 return endpoint_index + 1
         point_a = scene.image_to_region(context, observation.x, observation.y)
         point_b = scene.image_to_region(context, observation.x2, observation.y2)
         if point_a is None or point_b is None:
             return 0
-        if _distance_to_segment(mouse, point_a, point_b) < 11.0:
+        if _distance_to_segment(mouse, point_a, point_b) < 11.0 * overlay.ui_scale():
             # Segment body hit — treat as select / no new draw; user can grab ends.
             return -1
         return 0

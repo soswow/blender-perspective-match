@@ -78,6 +78,7 @@ match_perspective/
   properties/             # RNA PropertyGroups
   scene/                  # Camera/background integration + distortion plates
   ui/                     # Operators, panel, overlay, icon registration
+                          # Overlay sizes/hit radii use preferences.system.ui_scale (Retina)
   icons/                  # PNG icon assets
   wheels/                 # OpenCV wheels (gitignored; ./scripts/fetch-wheels.sh)
   scripts/                # build / link-dev / fetch-wheels / validate_addon

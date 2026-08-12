@@ -85,6 +85,20 @@ _vp_solve_cache: dict[str, object] = {
 _active_line_batcher: "_LineBatcher | None" = None
 
 
+def ui_scale() -> float:
+    """Blender UI/DPI scale for POST_PIXEL sizes (≈2 on Retina, 1 on standard)."""
+    try:
+        scale = float(bpy.context.preferences.system.ui_scale)
+    except Exception:
+        return 1.0
+    return scale if scale > 1.0e-6 else 1.0
+
+
+def _s(value: float) -> float:
+    """Scale a logical screen-pixel size into current display pixels."""
+    return value * ui_scale()
+
+
 class _LineBatcher:
     """Collect screen-space line segments and flush as few GPU draws as possible."""
 
@@ -111,13 +125,15 @@ class _LineBatcher:
             return
         shader = _line_shader()
         viewport = gpu.state.viewport_get()[2:]
+        scale = ui_scale()
         shader.bind()
         shader.uniform_float("viewportSize", viewport)
         for (color, thickness), positions in self._groups.items():
             if len(positions) < 2:
                 continue
             batch = batch_for_shader(shader, "LINES", {"pos": positions})
-            shader.uniform_float("lineWidth", thickness)
+            # Thickness is authored in logical px; Retina needs ui_scale.
+            shader.uniform_float("lineWidth", thickness * scale)
             shader.uniform_float("color", color)
             batch.draw(shader)
         self._groups.clear()
@@ -189,7 +205,7 @@ def _draw_line(
     )
     shader.bind()
     shader.uniform_float("viewportSize", gpu.state.viewport_get()[2:])
-    shader.uniform_float("lineWidth", thickness)
+    shader.uniform_float("lineWidth", _s(thickness))
     shader.uniform_float("color", color)
     batch.draw(shader)
 
@@ -204,7 +220,12 @@ def _draw_dashed_polyline(
     """Stroke a screen-space polyline with a repeating color pattern (None = gap)."""
     if len(points) < 2 or not pattern:
         return
-    lengths = slot_lengths or [_GUIDE_DASH_LENGTH] * len(pattern)
+    # Dash/gap lengths are logical px; scale so Retina dashes match 1× displays.
+    scale = ui_scale()
+    lengths = [
+        float(length) * scale
+        for length in (slot_lengths or [_GUIDE_DASH_LENGTH] * len(pattern))
+    ]
     if len(lengths) != len(pattern):
         raise ValueError("dash pattern and slot_lengths must match")
     period = float(sum(max(value, 0.0) for value in lengths))
@@ -469,6 +490,7 @@ def _draw_ideal_guide_line(
 def _draw_circle(shader, center: Vector | None, radius: float, color, *, filled: bool) -> None:
     if center is None:
         return
+    radius = _s(radius)
     if filled:
         vertices = [tuple(center)]
         primitive = "TRI_FAN"
@@ -483,7 +505,12 @@ def _draw_circle(shader, center: Vector | None, radius: float, color, *, filled:
     batch = batch_for_shader(shader, primitive, {"pos": vertices})
     shader.bind()
     shader.uniform_float("color", color)
+    if not filled:
+        # LINE_LOOP width is framebuffer pixels; scale so outlines match 1× displays.
+        gpu.state.line_width_set(max(1.0, _s(1.25)))
     batch.draw(shader)
+    if not filled:
+        gpu.state.line_width_set(1.0)
 
 
 def _clip_segment_to_bounds(
@@ -519,9 +546,11 @@ def _clip_segment_to_bounds(
 def _draw_crosshair(shader, center: Vector | None, color, radius: float = 8.0) -> None:
     if center is None:
         return
+    # Radius stays logical for _draw_circle; arm extension is screen px too.
+    arm = _s(radius + 4.0)
     _draw_circle(shader, center, radius, color, filled=False)
-    _draw_line(center + Vector((-radius - 4.0, 0.0)), center + Vector((radius + 4.0, 0.0)), color)
-    _draw_line(center + Vector((0.0, -radius - 4.0)), center + Vector((0.0, radius + 4.0)), color)
+    _draw_line(center + Vector((-arm, 0.0)), center + Vector((arm, 0.0)), color)
+    _draw_line(center + Vector((0.0, -arm)), center + Vector((0.0, arm)), color)
 
 
 def _error_label_anchor(point_a: Vector, point_b: Vector) -> Vector:
@@ -538,14 +567,15 @@ def _error_label_anchor(point_a: Vector, point_b: Vector) -> Vector:
     anchor = preferred.lerp(other, _ERROR_LABEL_INSET)
     tangent = other - preferred
     length = float(tangent.length)
+    offset = _s(_ERROR_LABEL_OFFSET_PX)
     if length < 1.0e-6:
-        return preferred + Vector((0.0, _ERROR_LABEL_OFFSET_PX))
+        return preferred + Vector((0.0, offset))
     tangent /= length
     # Screen-upward offset keeps the number "above" / beside the stroke.
     normal = Vector((-tangent.y, tangent.x))
     if normal.y < 0.0:
         normal = -normal
-    return anchor + normal * _ERROR_LABEL_OFFSET_PX
+    return anchor + normal * offset
 
 
 def _draw_error_label(position: Vector, text: str, opacity: float) -> None:
@@ -571,7 +601,8 @@ def _draw_overlay_label(
     if not text:
         return
     font_id = 0
-    blf.size(font_id, font_size)
+    # blf.size is logical UI points; multiply so Retina text matches 1× displays.
+    blf.size(font_id, _s(font_size))
     width, height = blf.dimensions(font_id, text)
     if align == "left":
         x = float(position.x)
@@ -586,7 +617,8 @@ def _draw_overlay_label(
     blf.color(font_id, 1.0, 1.0, 1.0, max(0.15, min(1.0, opacity)))
     blf.enable(font_id, blf.SHADOW)
     blf.shadow(font_id, 3, 0.0, 0.0, 0.0, 0.85)
-    blf.shadow_offset(font_id, 1, -1)
+    shadow = max(1, int(round(ui_scale())))
+    blf.shadow_offset(font_id, shadow, -shadow)
     blf.draw(font_id, text)
     blf.disable(font_id, blf.SHADOW)
 
@@ -931,7 +963,7 @@ def _draw_landmark_labels(context: bpy.types.Context, settings) -> None:
             if anchor is None:
                 continue
         _draw_overlay_label(
-            anchor + Vector((_LANDMARK_LABEL_OFFSET_PX, _LANDMARK_LABEL_OFFSET_PX)),
+            anchor + Vector((_s(_LANDMARK_LABEL_OFFSET_PX), _s(_LANDMARK_LABEL_OFFSET_PX))),
             landmark.name or "Landmark",
             draw_opacity,
             font_size=_LANDMARK_LABEL_FONT_SIZE,
@@ -1016,8 +1048,10 @@ def _draw_interact_mode_chrome(context: bpy.types.Context, workspace) -> None:
         return
     accent = chrome["color"]
     fill_shader = _fill_shader()
+    banner_height = _s(_MODE_BANNER_HEIGHT)
+    accent_bar = _s(3.0)
     banner_top = y1
-    banner_bottom = y1 - _MODE_BANNER_HEIGHT
+    banner_bottom = y1 - banner_height
     # One dark banner just below the overlapping header / tool header.
     _draw_rect(
         fill_shader,
@@ -1032,11 +1066,11 @@ def _draw_interact_mode_chrome(context: bpy.types.Context, workspace) -> None:
         x0,
         banner_bottom,
         x1,
-        banner_bottom + 3.0,
+        banner_bottom + accent_bar,
         accent,
     )
     # Frame only left / right / bottom so it does not stack on the banner.
-    thickness = _MODE_FRAME_THICKNESS
+    thickness = _s(_MODE_FRAME_THICKNESS)
     frame = (accent[0], accent[1], accent[2], min(1.0, accent[3] * 0.95))
     _draw_rect(fill_shader, x0, y0, x1, y0 + thickness, frame)
     _draw_rect(fill_shader, x0, y0, x0 + thickness, banner_bottom, frame)
@@ -1044,18 +1078,20 @@ def _draw_interact_mode_chrome(context: bpy.types.Context, workspace) -> None:
 
     label = f"{chrome['title']}  ·  {chrome['hint']}"
     font_id = 0
-    blf.size(font_id, _MODE_BANNER_FONT_SIZE)
+    blf.size(font_id, _s(_MODE_BANNER_FONT_SIZE))
     text_width, text_height = blf.dimensions(font_id, label)
+    pad = _s(12.0)
     blf.position(
         font_id,
-        max(x0 + 12.0, x0 + (x1 - x0 - text_width) * 0.5),
-        banner_bottom + (_MODE_BANNER_HEIGHT - text_height) * 0.5,
+        max(x0 + pad, x0 + (x1 - x0 - text_width) * 0.5),
+        banner_bottom + (banner_height - text_height) * 0.5,
         0.0,
     )
     blf.color(font_id, 1.0, 1.0, 1.0, 1.0)
     blf.enable(font_id, blf.SHADOW)
     blf.shadow(font_id, 5, 0.0, 0.0, 0.0, 0.9)
-    blf.shadow_offset(font_id, 1, -1)
+    shadow = max(1, int(round(ui_scale())))
+    blf.shadow_offset(font_id, shadow, -shadow)
     blf.draw(font_id, label)
     blf.disable(font_id, blf.SHADOW)
     # blf dirties GPU blend state used by later overlay geometry.
