@@ -1089,6 +1089,48 @@ def invalidate_undistorted_cache(settings: properties.PMSession) -> None:
         bpy.data.images.remove(cached_image)
 
 
+def apply_origin_placement(
+    context: bpy.types.Context,
+    settings: properties.PMSession,
+    *,
+    update_scene_camera: bool = True,
+) -> None:
+    """Recompute private camera_center from the stored ground origin pick."""
+    if not settings.origin_is_set:
+        return
+    calibration = calibration_from_settings(settings)
+    calibration.camera_center = core.default_camera_center(calibration.rotation_w2c)
+    calibration.camera_center, _scale = core.apply_origin_and_scale(
+        calibration,
+        tuple(float(value) for value in settings.origin_image),
+    )
+    apply_camera(
+        context.scene,
+        settings,
+        calibration,
+        update_scene_camera=update_scene_camera,
+    )
+
+
+def set_origin_for_session(
+    context: bpy.types.Context,
+    settings: properties.PMSession,
+    image_point: tuple[float, float],
+    *,
+    update_scene_camera: bool = True,
+    status_message: str = "Origin set on the ground plane",
+) -> None:
+    """Store a ground origin on one match and reapply private camera placement."""
+    settings.origin_image = (float(image_point[0]), float(image_point[1]))
+    settings.origin_is_set = True
+    settings.status = status_message
+    apply_origin_placement(
+        context,
+        settings,
+        update_scene_camera=update_scene_camera,
+    )
+
+
 def set_origin(
     context: bpy.types.Context,
     image_point: tuple[float, float],
@@ -1097,10 +1139,79 @@ def set_origin(
     settings = properties.active_session(context)
     if settings is None:
         raise ValueError("Create or activate a match camera first")
-    settings.origin_image = image_point
-    settings.origin_is_set = True
-    settings.status = "Origin set on the ground plane"
-    reapply_placement(context)
+    set_origin_for_session(context, settings, image_point)
+    properties.tag_viewport_redraw(context)
+
+
+def _first_ground_landmark_pick(
+    space: properties.PMWorkspace,
+    root: bpy.types.Object,
+):
+    """Return ``(landmark, (x, y))`` for the earliest On Ground pick on ``root``.
+
+    "First" follows landmark creation order (then name), matching the Sync list
+    when A–Z sorting is off.
+    """
+    landmarks = sorted(
+        space.landmarks,
+        key=lambda landmark: (
+            int(landmark.creation_index)
+            if int(landmark.creation_index) >= 0
+            else 10**9,
+            (landmark.name or landmark.item_id).lower(),
+        ),
+    )
+    for landmark in landmarks:
+        if getattr(landmark, "kind", "POINT") == "LINE":
+            continue
+        if not bool(landmark.on_ground):
+            continue
+        if not getattr(landmark, "use_in_sync", True):
+            continue
+        for observation in landmark.observations:
+            if (
+                observation.is_set
+                and observation.match_root is not None
+                and observation.match_root.name == root.name
+            ):
+                return landmark, (float(observation.x), float(observation.y))
+    return None
+
+
+def ensure_origins_from_ground_landmarks(
+    context: bpy.types.Context,
+) -> list[str]:
+    """Auto Pick Origin on sync-enabled matches that still lack one.
+
+    Uses the first On Ground landmark pick visible in that match. Returns short
+    notes like ``PM_shot_4_Origin←id01-25h9`` for the sync status line.
+    """
+    space = properties.workspace(context)
+    notes: list[str] = []
+    for root in properties.iter_match_roots():
+        session = root.pm_session
+        if not getattr(session, "sync_enabled", True):
+            continue
+        if session.origin_is_set:
+            continue
+        if session.image is None or float(session.fx) <= 0.0:
+            continue
+        found = _first_ground_landmark_pick(space, root)
+        if found is None:
+            continue
+        landmark, image_point = found
+        landmark_label = landmark.name or landmark.item_id
+        set_origin_for_session(
+            context,
+            session,
+            image_point,
+            update_scene_camera=False,
+            status_message=f"Origin auto-set from ground landmark '{landmark_label}'",
+        )
+        notes.append(f"{root.name}←{landmark_label}")
+    if notes:
+        properties.tag_viewport_redraw(context)
+    return notes
 
 
 def principal_point_is_off_center(settings: properties.PMSession) -> bool:
@@ -1193,15 +1304,7 @@ def reapply_placement(context: bpy.types.Context) -> None:
     settings = properties.active_session(context)
     if settings is None:
         return
-    calibration = calibration_from_settings(settings)
-    if not settings.origin_is_set:
-        return
-    calibration.camera_center = core.default_camera_center(calibration.rotation_w2c)
-    calibration.camera_center, _scale = core.apply_origin_and_scale(
-        calibration,
-        tuple(float(value) for value in settings.origin_image),
-    )
-    apply_camera(context.scene, settings, calibration)
+    apply_origin_placement(context, settings)
     properties.tag_viewport_redraw(context)
 
 
@@ -2197,6 +2300,7 @@ def diagnose_sync(context: bpy.types.Context):
     if anchor is None:
         raise ValueError("Choose an anchor match first")
 
+    auto_origin_notes = ensure_origins_from_ground_landmarks(context)
     warnings = known_anchor_pick_warnings(context)
     matches, observations, known_world, line_observations, known_lines, parallel_pairs = (
         build_sync_problem(context)
@@ -2240,6 +2344,8 @@ def diagnose_sync(context: bpy.types.Context):
     _apply_sync_landmark_diagnostics(context, result)
 
     parts = []
+    if auto_origin_notes:
+        parts.append("Auto origin: " + ", ".join(auto_origin_notes))
     skipped_matches = sum(
         1
         for root in properties.iter_match_roots()
@@ -2302,6 +2408,10 @@ def solve_and_apply_sync(context: bpy.types.Context):
     if anchor is None:
         raise ValueError("Choose an anchor match first")
 
+    # Matches without Pick Origin use a default eye-height private frame; that
+    # scale often disagrees with the anchor and sync absorbs it as a bad tilt.
+    # Seed origin from the earliest On Ground pick before building the problem.
+    auto_origin_notes = ensure_origins_from_ground_landmarks(context)
     warnings = known_anchor_pick_warnings(context)
     matches, observations, known_world, line_observations, known_lines, parallel_pairs = (
         build_sync_problem(context)
@@ -2330,6 +2440,8 @@ def solve_and_apply_sync(context: bpy.types.Context):
     )
     _apply_sync_landmark_diagnostics(context, result)
     message = result.message
+    if auto_origin_notes:
+        message = "Auto origin: " + ", ".join(auto_origin_notes) + " · " + message
     skipped_matches = sum(
         1
         for root in properties.iter_match_roots()
@@ -2345,6 +2457,7 @@ def solve_and_apply_sync(context: bpy.types.Context):
     if warnings:
         message = "Known 3D warn: " + "; ".join(warnings[:2]) + " | " + message
     space.sync_status = message
+    result.message = message
     if not result.success:
         raise ValueError(message)
 
@@ -2444,6 +2557,7 @@ def prepare_lens_refine(context: bpy.types.Context) -> LensRefinePrep:
     if anchor is None:
         raise ValueError("Choose an anchor match first")
 
+    ensure_origins_from_ground_landmarks(context)
     matches_pack, observations, known_world, line_observations, known_lines, parallel_pairs = (
         build_sync_problem(context)
     )

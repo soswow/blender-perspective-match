@@ -64,7 +64,7 @@ The camera refines whenever enough required lines exist. **Auto from VPs** allow
 
 ## Set origin
 
-Use **Pick Origin** to choose a ground point that should become world origin (placement updates automatically after VP solves). Clear (X) removes the pick.
+Use **Pick Origin** to choose a ground point that should become world origin (placement updates automatically after VP solves). Clear (X) removes the pick. **Solve Sync** / **Diagnose** / **Refine Lenses** also auto-set Origin from the first **On Ground** landmark pick when a match still has none.
 
 Build your own floor/wall geometry in Blender once the camera is matched—the extension does not create surface meshes or measure known lengths.
 

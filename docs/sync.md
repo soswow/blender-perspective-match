@@ -4,12 +4,12 @@ When several matches show the same scene, register them into one Blender world.
 
 ## Overview
 
-1. Match each still on its own (VP + origin). Origins do **not** need to match.
+1. Match each still on its own (VP lines; Origin optional). Origins do **not** need to match across stills.
 2. Choose an **Anchor** match — that world is shared space. Each match has **Enable sync for current match** (on by default); turn it off to exclude that still from Solve Sync / Diagnose / Refine Lenses.
 3. Add landmarks for features visible in two or more stills (≥5 shared 2D picks), **or** link **Known 3D** Blender objects (≥3) and pick them in the other stills.
 4. Pick each landmark in every still where it is visible.
 5. Optional: tag **On Ground** on point landmarks in the anchor, or rely on Known 3D, to pin absolute scale.
-6. **Solve Sync** writes a rigid (or similarity) transform onto non-anchor root Empties.
+6. **Solve Sync** writes a rigid (or similarity) transform onto non-anchor root Empties. If a sync-enabled match still has no Pick Origin but has an **On Ground** pick, Sync auto-sets Origin from the earliest such pick (creation order) before solving — status shows `Auto origin: Match←landmark`.
 
 Why not “any corresponding points”? Photogrammetry / SfM solves relative orientation and baseline *direction* from enough 2D↔2D matches — and so does this sync. Absolute baseline **length** stays free when dropping the second camera into an already-metric Blender world (classic stereo scale ambiguity). **Known 3D** Empties, On Ground picks, or a later ruler pin that one DOF; without them, a depth heuristic chooses a plausible scale.
 
@@ -55,7 +55,7 @@ The eye icon on **Sync Matches** toggles landmark picks on the plate; **Landmark
 ## Debugging a bad or rejected sync
 
 - **Rejected (~40+ px)** — no pose fits your picks. Status / **Diagnose** lists the worst landmarks — re-pick those features in *both* stills.
-- **Accepted but camera looks wrong** with RMSE still a few–tens of px — wrong local minimum or soft constraints. Prefer **Diagnose**, fix the worst landmarks, **Clear**, then **Solve Sync** again.
+- **Accepted but camera looks wrong** with RMSE still a few–tens of px — wrong local minimum or soft constraints. Prefer **Diagnose**, fix the worst landmarks, **Clear**, then **Solve Sync** again. Matches without Origin but with On Ground picks get an auto Origin on Sync; if tilt persists, add an elevated (off-ground) landmark or a 4th ground pick.
 - **One landmark huge, others fine** — that pick is mismatched. Uncheck **Use in Sync** and re-run Diagnose.
 - **Many landmarks all high** — FOV or VP solve is likely off on one match; try **Refine Lenses**, or re-refine that camera manually.
 - **Sync broke after adding one landmark** — turn off **Use in Sync** on the new one and Diagnose again.
