@@ -11,7 +11,7 @@ import numpy as np
 from gpu_extras.batch import batch_for_shader
 from mathutils import Vector
 
-from . import core, properties, scene
+from .. import core, properties, scene
 
 AXIS_COLORS = {
     # Match Blender's default axis gizmo colors (X red, Y green, Z blue).

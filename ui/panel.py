@@ -6,7 +6,8 @@ from pathlib import Path
 
 import bpy
 
-from . import icons, operators, properties, scene
+from .. import properties, scene
+from . import icons, operators
 
 
 def _axis_counts(settings) -> dict[str, int]:

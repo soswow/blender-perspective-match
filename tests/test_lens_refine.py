@@ -7,8 +7,7 @@ import unittest
 import numpy as np
 
 from match_perspective import core
-from match_perspective import lens_refine
-from match_perspective import sync
+from match_perspective.core import lens_refine, sync
 
 
 class VpResidualTests(unittest.TestCase):

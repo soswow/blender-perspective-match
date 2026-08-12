@@ -5,7 +5,8 @@
 set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-WHEELS_DIR="${SCRIPT_DIR}/wheels"
+REPO_ROOT=$(CDPATH= cd -- "${SCRIPT_DIR}/.." && pwd)
+WHEELS_DIR="${REPO_ROOT}/wheels"
 # Pin so every platform ships the same OpenCV build (aruco / AprilTag 25h9).
 OPENCV_VERSION="${OPENCV_VERSION:-5.0.0.93}"
 PACKAGE="opencv-contrib-python-headless==${OPENCV_VERSION}"

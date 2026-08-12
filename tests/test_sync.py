@@ -6,7 +6,8 @@ import unittest
 
 import numpy as np
 
-from match_perspective import core, sync
+from match_perspective import core
+from match_perspective.core import sync
 
 
 def _look_at_rotation(camera_center: np.ndarray, target: np.ndarray) -> np.ndarray:

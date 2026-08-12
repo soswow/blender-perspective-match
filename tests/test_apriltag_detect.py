@@ -9,22 +9,26 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-# Load apriltag_detect without executing the add-on's bpy-dependent __init__.
+# Load apriltags without executing the add-on's bpy-dependent __init__.
 _ROOT = Path(__file__).resolve().parents[1]
 if "match_perspective" not in sys.modules:
     _package = types.ModuleType("match_perspective")
     _package.__path__ = [str(_ROOT)]
     _package.__file__ = str(_ROOT / "__init__.py")
     sys.modules["match_perspective"] = _package
+if "match_perspective.detect" not in sys.modules:
+    _detect = types.ModuleType("match_perspective.detect")
+    _detect.__path__ = [str(_ROOT / "detect")]
+    sys.modules["match_perspective.detect"] = _detect
 
 _spec = importlib.util.spec_from_file_location(
-    "match_perspective.apriltag_detect",
-    _ROOT / "apriltag_detect.py",
-    submodule_search_locations=[str(_ROOT)],
+    "match_perspective.detect.apriltags",
+    _ROOT / "detect/apriltags.py",
+    submodule_search_locations=[str(_ROOT / "detect")],
 )
 assert _spec is not None and _spec.loader is not None
 apriltag_detect = importlib.util.module_from_spec(_spec)
-sys.modules["match_perspective.apriltag_detect"] = apriltag_detect
+sys.modules["match_perspective.detect.apriltags"] = apriltag_detect
 _spec.loader.exec_module(apriltag_detect)
 
 

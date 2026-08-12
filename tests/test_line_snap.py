@@ -16,15 +16,19 @@ if "match_perspective" not in sys.modules:
     _package.__path__ = [str(_ROOT)]
     _package.__file__ = str(_ROOT / "__init__.py")
     sys.modules["match_perspective"] = _package
+if "match_perspective.detect" not in sys.modules:
+    _detect = types.ModuleType("match_perspective.detect")
+    _detect.__path__ = [str(_ROOT / "detect")]
+    sys.modules["match_perspective.detect"] = _detect
 
 _spec = importlib.util.spec_from_file_location(
-    "match_perspective.line_snap",
-    _ROOT / "line_snap.py",
-    submodule_search_locations=[str(_ROOT)],
+    "match_perspective.detect.line_snap",
+    _ROOT / "detect/line_snap.py",
+    submodule_search_locations=[str(_ROOT / "detect")],
 )
 assert _spec is not None and _spec.loader is not None
 line_snap = importlib.util.module_from_spec(_spec)
-sys.modules["match_perspective.line_snap"] = line_snap
+sys.modules["match_perspective.detect.line_snap"] = line_snap
 _spec.loader.exec_module(line_snap)
 
 

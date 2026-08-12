@@ -1,0 +1,85 @@
+# User guide
+
+The extension lives in the 3D View sidebar under the **Perspective Match** tab.
+
+## Match cameras
+
+Each match is a collection with a root Empty that owns the session data, plus a child camera:
+
+```text
+PM_<image>
+  PM_<image>_Origin      # session lives here (Object.pm_session)
+    PM_<image>_Camera
+```
+
+1. Click **New Match Camera** to create an empty match, activate it, and open the reference image file dialog.
+2. Use **Active Match** to switch which session the sidebar edits. Switching also sets the scene camera and enters that camera view.
+3. With the **Perspective Match** sidebar tab selected, **Ctrl+Alt+NumPad 1–9** jumps to the Nth match (name-sorted). Any Draw / Pick Origin / PP / Landmark tool is cancelled first.
+4. Click the rename button (font icon) next to **New** to rename the active match. Opening a still defaults the name from the image stem; rename anytime afterward. The hierarchy stays `PM_<name>` / `PM_<name>_Origin` / `PM_<name>_Camera`.
+5. Click **Unload** to detach the sidebar from editing without deleting objects.
+6. Click the trash button to **Delete** the active match (asks for confirmation). This removes its collection / Origin / Camera and that match’s landmark picks. You can still delete via the Outliner; the dropdown prunes dead entries automatically.
+
+Selecting objects in the viewport does **not** change the active match—only New, Rename, Unload, Delete, the dropdown, and the NumPad shortcuts do.
+
+Each match remembers its last camera-view zoom and pan. Switching matches (or Unload / save) stores the current framing; activating a match restores it.
+
+## Load a reference
+
+With a match active, choose **Open Image** (or create a match with **New Match Camera**, which opens the same dialog). The still binds to the **active** match only. If no match is active, Open Image creates one first. Hover the filename under Reference Image to see the full path.
+
+After bind, the hierarchy is renamed from `PM_Match_###` to `PM_<image stem>` when that name is free. The camera becomes the scene camera, the still is attached with **Stretch** frame mapping, and render dimensions match the image.
+
+Once a still is loaded, **Replace Image** appears: same pixel size only, keeps VP lines, origin, calibration, and landmarks (drops view-lighting / undistorted caches). **Open Image** still does a full rebind and clears that match’s edit state.
+
+## Vanishing point lines
+
+At the top of this section, choose perspective mode:
+
+- **1 Point:** draw Z verticals and Y depth lines. FOV stays manual.
+- **2 Point:** draw X and Y horizontal bundles (finite VPs). Z uprights are not used as a vanishing point.
+- **3 Point:** draw any two axes with at least two lines each; the missing world axis is derived from orthogonality. All three axes also allow solving principal point. With **Manual FOV** or **Import YAML** (known full K), a single line on each of X/Y/Z is enough to recover orientation.
+
+Axis mapping matches Blender’s gizmos:
+
+- Red → Blender X
+- Green → Blender Y
+- Blue → Blender Z (up)
+
+Then draw lines (or auto-detect in 3-point mode):
+
+1. Choose the colored axis.
+2. Click **Draw / Edit Lines**. Optional: enable **Snap to Edges** to refine each stroke on release onto a nearby image edge. Optional: enable **Show Error Label** to see each segment’s residual (px) beside the stroke.
+3. Drag over straight edges that belong to that axis (clicks must land inside the camera frame).
+4. Click a line to select it; drag either endpoint handle to edit (release also re-snaps when Snap to Edges is on).
+5. Press **Delete/Backspace** to remove the selected line.
+6. Press **Esc** (or right-click) to leave the tool.
+
+**Detect VP Lines** (3 Point only): runs in the background (Esc to cancel). Replaces the current strokes with automatically found bundles — well-spread inliers per axis that prefer well-separated vanishing points — then the usual camera refine when enough lines exist. **Edge Sensitivity** (0–1) controls how eagerly faint lines are kept. **Debug auto detected edges** toggles a black plate with every surviving edge in white. Needs clear man-made edges; cluttered foliage or curved architecture will miss or mis-label axes. Disabled in 1- and 2-point modes.
+
+While the tool is active, left-clicks on the visible plate belong to Perspective Match. Sidebar / toolbar / header clicks still go to Blender UI. Exit with **Esc**. Middle mouse and the wheel retain normal Blender navigation. Overlay guides only draw in **camera view** of the active match.
+
+The camera refines whenever enough required lines exist. **Auto from VPs** allows orthogonal VP pairs to solve FOV. Enable **Manual FOV**, set the horizontal angle, and apply it to lock focal length while continuing to solve orientation. **Import YAML** loads a ROS `camera_info` file: locks Manual FOV from `fx`, sets the principal point from `cx`/`cy`, applies optional `fitzgibbon_lambda`, and scales K if the YAML resolution differs from the loaded still. Brown–Conrady / `plumb_bob` coefficients are skipped.
+
+**Manual PP Offset** (Camera section): drag the principal point on the plate, or click the pencil icon to type **Offset X / Offset Y** in pixels from image center. A **violet** crosshair marks it whenever it is off-center. **Reset Camera** recenters PP.
+
+## Set origin
+
+Use **Pick Origin** to choose a ground point that should become world origin (placement updates automatically after VP solves). Clear (X) removes the pick.
+
+Build your own floor/wall geometry in Blender once the camera is matched—the extension does not create surface meshes or measure known lengths.
+
+## Lens distortion
+
+Press **Estimate Distortion** in the **Camera** section. With a successful VP solve and ≥3 concurrent segments on one axis, the solver fits Fitzgibbon λ once and generates/switches to an undistorted plate. Editing VP lines afterward keeps that λ; press the button again to re-fit. Works with **Manual FOV**. **Original Plate** clears λ, re-solves, and restores the source still. Plate file paths are logged to the console, not the sidebar status line.
+
+View lighting applies display-only exposure/contrast to a sibling `*-pm-view.png` plate (undistorted uses the same lit image).
+
+## Limitations
+
+- Initial FOV is manual. GeoCalib automatic FOV/gravity estimation is intentionally omitted.
+- Automatic VP lines are 3-point only; 1- and 2-point still need hand-drawn strokes. Detection can mis-label axes on ambiguous stills.
+- Assumes square pixels and zero skew.
+- 1-point perspective cannot determine focal length from VP geometry alone.
+- Distortion uses one radial division parameter, not Blender's full tracking-camera lens models.
+- Cropped, anamorphic, curved, or CGI plates can require manual FOV and principal-point judgment.
+- Sync absolute baseline vs the metric anchor world needs Known 3D, On Ground, or the depth heuristic. See [sync.md](sync.md).

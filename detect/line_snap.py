@@ -282,7 +282,7 @@ def snap_segment_to_feature(
 
 def gray_from_blender_image(image) -> np.ndarray:
     """Convert a Blender Image to float grayscale (top-left origin)."""
-    from . import distortion
+    from ..scene import distortion
 
     rgba = distortion._image_pixels_top_left(image)
     # Rec. 601 luminance in linear-ish float space (good enough for edges).
@@ -350,7 +350,7 @@ def snap_segment_in_session(
     **kwargs,
 ) -> SnapResult | None:
     """Snap storage-space endpoints using the active match plate."""
-    from . import scene
+    from .. import scene
 
     gray, space = gray_for_session(settings)
     if space == "display":

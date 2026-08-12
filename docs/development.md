@@ -1,0 +1,87 @@
+# Development
+
+## Development install (edit → reload)
+
+Point Blender's installed extension at this git checkout with a symlink (no ZIP copy):
+
+```sh
+./scripts/link-dev.sh
+```
+
+That replaces `~/Library/Application Support/Blender/5.1/extensions/user_default/match_perspective` with a link to this repo (and downloads OpenCV wheels if missing). Enable **Perspective Match** once if it is not already on — **disable then re-enable** after the first link so Blender extracts the OpenCV wheel.
+
+Daily loop:
+
+1. Edit and save in the editor.
+2. In Blender: click **Reload Perspective Match** at the bottom of the sidebar (or **F3 → Reload Perspective Match**). Prefer this over System → Reload Scripts—that often leaves panels and PropertyGroups on stale class objects.
+3. Test. Watch the system console for `Perspective Match: reloaded from disk` (the button only queues the reload; the tear-down runs a moment later so Blender does not crash).
+
+Exit any running Draw / Pick Origin modal before reloading. After adding, renaming, or removing RNA properties on `PMSession` / `PMWorkspace`, **restart Blender**—property schema changes are not reliably hot-reloadable. If you still see duplicate panels or `already registered`, disable/re-enable the extension or restart.
+
+Re-run `./scripts/link-dev.sh` if you later **Install from Disk** and Blender overwrites the symlink with a ZIP extract.
+
+ZIP builds (`./scripts/build-extension.sh`) are only needed for packaging or a clean install test.
+
+## Wheels
+
+Wheels are **not** stored in git (~50–65 MB each). Before building or linking:
+
+```sh
+./scripts/fetch-wheels.sh
+```
+
+`./scripts/build-extension.sh` and `./scripts/link-dev.sh` call that for you. Release zips are built with `--split-platforms` so each OS package only embeds its own OpenCV binary.
+
+## Checks and build
+
+Compile-check Python:
+
+```sh
+python3 -m compileall -q .
+```
+
+Run unit tests (from the repo parent, so `match_perspective` imports resolve):
+
+```sh
+cd .. && python3 -m unittest discover -s match_perspective/tests -v
+```
+
+Run the Blender smoke test:
+
+```sh
+"/Applications/Blender 5.1.app/Contents/MacOS/blender" \
+  --factory-startup -b --python scripts/validate_addon.py
+```
+
+Validate and build distributable ZIPs (one per platform, each with its OpenCV wheel):
+
+```sh
+./scripts/build-extension.sh
+```
+
+Override Blender's location when necessary:
+
+```sh
+BLENDER_BIN="/path/to/blender" ./scripts/build-extension.sh
+```
+
+The smoke test covers registration, multi-match create/switch/unload/prune, VP solve, camera projection, origin placement, project import, undistorted plates, and cleanup.
+
+## Project layout
+
+```text
+match_perspective/
+  blender_manifest.toml   # Blender extension metadata
+  __init__.py             # Registration / reload entry
+  core/                   # Geometry, sync, lens refine, ROS camera_info
+  detect/                 # AprilTags, auto VP lines, edge snap
+  properties/             # RNA PropertyGroups
+  scene/                  # Camera/background integration + distortion plates
+  ui/                     # Operators, panel, overlay, icon registration
+  icons/                  # PNG icon assets
+  wheels/                 # OpenCV wheels (gitignored; ./scripts/fetch-wheels.sh)
+  scripts/                # build / link-dev / fetch-wheels / validate_addon
+  tests/                  # Pure geometry / sync / detect regressions
+  tools/                  # Standalone helpers (AprilTag sheets, FOV plotter)
+  docs/                   # User guide, sync, development, TODOs
+```

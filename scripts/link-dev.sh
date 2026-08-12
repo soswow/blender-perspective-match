@@ -7,6 +7,7 @@ set -eu
 BLENDER_BIN="${BLENDER_BIN:-/Applications/Blender 5.1.app/Contents/MacOS/blender}"
 BLENDER_VERSION="${BLENDER_VERSION:-5.1}"
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+REPO_ROOT=$(CDPATH= cd -- "${SCRIPT_DIR}/.." && pwd)
 EXT_ROOT="${HOME}/Library/Application Support/Blender/${BLENDER_VERSION}/extensions/user_default"
 TARGET="${EXT_ROOT}/match_perspective"
 
@@ -16,8 +17,8 @@ if [ ! -x "$BLENDER_BIN" ]; then
     exit 1
 fi
 
-if [ ! -f "${SCRIPT_DIR}/blender_manifest.toml" ] || [ ! -f "${SCRIPT_DIR}/__init__.py" ]; then
-    printf 'This does not look like the Perspective Match extension root: %s\n' "$SCRIPT_DIR" >&2
+if [ ! -f "${REPO_ROOT}/blender_manifest.toml" ] || [ ! -f "${REPO_ROOT}/__init__.py" ]; then
+    printf 'This does not look like the Perspective Match extension root: %s\n' "$REPO_ROOT" >&2
     exit 1
 fi
 
@@ -36,9 +37,9 @@ if [ -e "$TARGET" ] || [ -L "$TARGET" ]; then
     rm -rf "$TARGET"
 fi
 
-ln -s "$SCRIPT_DIR" "$TARGET"
+ln -s "$REPO_ROOT" "$TARGET"
 
-printf 'Linked:\n  %s\n→ %s\n\n' "$TARGET" "$SCRIPT_DIR"
+printf 'Linked:\n  %s\n→ %s\n\n' "$TARGET" "$REPO_ROOT"
 printf 'In Blender: disable then re-enable Perspective Match once so wheels\n'
 printf '(OpenCV) are extracted, then after edits use Reload Perspective Match.\n'
 printf 'Restart Blender if a modal draw tool leaves stale handlers.\n'

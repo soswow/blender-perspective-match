@@ -7,7 +7,7 @@ from pathlib import Path
 import bpy
 import numpy as np
 
-from . import core, properties, scene
+from .. import core, properties, scene
 
 
 def compute_canvas(

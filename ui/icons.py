@@ -10,7 +10,7 @@ import bpy.utils.previews
 # Preview collections survive as module globals; cleared on unregister.
 _preview_collections: dict[str, bpy.utils.previews.ImagePreviewCollection] = {}
 
-_ICONS_DIR = Path(__file__).resolve().parent / "icons"
+_ICONS_DIR = Path(__file__).resolve().parent.parent / "icons"
 
 # name → filename under icons/ (64px for HiDPI; Blender scales as needed)
 _ICON_FILES = {

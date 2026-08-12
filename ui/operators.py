@@ -14,16 +14,12 @@ import numpy as np
 from bpy_extras.io_utils import ImportHelper
 from mathutils import Vector
 
-from . import (
-    apriltag_detect,
-    core,
-    distortion,
-    line_snap,
-    overlay,
-    properties,
-    scene,
-    vp_line_detect,
-)
+from .. import core, properties, scene
+from ..detect import apriltags as apriltag_detect
+from ..detect import line_snap
+from ..detect import vp_lines as vp_line_detect
+from ..scene import distortion
+from . import overlay
 
 
 def _session(context: bpy.types.Context):
@@ -541,7 +537,7 @@ class PM_OT_refine(bpy.types.Operator):
         settings.lock_focal = False
         try:
             calibration = scene.refine_match(context)
-            from . import distortion
+            from ..scene import distortion
 
             distortion.sync_undistorted_plate_after_refine(context)
         except Exception as error:
@@ -2618,7 +2614,7 @@ class PM_OT_refine_lenses(bpy.types.Operator):
             workspace.sync_status = message
             return _report_exception(self, error)
 
-        from . import lens_refine
+        from ..core import lens_refine
 
         free_count = sum(1 for item in prep.lens_inputs if not item.freeze_focal)
         total = lens_refine.estimate_refine_evaluation_count(free_count)

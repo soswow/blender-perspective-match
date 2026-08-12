@@ -9,7 +9,8 @@ import traceback
 import bpy
 from bpy.app.handlers import persistent
 
-from . import icons, operators, overlay, panel, properties
+from . import properties
+from .ui import icons, operators, overlay, panel
 
 CLASSES = (
     *properties.CLASSES,
@@ -19,20 +20,23 @@ CLASSES = (
 
 # Dependency order for importlib.reload during development.
 _RELOAD_SUBMODULES = (
+    "core.geometry",
+    "core.sync",
+    "core.lens_refine",
+    "core.ros_camera_info",
     "core",
-    "sync",
-    "lens_refine",
-    "apriltag_detect",
-    "vp_line_detect",
-    "line_snap",
+    "detect.apriltags",
+    "detect.vp_lines",
+    "detect.line_snap",
+    "detect",
     "properties",
+    "scene.distortion",
     "scene",
-    "distortion",
-    "ros_camera_info",
-    "icons",
-    "overlay",
-    "operators",
-    "panel",
+    "ui.icons",
+    "ui.overlay",
+    "ui.operators",
+    "ui.panel",
+    "ui",
 )
 
 _reload_pending = False

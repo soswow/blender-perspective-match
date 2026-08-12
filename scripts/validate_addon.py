@@ -1,7 +1,7 @@
 """Headless registration, solver, and scene smoke test.
 
 Run with:
-``blender --factory-startup -b --python validate_addon.py``
+``blender --factory-startup -b --python scripts/validate_addon.py``
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ import numpy as np
 
 def load_extension_module():
     """Import this extension package directly from its source directory."""
-    extension_directory = Path(__file__).resolve().parent
+    extension_directory = Path(__file__).resolve().parents[1]
     module_name = "match_perspective"
     spec = importlib.util.spec_from_file_location(
         module_name,
@@ -64,7 +64,7 @@ def main() -> None:
             extension.register()
             registered = True
             core = sys.modules["match_perspective.core"]
-            distortion = sys.modules["match_perspective.distortion"]
+            distortion = sys.modules["match_perspective.scene.distortion"]
             properties = sys.modules["match_perspective.properties"]
             scene = sys.modules["match_perspective.scene"]
 
@@ -397,7 +397,7 @@ def main() -> None:
             assert reloaded.undistorted_image is not None
 
             # Landmark sync: 2D↔2D essential pose; ground tags pin absolute scale.
-            from match_perspective import sync
+            from match_perspective.core import sync
             root_sync_a = scene.create_match_camera(bpy.context)
             scene.bind_reference_image(bpy.context, str(image_path))
             session_a = root_sync_a.pm_session

@@ -10,7 +10,7 @@ import numpy as np
 from bpy_extras import view3d_utils
 from mathutils import Matrix, Vector
 
-from . import core, properties
+from .. import core, properties
 
 CV_CAMERA_TO_BLENDER_CAMERA = np.diag([1.0, -1.0, -1.0])
 
@@ -187,7 +187,7 @@ def set_active_match(context: bpy.types.Context, root: bpy.types.Object) -> None
     if not properties.is_match_root(root):
         raise ValueError("Not a Perspective Match root")
     # Cancel Draw / Pick Origin / PP / Landmark tools before changing session.
-    from . import operators as operators_module
+    from ..ui import operators as operators_module
 
     operators_module.cancel_active_interact(context)
     space = properties.workspace(context)
@@ -230,7 +230,7 @@ def set_active_match(context: bpy.types.Context, root: bpy.types.Object) -> None
 
 def unload_match(context: bpy.types.Context) -> None:
     """Clear the active editing session without deleting match objects."""
-    from . import operators as operators_module
+    from ..ui import operators as operators_module
 
     operators_module.cancel_active_interact(context)
     space = properties.workspace(context)
@@ -259,7 +259,7 @@ def delete_match(
     context: bpy.types.Context, root: bpy.types.Object | None = None
 ) -> str:
     """Delete a match hierarchy (collection, Origin, Camera) and its landmark picks."""
-    from . import operators as operators_module
+    from ..ui import operators as operators_module
 
     if root is None:
         root = properties.active_root(context)
@@ -833,7 +833,8 @@ def apply_ros_camera_info_yaml(context: bpy.types.Context, filepath: str) -> str
     normalized plane — not scaled with image size). A non-zero imported λ also
     builds/shows the undistorted plate (without re-fitting λ from VP lines).
     """
-    from . import distortion, ros_camera_info
+    from . import distortion
+    from ..core import ros_camera_info
 
     settings = properties.active_session(context)
     if settings is None:
@@ -1753,7 +1754,7 @@ def project_known_object_into_match(landmark, root: bpy.types.Object) -> bool:
     Known Empties live in Blender/shared world. The match root Empty carries the
     sync transform, so world→private is ``root.matrix_world.inverted()``.
     """
-    from . import sync as sync_module
+    from ..core import sync as sync_module
 
     known_object = landmark.known_object
     if known_object is None or known_object.name not in bpy.data.objects:
@@ -1886,7 +1887,7 @@ def clear_landmark_observation_for_active(context: bpy.types.Context) -> bool:
 
 def build_sync_problem(context: bpy.types.Context):
     """Collect frozen match calibrations, landmark observations, and known 3D."""
-    from . import sync as sync_module
+    from ..core import sync as sync_module
 
     roots = properties.iter_match_roots()
     matches = []
@@ -2005,7 +2006,7 @@ def known_anchor_pick_warnings(context: bpy.types.Context) -> list[str]:
     Large deltas usually mean the Empty moved after auto-project, or the
     anchor camera/intrinsics changed without re-projecting.
     """
-    from . import sync as sync_module
+    from ..core import sync as sync_module
 
     anchor = properties.anchor_root(context)
     if anchor is None:
@@ -2056,7 +2057,7 @@ def _apply_sync_landmark_diagnostics(context: bpy.types.Context, result) -> None
 
 def diagnose_sync(context: bpy.types.Context):
     """Run sync solve for diagnostics without applying Empty transforms."""
-    from . import sync as sync_module
+    from ..core import sync as sync_module
 
     space = properties.workspace(context)
     anchor = properties.anchor_root(context)
@@ -2161,7 +2162,7 @@ def diagnose_sync(context: bpy.types.Context):
 
 def solve_and_apply_sync(context: bpy.types.Context):
     """Run landmark sync and write similarities onto match root Empties."""
-    from . import sync as sync_module
+    from ..core import sync as sync_module
 
     space = properties.workspace(context)
     anchor = properties.anchor_root(context)
@@ -2267,7 +2268,7 @@ def refine_lenses_and_sync(context: bpy.types.Context):
     Blocking convenience wrapper — the UI operator runs this work in a thread.
     """
     prep = prepare_lens_refine(context)
-    from . import lens_refine
+    from ..core import lens_refine
 
     refine_result = lens_refine.refine_lenses_from_landmarks(
         prep.lens_inputs,
@@ -2303,7 +2304,7 @@ class LensRefinePrep:
 
 def prepare_lens_refine(context: bpy.types.Context) -> LensRefinePrep:
     """Validate sync state and build pure-data inputs for lens refine."""
-    from . import lens_refine
+    from ..core import lens_refine
 
     space = properties.workspace(context)
     anchor = properties.anchor_root(context)
@@ -2426,7 +2427,7 @@ def apply_lens_refine_result(context: bpy.types.Context, refine_result, root_by_
         space.lens_refine_progress = 0.0
         properties.tag_viewport_redraw(context)
         # Surface a synthetic failed sync result so the operator can WARN, not ERROR.
-        from . import sync as sync_module
+        from ..core import sync as sync_module
 
         failed = sync_module.SyncSolveResult(
             similarities={},

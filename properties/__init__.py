@@ -54,7 +54,7 @@ def _update_vp_detect_sensitivity(self, context: bpy.types.Context) -> None:
             pass
     if was_debug:
         try:
-            from . import scene
+            from .. import scene
 
             scene.refresh_background_projection(context)
         except Exception:
@@ -69,7 +69,7 @@ def _redraw(_self, context: bpy.types.Context) -> None:
 
 def _update_landmark_use_in_sync(_self, context: bpy.types.Context) -> None:
     """Rebuild helpers so disabled landmarks leave PM_Sync_Landmarks."""
-    from . import scene
+    from .. import scene
 
     scene.sync_landmark_empties(context)
     tag_viewport_redraw(context)
@@ -77,7 +77,7 @@ def _update_landmark_use_in_sync(_self, context: bpy.types.Context) -> None:
 
 def _update_landmark_empties(_self, context: bpy.types.Context) -> None:
     """Rebuild point Empties / line meshes when visibility or size changes."""
-    from . import scene
+    from .. import scene
 
     scene.sync_landmark_empties(context)
     tag_viewport_redraw(context)
@@ -229,7 +229,7 @@ def sync_active_match_enum(space: PMWorkspace, identifier: str) -> None:
 
 def _active_match_items(self, context):
     """Dynamic enum entries for the active-match dropdown."""
-    from . import scene as scene_module
+    from .. import scene as scene_module
 
     items = [("NONE", "(Unloaded)", "No active Perspective Match session")]
     for root in iter_match_roots():
@@ -244,7 +244,7 @@ def _update_active_match(self, context) -> None:
     """Switch the active session from the dropdown and enter that camera view."""
     if _syncing_active_match:
         return
-    from . import scene as scene_module
+    from .. import scene as scene_module
 
     name = self.active_match
     if name in {"", "NONE"}:
@@ -277,7 +277,7 @@ def sync_anchor_match_enum(space: PMWorkspace, identifier: str) -> None:
 
 def _anchor_match_items(self, context):
     """Dynamic enum entries for the sync anchor dropdown."""
-    from . import scene as scene_module
+    from .. import scene as scene_module
 
     items = [("NONE", "(None)", "No sync anchor selected")]
     for root in iter_match_roots():

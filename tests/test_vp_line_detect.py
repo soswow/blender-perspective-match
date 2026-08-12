@@ -19,24 +19,44 @@ if "match_perspective" not in sys.modules:
     sys.modules["match_perspective"] = _package
 
 
-def _load(name: str):
+def _load(name: str, relative_path: str | None = None):
     module_name = f"match_perspective.{name}"
     if module_name in sys.modules:
         return sys.modules[module_name]
-    spec = importlib.util.spec_from_file_location(
-        module_name,
-        _ROOT / f"{name}.py",
-        submodule_search_locations=[str(_ROOT)],
-    )
+    path = _ROOT / (relative_path or f"{name}.py")
+    # Ensure parent packages exist for nested modules.
+    parts = name.split(".")
+    parent_name = "match_perspective"
+    for index, part in enumerate(parts[:-1], start=1):
+        parent_name = "match_perspective." + ".".join(parts[:index])
+        if parent_name not in sys.modules:
+            parent_mod = types.ModuleType(parent_name)
+            parent_mod.__path__ = [str(_ROOT.joinpath(*parts[:index]))]
+            sys.modules[parent_name] = parent_mod
+            grandparent = (
+                "match_perspective"
+                if index == 1
+                else "match_perspective." + ".".join(parts[: index - 1])
+            )
+            setattr(sys.modules[grandparent], parts[index - 1], parent_mod)
+    # Do not set submodule_search_locations — that marks the module as a package
+    # and breaks relative imports (``..`` would stop at detect instead of root).
+    spec = importlib.util.spec_from_file_location(module_name, path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
+    module.__package__ = module_name.rpartition(".")[0]
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
     return module
 
 
-core = _load("core")
-vp_line_detect = _load("vp_line_detect")
+core = _load("core.geometry", "core/geometry.py")
+# Present geometry as match_perspective.core for `from .. import core` in detect.
+core.__name__ = "match_perspective.core"
+core.__package__ = "match_perspective"
+sys.modules["match_perspective.core"] = core
+sys.modules["match_perspective"].core = core
+vp_line_detect = _load("detect.vp_lines", "detect/vp_lines.py")
 
 
 def _segments_toward(

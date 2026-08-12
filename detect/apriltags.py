@@ -65,8 +65,8 @@ def _import_cv2():
     except ImportError as error:
         raise AprilTagDependencyError(
             "AprilTag detection needs the bundled OpenCV wheel. "
-            "Run ./fetch-wheels.sh, then disable and re-enable Perspective Match "
-            "(or install a fresh platform zip from ./build-extension.sh)."
+            "Run ./scripts/fetch-wheels.sh, then disable and re-enable Perspective Match "
+            "(or install a fresh platform zip from ./scripts/build-extension.sh)."
         ) from error
     if not hasattr(cv2, "aruco"):
         raise AprilTagDependencyError(
@@ -100,7 +100,7 @@ def _gray_from_path(cv2_module, image_path: str) -> np.ndarray | None:
 
 def _gray_from_blender_image(cv2_module, image) -> np.ndarray:
     """Convert a Blender Image to grayscale uint8 (top-left origin)."""
-    from . import distortion
+    from ..scene import distortion
 
     rgba = distortion._image_pixels_top_left(image)
     rgb_u8 = np.clip(np.round(rgba[:, :, :3] * 255.0), 0, 255).astype(np.uint8)
@@ -171,7 +171,7 @@ def _set_point_observation(
     confidence: str,
 ) -> None:
     """Write / overwrite a POINT observation for ``root`` without activating it."""
-    from . import scene
+    from .. import scene
 
     observation = scene.observation_for_match(landmark, root)
     if observation is None:
@@ -187,7 +187,7 @@ def apply_apriltag_detections(
     detections: list[DetectedTag],
 ) -> AprilTagAssignResult:
     """Assign detections to landmarks on the active match (create if missing)."""
-    from . import properties
+    from .. import properties
 
     space = properties.workspace(context)
     root = properties.active_root(context)
@@ -232,7 +232,7 @@ def apply_apriltag_detections(
 
 def find_and_assign_apriltags(context) -> AprilTagAssignResult:
     """Detect 25h9 tags in the active still and map them onto landmarks."""
-    from . import properties
+    from .. import properties
 
     settings = properties.active_session(context)
     if settings is None or settings.image is None:

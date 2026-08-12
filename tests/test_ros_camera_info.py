@@ -5,7 +5,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
-from match_perspective import ros_camera_info
+from match_perspective.core import ros_camera_info
 
 _SAMPLE = """\
 image_width: 2160

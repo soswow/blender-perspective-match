@@ -14,8 +14,8 @@ from uuid import uuid4
 
 import numpy as np
 
-from . import core
-from .core import AxisId, LineSegment
+from .. import core
+from ..core import AxisId, LineSegment
 
 # Drop short LSD fragments (noise / texture). Measured in full-res pixels.
 # Tuned further by ``sensitivity`` (0 = strict, 1 = very sensitive).
@@ -134,8 +134,8 @@ def _import_cv2():
     except ImportError as error:
         raise VpLineDependencyError(
             "VP line detection needs the bundled OpenCV wheel. "
-            "Run ./fetch-wheels.sh, then disable and re-enable Perspective Match "
-            "(or install a fresh platform zip from ./build-extension.sh)."
+            "Run ./scripts/fetch-wheels.sh, then disable and re-enable Perspective Match "
+            "(or install a fresh platform zip from ./scripts/build-extension.sh)."
         ) from error
     if not hasattr(cv2, "createLineSegmentDetector"):
         raise VpLineDependencyError(
@@ -941,7 +941,8 @@ def write_vp_detect_debug_plate(
     """Build/update the black debug plate and optionally show it as the camera BG."""
     import bpy
 
-    from . import distortion, properties, scene
+    from ..scene import distortion
+    from .. import properties, scene
 
     settings = properties.active_session(context)
     if settings is None or settings.image is None:
@@ -1008,7 +1009,7 @@ def write_vp_detect_debug_plate(
 
 def set_vp_detect_debug_view(context, enabled: bool) -> None:
     """Show or hide the LSD debug plate on the active match camera."""
-    from . import properties, scene
+    from .. import properties, scene
 
     settings = properties.active_session(context)
     if settings is None:
@@ -1039,7 +1040,7 @@ def install_debug_rgba_plate(settings, debug_rgba: np.ndarray):
     """Write a pre-rendered debug plate into the session (main thread)."""
     import bpy
 
-    from . import distortion
+    from ..scene import distortion
 
     height, width = debug_rgba.shape[:2]
     plate_key = distortion._plate_key(settings)
@@ -1088,7 +1089,7 @@ def install_debug_rgba_plate(settings, debug_rgba: np.ndarray):
 
 def load_detection_gray(settings) -> np.ndarray:
     """Load the active match still as grayscale uint8 (main-thread safe)."""
-    from . import apriltag_detect
+    from . import apriltags as apriltag_detect
 
     cv2 = _import_cv2()
     return apriltag_detect._load_detection_gray(cv2, settings)
@@ -1100,7 +1101,7 @@ def find_and_apply_vp_lines(context) -> DetectVpLinesResult:
     Prefer the modal operator for interactive use — this stays available for
     scripts / tests and runs synchronously.
     """
-    from . import properties
+    from .. import properties
 
     settings = properties.active_session(context)
     if settings is None or settings.image is None:

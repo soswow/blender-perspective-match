@@ -4,7 +4,7 @@ __pycache__/
 .DS_Store
 tools/explore-vp-intrinsics/.venv/
 tools/print-apriltags/.venv/
-# Large platform binaries — fetch with ./fetch-wheels.sh
+# Large platform binaries — fetch with ./scripts/fetch-wheels.sh
 wheels/*.whl
 # Blender may extract wheels here when the checkout is symlinked as an extension
 site-packages/

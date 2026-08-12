@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from . import core
+from . import geometry as core
 
 
 @dataclass

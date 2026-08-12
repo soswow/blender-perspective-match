@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from . import core
+from . import geometry as core
 from . import sync as sync_module
 
 
