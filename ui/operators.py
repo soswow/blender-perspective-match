@@ -17,6 +17,7 @@ from mathutils import Vector
 from .. import core, properties, scene
 from ..detect import apriltags as apriltag_detect
 from ..detect import line_snap
+from ..detect import opencv as opencv_support
 from ..detect import vp_lines as vp_line_detect
 from ..scene import distortion
 from . import overlay
@@ -742,6 +743,8 @@ class PM_OT_detect_vp_lines(bpy.types.Operator):
     def poll(cls, context: bpy.types.Context) -> bool:
         if vp_detect_is_running():
             return False
+        if not opencv_support.capabilities().line_segment_detector:
+            return False
         settings = properties.active_session(context)
         return (
             settings is not None
@@ -956,6 +959,8 @@ class PM_OT_toggle_vp_detect_debug(bpy.types.Operator):
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
         if vp_detect_is_running():
+            return False
+        if not opencv_support.capabilities().line_segment_detector:
             return False
         settings = properties.active_session(context)
         return (
@@ -2099,6 +2104,22 @@ class PM_OT_reference_image_label(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class PM_OT_report_info(bpy.types.Operator):
+    """Write a line into the Info editor (used when optional OpenCV is missing)."""
+
+    bl_idname = "perspective_match.report_info"
+    bl_label = "Perspective Match Info"
+    bl_options = {"INTERNAL", "REGISTER"}
+
+    message: bpy.props.StringProperty(options={"HIDDEN", "SKIP_SAVE"})
+
+    def execute(self, _context: bpy.types.Context) -> set[str]:
+        text = (self.message or "").strip()
+        if text:
+            self.report({"INFO"}, text[:255])
+        return {"FINISHED"}
+
+
 class PM_OT_unload_match(bpy.types.Operator):
     """Unload the active match session from the UI without deleting objects."""
 
@@ -2415,6 +2436,8 @@ class PM_OT_find_apriltag_landmarks(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
+        if not opencv_support.capabilities().apriltag_25h9:
+            return False
         settings = properties.active_session(context)
         return (
             settings is not None
@@ -2861,6 +2884,7 @@ class PM_OT_clear_sync(bpy.types.Operator):
 CLASSES = (
     PM_OT_new_match_camera,
     PM_OT_reference_image_label,
+    PM_OT_report_info,
     PM_OT_unload_match,
     PM_OT_delete_match,
     PM_OT_rename_match,

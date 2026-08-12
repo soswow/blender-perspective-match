@@ -200,6 +200,27 @@ def schedule_reload() -> bool:
     return True
 
 
+def _notify_optional_opencv() -> None:
+    """Info + console when OpenCV extras are missing; core matching still loads."""
+    from .detect import opencv as opencv_support
+
+    message = opencv_support.load_warning()
+    if not message:
+        return
+    print(message)
+    if bpy.app.background:
+        return
+
+    def _report_to_info() -> None:
+        try:
+            bpy.ops.perspective_match.report_info("EXEC_DEFAULT", message=message)
+        except Exception:
+            pass
+        return None
+
+    bpy.app.timers.register(_report_to_info, first_interval=0.05)
+
+
 def register() -> None:
     """Register RNA classes, scene/object state, and the viewport overlay."""
     for cls in CLASSES:
@@ -220,6 +241,7 @@ def register() -> None:
     overlay.register_viewport_draw_handler()
     icons.register()
     _register_keymaps()
+    _notify_optional_opencv()
 
 
 def unregister() -> None:

@@ -147,20 +147,17 @@ class VpLineDependencyError(RuntimeError):
 
 def _import_cv2():
     """Import OpenCV with LSD; raise VpLineDependencyError if missing."""
-    try:
-        import cv2
-    except ImportError as error:
+    from .opencv import capabilities
+
+    caps = capabilities()
+    if caps.module is None or not caps.line_segment_detector:
+        detail = caps.error or "OpenCV with Line Segment Detector is not available"
         raise VpLineDependencyError(
             "VP line detection needs the bundled OpenCV wheel. "
             "Run ./scripts/fetch-wheels.sh, then disable and re-enable Perspective Match "
-            "(or install a fresh platform zip from ./scripts/build-extension.sh)."
-        ) from error
-    if not hasattr(cv2, "createLineSegmentDetector"):
-        raise VpLineDependencyError(
-            "OpenCV loaded without Line Segment Detector — the extension expects "
-            "opencv-contrib-python-headless from ./wheels/."
+            f"(or install a fresh platform zip from ./scripts/build-extension.sh). ({detail})"
         )
-    return cv2
+    return caps.module
 
 
 def _min_segment_length(

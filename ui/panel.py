@@ -7,6 +7,7 @@ from pathlib import Path
 import bpy
 
 from .. import properties, scene
+from ..detect import opencv as opencv_support
 from . import icons, operators
 
 
@@ -257,27 +258,28 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             operator.mode = "LINE"
             row.operator("perspective_match.delete_selected", text="", icon="TRASH")
             row.operator("perspective_match.clear_axis", text="", icon="X")
-            detect_row = line_body.row(align=True)
-            detect_row.operator_context = "INVOKE_DEFAULT"
-            detect_row.operator(
-                "perspective_match.detect_vp_lines",
-                text="Detect VP Lines",
-                icon="VIEWZOOM",
-            )
-            line_body.prop(
-                settings,
-                "vp_detect_sensitivity",
-                text="Edge Sensitivity",
-                slider=True,
-            )
-            debug_row = line_body.row(align=True)
-            debug_row.operator_context = "INVOKE_DEFAULT"
-            debug_row.operator(
-                "perspective_match.toggle_vp_detect_debug",
-                text="Debug auto detected edges",
-                icon="SEQ_HISTOGRAM",
-                depress=bool(settings.view_vp_detect_debug),
-            )
+            if opencv_support.capabilities().line_segment_detector:
+                detect_row = line_body.row(align=True)
+                detect_row.operator_context = "INVOKE_DEFAULT"
+                detect_row.operator(
+                    "perspective_match.detect_vp_lines",
+                    text="Detect VP Lines",
+                    icon="VIEWZOOM",
+                )
+                line_body.prop(
+                    settings,
+                    "vp_detect_sensitivity",
+                    text="Edge Sensitivity",
+                    slider=True,
+                )
+                debug_row = line_body.row(align=True)
+                debug_row.operator_context = "INVOKE_DEFAULT"
+                debug_row.operator(
+                    "perspective_match.toggle_vp_detect_debug",
+                    text="Debug auto detected edges",
+                    icon="SEQ_HISTOGRAM",
+                    depress=bool(settings.view_vp_detect_debug),
+                )
             line_body.prop(settings, "snap_vp_lines_to_edges")
             line_body.prop(settings, "show_vp_error_labels")
 
@@ -490,11 +492,12 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             text="",
             icon="IMPORT",
         )
-        list_column.operator(
-            "perspective_match.find_apriltag_landmarks",
-            text="",
-            icon_value=icons.icon_id("april_tag"),
-        )
+        if opencv_support.capabilities().apriltag_25h9:
+            list_column.operator(
+                "perspective_match.find_apriltag_landmarks",
+                text="",
+                icon_value=icons.icon_id("april_tag"),
+            )
         
         
         # Separate control group: list display / overlay helpers (not storage).

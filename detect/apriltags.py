@@ -1,8 +1,8 @@
 """Detect AprilTag fiducials in a match still and map them to sync landmarks.
 
 Hardcoded family: AprilTag 25h9 (same as ``tools/print-apriltags``).
-Landmark names use ``idNN-25h9`` (NN = 00–99). OpenCV with aruco ships as a
-bundled wheel (``opencv-contrib-python-headless`` in ``./wheels/``).
+Landmark names use ``idNN-25h9`` (NN = 00–99). OpenCV with aruco is optional
+(bundled wheel ``opencv-contrib-python-headless`` in ``./wheels/``).
 """
 
 from __future__ import annotations
@@ -60,20 +60,17 @@ def find_landmark_for_tag(landmarks, tag_id: int):
 
 def _import_cv2():
     """Import OpenCV with aruco; raise AprilTagDependencyError if missing."""
-    try:
-        import cv2
-    except ImportError as error:
+    from .opencv import capabilities
+
+    caps = capabilities()
+    if caps.module is None or not caps.apriltag_25h9:
+        detail = caps.error or "OpenCV with aruco is not available"
         raise AprilTagDependencyError(
             "AprilTag detection needs the bundled OpenCV wheel. "
             "Run ./scripts/fetch-wheels.sh, then disable and re-enable Perspective Match "
-            "(or install a fresh platform zip from ./scripts/build-extension.sh)."
-        ) from error
-    if not hasattr(cv2, "aruco"):
-        raise AprilTagDependencyError(
-            "OpenCV loaded without the aruco module — the extension expects "
-            "opencv-contrib-python-headless from ./wheels/."
+            f"(or install a fresh platform zip from ./scripts/build-extension.sh). ({detail})"
         )
-    return cv2
+    return caps.module
 
 
 def _aruco_dictionary(cv2_module):
