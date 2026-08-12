@@ -221,6 +221,8 @@ def create_match_camera(context: bpy.types.Context) -> bpy.types.Object:
     camera_data.type = "PERSP"
     camera_data.lens_unit = "MILLIMETERS"
     camera_data.sensor_fit = "HORIZONTAL"
+    # Smaller than Blender's default 1.0 so new match cameras don't dominate the view.
+    camera_data.display_size = 0.2
     camera_data.show_background_images = True
     camera_data.background_images.clear()
 
