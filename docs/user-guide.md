@@ -12,7 +12,7 @@ PM_<image>
     PM_<image>_Camera
 ```
 
-1. Click **New Match Camera** to create an empty match, activate it, and open the reference image file dialog.
+1. Click **New Match Camera** to create an empty match, activate it, and open the reference image file dialog. If the previously active match has **Manual FOV** (including YAML import) or is in **1 Point** mode, its camera matrix K is copied onto the new match and scaled when you load a still.
 2. Use **Active Match** to switch which session the sidebar edits. Switching also sets the scene camera and enters that camera view.
 3. With the **Perspective Match** sidebar tab selected, **Ctrl+Alt+NumPad 1–9** jumps to the Nth match (name-sorted). Any Draw / Pick Origin / PP / Landmark tool is cancelled first.
 4. Click the rename button (font icon) next to **New** to rename the active match. Opening a still defaults the name from the image stem; rename anytime afterward. The hierarchy stays `PM_<name>` / `PM_<name>_Origin` / `PM_<name>_Camera`.
@@ -29,7 +29,7 @@ With a match active, choose **Open Image** (or create a match with **New Match C
 
 After bind, the hierarchy is renamed from `PM_Match_###` to `PM_<image stem>` when that name is free. The camera becomes the scene camera, the still is attached with **Stretch** frame mapping, and render dimensions match the image.
 
-Once a still is loaded, **Replace Image** appears: same pixel size only, keeps VP lines, origin, calibration, and landmarks (drops view-lighting / undistorted caches). **Open Image** still does a full rebind and clears that match’s edit state.
+Once a still is loaded, **Replace Image** appears: same pixel size only, keeps VP lines, origin, calibration, and landmarks (drops view-lighting / undistorted caches). **Open Image** still does a full rebind (clears lines/origin); if **Manual FOV** is on, K is kept and scaled to the new plate size.
 
 ## Vanishing point lines
 
@@ -54,7 +54,7 @@ Then draw lines (or auto-detect in 3-point mode):
 5. Press **Delete/Backspace** to remove the selected line.
 6. Press **Esc** (or right-click) to leave the tool.
 
-**Detect VP Lines** (3 Point only): runs in the background (Esc to cancel). Replaces the current strokes with automatically found bundles — well-spread inliers per axis that prefer well-separated vanishing points — then the usual camera refine when enough lines exist. **Edge Sensitivity** (0–1) controls how eagerly faint lines are kept. **Debug auto detected edges** toggles a black plate with every surviving edge in white. Needs clear man-made edges; cluttered foliage or curved architecture will miss or mis-label axes. Disabled in 1- and 2-point modes.
+**Detect VP Lines** (3 Point only): runs in the background (Esc to cancel). Replaces the current strokes with automatically found bundles — well-spread inliers per axis that prefer well-separated vanishing points — then the usual camera refine when enough lines exist. Axis colors: **blue/Z** = uprights; **green/Y** = left-hand vanishing point; **red/X** = right-hand vanishing point. An X/Y vanishing point may land inside the still (near-2VP look); 3-point mode still solves it. **Edge Sensitivity** (0–1) controls how eagerly faint lines are kept. **Debug auto detected edges** toggles a black plate with every surviving edge in white. Needs clear man-made edges; cluttered foliage or curved architecture will miss or mis-label axes. Disabled in 1- and 2-point modes.
 
 While the tool is active, left-clicks on the visible plate belong to Perspective Match. Sidebar / toolbar / header clicks still go to Blender UI. Exit with **Esc**. Middle mouse and the wheel retain normal Blender navigation. Overlay guides only draw in **camera view** of the active match.
 

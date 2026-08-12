@@ -117,8 +117,92 @@ def _default_calibration(hfov_degrees: float, width: int = 1920, height: int = 1
     )
 
 
+def _session_has_manual_k(session: properties.PMSession) -> bool:
+    """True when FOV/K are user-locked (Manual FOV, YAML import, or 1-point)."""
+    return bool(session.lock_focal or session.vp_mode == "1") and float(session.fx) > 1.0
+
+
+def _scale_intrinsics_pixels(
+    fx: float,
+    fy: float,
+    cx: float,
+    cy: float,
+    source_width: int,
+    source_height: int,
+    target_width: int,
+    target_height: int,
+) -> tuple[float, float, float, float]:
+    """Scale pinhole K from one plate size to another (same as ROS import)."""
+    scale_x = float(target_width) / float(max(int(source_width), 1))
+    scale_y = float(target_height) / float(max(int(source_height), 1))
+    return fx * scale_x, fy * scale_y, cx * scale_x, cy * scale_y
+
+
+def _calibration_from_manual_k(
+    fx: float,
+    fy: float,
+    cx: float,
+    cy: float,
+    width: int,
+    height: int,
+    *,
+    hfov_fallback: float = 50.0,
+) -> core.Calibration:
+    """Default pose with an explicit locked K (no distortion copy)."""
+    calibration = _default_calibration(hfov_fallback, width, height)
+    calibration.intrinsics.fx = float(fx)
+    calibration.intrinsics.fy = float(fy)
+    calibration.intrinsics.cx = float(cx)
+    calibration.intrinsics.cy = float(cy)
+    return calibration
+
+
+def _copy_manual_k_from_session(
+    target: properties.PMSession,
+    source: properties.PMSession,
+    *,
+    width: int,
+    height: int,
+) -> core.Calibration:
+    """Copy locked K from source into target, scaled to the target plate size."""
+    fx, fy, cx, cy = _scale_intrinsics_pixels(
+        float(source.fx),
+        float(source.fy),
+        float(source.cx),
+        float(source.cy),
+        int(source.image_width),
+        int(source.image_height),
+        width,
+        height,
+    )
+    target.lock_focal = True
+    calibration = _calibration_from_manual_k(
+        fx,
+        fy,
+        cx,
+        cy,
+        width,
+        height,
+        hfov_fallback=float(source.hfov_degrees),
+    )
+    store_calibration(target, calibration)
+    return calibration
+
+
 def create_match_camera(context: bpy.types.Context) -> bpy.types.Object:
-    """Create a new Empty + Camera match hierarchy and make it active."""
+    """Create a new Empty + Camera match hierarchy and make it active.
+
+    When the previously active match has manual K (Manual FOV / YAML / 1-point),
+    that K is copied onto the new match (scaled later when a still is bound).
+    """
+    # Snapshot before we replace the active root.
+    previous_root = properties.active_root(context)
+    manual_source = (
+        previous_root.pm_session
+        if previous_root is not None and _session_has_manual_k(previous_root.pm_session)
+        else None
+    )
+
     index = _next_match_index()
     prefix = f"PM_Match_{index:03d}"
     collection = bpy.data.collections.new(prefix)
@@ -171,13 +255,29 @@ def create_match_camera(context: bpy.types.Context) -> bpy.types.Object:
     session.vp_detect_debug_path = ""
     session.vp_detect_sensitivity_baked = -1.0
     session.error = ""
-    session.status = "Load a reference image"
 
-    calibration = _default_calibration(session.hfov_degrees)
-    store_calibration(session, calibration)
+    if manual_source is not None:
+        # Keep source plate size on the new session so Open Image can scale K.
+        session.image_width = int(manual_source.image_width)
+        session.image_height = int(manual_source.image_height)
+        session.source_image_width = int(
+            manual_source.source_image_width or manual_source.image_width
+        )
+        calibration = _copy_manual_k_from_session(
+            session,
+            manual_source,
+            width=int(session.image_width),
+            height=int(session.image_height),
+        )
+        status = "Manual K copied — load a reference image"
+    else:
+        calibration = _default_calibration(session.hfov_degrees)
+        store_calibration(session, calibration)
+        status = "Load a reference image"
+
     apply_camera(context.scene, session, calibration)
     set_active_match(context, root)
-    session.status = "Load a reference image"
+    session.status = status
     properties.tag_viewport_redraw(context)
     return root
 
@@ -465,6 +565,17 @@ def bind_reference_image(context: bpy.types.Context, image_path: str) -> bpy.typ
     if width <= 0 or height <= 0:
         raise ValueError("The selected image has no readable pixel dimensions")
 
+    # Capture locked K before plate size is overwritten (new match may have
+    # inherited Manual FOV / YAML / 1-point intrinsics from the previous PM).
+    keep_manual_k = _session_has_manual_k(session)
+    source_width = int(session.image_width)
+    source_height = int(session.image_height)
+    source_fx = float(session.fx)
+    source_fy = float(session.fy)
+    source_cx = float(session.cx)
+    source_cy = float(session.cy)
+    source_hfov = float(session.hfov_degrees)
+
     _reset_session_edit_state(session)
     root.matrix_world = Matrix.Identity(4)
 
@@ -494,15 +605,35 @@ def bind_reference_image(context: bpy.types.Context, image_path: str) -> bpy.typ
     if space.anchor_root == root:
         properties.sync_anchor_match_enum(space, root.name)
 
-    calibration = _default_calibration(session.hfov_degrees, width, height)
-    store_calibration(session, calibration)
+    if keep_manual_k:
+        fx, fy, cx, cy = _scale_intrinsics_pixels(
+            source_fx,
+            source_fy,
+            source_cx,
+            source_cy,
+            source_width,
+            source_height,
+            width,
+            height,
+        )
+        session.lock_focal = True
+        calibration = _calibration_from_manual_k(
+            fx, fy, cx, cy, width, height, hfov_fallback=source_hfov
+        )
+        store_calibration(session, calibration)
+        session.status = (
+            f"Manual K kept · HFOV {session.hfov_degrees:.2f}° — draw VP lines"
+        )
+    else:
+        calibration = _default_calibration(session.hfov_degrees, width, height)
+        store_calibration(session, calibration)
+        session.status = "Choose a perspective mode, then draw VP lines"
     apply_camera(context.scene, session, calibration)
     context.scene.render.resolution_x = width
     context.scene.render.resolution_y = height
     context.scene.render.resolution_percentage = 100
     context.scene.render.pixel_aspect_x = 1.0
     context.scene.render.pixel_aspect_y = 1.0
-    session.status = "Choose a perspective mode, then draw VP lines"
     set_active_match(context, root)
     return camera_object
 

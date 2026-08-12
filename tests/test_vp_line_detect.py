@@ -173,6 +173,254 @@ class VpClusteringTests(unittest.TestCase):
         # Left vs right should be clearly separated (well over 20°).
         self.assertGreater(separation, np.radians(20.0))
 
+    def test_green_left_red_right_convention(self) -> None:
+        """Non-vertical axes: green/Y = left VP, red/X = right VP."""
+        width, height = 800, 600
+        left = (-400.0, 300.0)
+        right = (1200.0, 300.0)
+        vertical = (400.0, 2200.0)
+        segments = []
+        segments += _segments_toward(
+            left, [(180, 120), (200, 220), (190, 320), (210, 420)], length=140.0
+        )
+        segments += _segments_toward(
+            right, [(580, 120), (600, 220), (590, 320), (610, 420)], length=140.0
+        )
+        segments += _segments_toward(
+            vertical,
+            [(300, 80), (400, 90), (500, 85), (350, 180)],
+            length=180.0,
+        )
+        clusters = vp_line_detect.cluster_vanishing_points(
+            segments,
+            seed=3,
+            image_width=width,
+            image_height=height,
+        )
+        bundles = vp_line_detect.assign_axes_three_point(clusters, width, height)
+        green_vp = core.vanishing_point_from_lines(bundles["z"])
+        red_vp = core.vanishing_point_from_lines(bundles["x"])
+        self.assertIsNotNone(green_vp)
+        self.assertIsNotNone(red_vp)
+        green_x = float(green_vp[0] / green_vp[2])
+        red_x = float(red_vp[0] / red_vp[2])
+        self.assertLess(green_x, 0.5 * width)
+        self.assertGreater(red_x, 0.5 * width)
+        self.assertLess(green_x, red_x)
+
+    def test_recovers_short_horizontal_depth_cluster(self) -> None:
+        """Dominant uprights must not starve a weaker hallway-depth VP."""
+        width, height = 800, 1000
+        left = (-300.0, 400.0)
+        vertical = (400.0, 1800.0)
+        # Far-right depth VP (short near-horizontal edges — typical hallway).
+        depth = (2500.0, 380.0)
+        segments = []
+        # Long upright-ish bundles dominate length-weighted RANSAC.
+        segments += _segments_toward(
+            left,
+            [(150, 200), (170, 350), (160, 500), (180, 650), (190, 800)],
+            length=200.0,
+        )
+        segments += _segments_toward(
+            vertical,
+            [(250, 100), (350, 120), (450, 110), (300, 250), (500, 240), (400, 400)],
+            length=220.0,
+        )
+        # Extra upright near-duplicates so the main peel fills with steep clusters.
+        segments += _segments_toward(
+            (-280.0, 410.0),
+            [(140, 220), (155, 370), (145, 520)],
+            length=160.0,
+        )
+        segments += _segments_toward(
+            depth,
+            [(320, 200), (360, 350), (400, 500), (380, 650), (420, 280)],
+            length=70.0,
+        )
+        clusters = vp_line_detect.cluster_vanishing_points(
+            segments,
+            seed=4,
+            image_width=width,
+            image_height=height,
+        )
+        self.assertGreaterEqual(len(clusters), 3)
+        flat = [
+            cluster
+            for cluster in clusters
+            if vp_line_detect._cluster_uprightness(cluster) < 0.45
+        ]
+        self.assertGreaterEqual(len(flat), 1, "expected a recovered depth cluster")
+        bundles = vp_line_detect.assign_axes_three_point(clusters, width, height)
+        red_vp = core.vanishing_point_from_lines(bundles["x"])
+        self.assertIsNotNone(red_vp)
+        red_x = float(red_vp[0] / red_vp[2])
+        # Far-right depth family is red under left=green / right=red.
+        self.assertGreater(red_x, 0.5 * width)
+
+    def test_near_center_horizontal_vp_stays_on_xy(
+        self,
+    ) -> None:
+        """On-plate across VP + far depth VP keep 3-point red/green labeling."""
+        width, height = 800, 600
+        # Near-center across VP (slightly left of middle) — steeper strokes.
+        across = (350.0, 310.0)
+        # Far-right flat depth VP.
+        depth = (5000.0, 290.0)
+        vertical = (400.0, 2500.0)
+
+        segments = []
+        segments += _segments_toward(
+            across,
+            [(500, 150), (520, 250), (510, 350), (530, 450)],
+            length=120.0,
+        )
+        segments += _segments_toward(
+            depth,
+            [(150, 200), (220, 205), (290, 198), (360, 210), (430, 202)],
+            length=100.0,
+        )
+        segments += _segments_toward(
+            vertical,
+            [(250, 80), (350, 90), (450, 85), (300, 200), (500, 210)],
+            length=160.0,
+        )
+        clusters = vp_line_detect.cluster_vanishing_points(
+            segments,
+            seed=5,
+            image_width=width,
+            image_height=height,
+        )
+        bundles = vp_line_detect.assign_axes_three_point(clusters, width, height)
+        red = core.vanishing_point_from_lines(bundles["x"])
+        green = core.vanishing_point_from_lines(bundles["z"])
+        blue = core.vanishing_point_from_lines(bundles["y"])
+        self.assertIsNotNone(red)
+        self.assertIsNotNone(green)
+        self.assertIsNotNone(blue)
+        red_x = float(red[0] / red[2])
+        green_x = float(green[0] / green[2])
+        blue_y = float(blue[1] / blue[2])
+        # Left-of-center → green; far-right depth → red; blue below.
+        self.assertLess(abs(green_x - across[0]), 120.0)
+        self.assertGreater(red_x, width)
+        self.assertGreater(blue_y, height)
+        self.assertLess(green_x, red_x)
+
+    def test_horizontal_axis_drops_steep_hitchhikers(self) -> None:
+        """Depth/green bundles keep flat rails, not steep co-VP floor hits."""
+        vanishing = np.array([2500.0, 300.0, 1.0], dtype=np.float64)
+        # Truly flat almost-horizontal segments aimed at a far-right VP.
+        flat = _segments_toward(
+            (2500.0, 300.0),
+            [(200, 280), (320, 290), (440, 285), (560, 295)],
+            length=100.0,
+        )
+        # Long steep segments that only roughly share the same VP.
+        steep = [
+            core.LineSegment(200.0, 100.0, 180.0, 500.0),
+            core.LineSegment(250.0, 80.0, 230.0, 480.0),
+            core.LineSegment(300.0, 90.0, 270.0, 520.0),
+        ]
+        cluster = vp_line_detect.VpCluster(
+            vanishing=vanishing,
+            segments=tuple(steep + flat),
+            support_length=1000.0,
+        )
+        picked = vp_line_detect._bundle_segments_for_axis(
+            cluster,
+            role="depth",
+            image_width=800,
+            image_height=600,
+            limit=4,
+        )
+        self.assertGreaterEqual(len(picked), 2)
+        for segment in picked:
+            self.assertLessEqual(
+                vp_line_detect._segment_uprightness(segment),
+                0.55 + 1.0e-6,
+            )
+
+    def test_flatter_right_becomes_red(self) -> None:
+        """Flat right VP is red; steeper left VP is green (color convention)."""
+        width, height = 800, 600
+        # Flat almost-horizontal depth VP on the right.
+        depth = (2000.0, 280.0)
+        # Steeper across VP left-of-center.
+        across = (300.0, 200.0)
+        vertical = (400.0, 2200.0)
+        segments = []
+        segments += _segments_toward(
+            depth,
+            [(200, 200), (280, 210), (360, 205), (440, 215), (520, 208)],
+            length=100.0,
+        )
+        segments += _segments_toward(
+            across,
+            [(500, 150), (520, 280), (510, 400), (530, 500)],
+            length=140.0,
+        )
+        segments += _segments_toward(
+            vertical,
+            [(250, 80), (350, 90), (450, 85), (300, 200)],
+            length=160.0,
+        )
+        clusters = vp_line_detect.cluster_vanishing_points(
+            segments,
+            seed=7,
+            image_width=width,
+            image_height=height,
+        )
+        bundles = vp_line_detect.assign_axes_three_point(clusters, width, height)
+        green_vp = core.vanishing_point_from_lines(bundles["z"])
+        red_vp = core.vanishing_point_from_lines(bundles["x"])
+        self.assertIsNotNone(green_vp)
+        self.assertIsNotNone(red_vp)
+        green_x = float(green_vp[0] / green_vp[2])
+        red_x = float(red_vp[0] / red_vp[2])
+        self.assertLess(green_x, 0.5 * width)
+        self.assertGreater(red_x, 0.5 * width)
+        self.assertLess(green_x, red_x)
+
+    def test_left_flat_becomes_green(self) -> None:
+        """Flat left VP stays green; steeper right VP stays red."""
+        width, height = 800, 600
+        left_flat = (-400.0, 300.0)
+        right_steep = (1200.0, 280.0)
+        vertical = (400.0, 2200.0)
+        segments = []
+        segments += _segments_toward(
+            left_flat,
+            [(200, 200), (280, 210), (360, 205), (440, 215)],
+            length=90.0,
+        )
+        segments += _segments_toward(
+            right_steep,
+            [(500, 150), (520, 280), (510, 400), (530, 500)],
+            length=140.0,
+        )
+        segments += _segments_toward(
+            vertical,
+            [(250, 80), (350, 90), (450, 85), (300, 200)],
+            length=160.0,
+        )
+        clusters = vp_line_detect.cluster_vanishing_points(
+            segments,
+            seed=3,
+            image_width=width,
+            image_height=height,
+        )
+        bundles = vp_line_detect.assign_axes_three_point(clusters, width, height)
+        red_vp = core.vanishing_point_from_lines(bundles["x"])
+        green_vp = core.vanishing_point_from_lines(bundles["z"])
+        self.assertIsNotNone(red_vp)
+        self.assertIsNotNone(green_vp)
+        red_x = float(red_vp[0] / red_vp[2])
+        green_x = float(green_vp[0] / green_vp[2])
+        self.assertLess(green_x, 0.5 * width)
+        self.assertGreater(red_x, 0.5 * width)
+        self.assertLess(green_x, red_x)
+
     def test_segment_vp_residual_zero_on_exact_line(self) -> None:
         segment = core.LineSegment(0.0, 0.0, 100.0, 0.0)
         vanishing = np.array([50.0, 0.0, 1.0])
@@ -207,6 +455,45 @@ class VpClusteringTests(unittest.TestCase):
             if abs(segment.x1 - close_a.x1) < 15.0 or abs(segment.x1 - close_b.x1) < 15.0
         )
         self.assertEqual(close_count, 1)
+
+    def test_select_diverse_keeps_parallel_wall_edges(self) -> None:
+        """Near-0° parallel uprights with a large midpoint gap both survive."""
+        # Finite across VP slightly left of center (hallway wall edges).
+        vanishing = np.array([755.0, 750.0, 1.0])
+        lower = core.LineSegment(632.0, 3995.0, 673.0, 2912.0)
+        upper = core.LineSegment(683.0, 2627.0, 699.0, 2185.0)
+        other = core.LineSegment(1467.0, 2008.0, 2363.0, 3595.0)
+        picked = vp_line_detect.select_diverse_segments(
+            [lower, upper, other],
+            vanishing,
+            limit=3,
+            image_width=3000,
+            image_height=4000,
+        )
+        self.assertEqual(len(picked), 3)
+        self.assertTrue(
+            any(abs(segment.x1 - upper.x1) < 1.0 for segment in picked),
+            "upper parallel wall edge should not be pruned by tiny VP angle",
+        )
+
+    def test_ray_extension_adds_stacked_wall_edge(self) -> None:
+        """Across bundles keep a shorter upright that continues a picked ray."""
+        vanishing = np.array([755.0, 750.0, 1.0])
+        lower = core.LineSegment(632.0, 3995.0, 673.0, 2912.0)
+        upper = core.LineSegment(683.0, 2627.0, 699.0, 2185.0)
+        other = core.LineSegment(1467.0, 2008.0, 2363.0, 3595.0)
+        extended = vp_line_detect._add_ray_extensions(
+            [lower, other],
+            [lower, upper, other],
+            vanishing,
+            image_width=3000,
+            image_height=4000,
+            max_extra=2,
+        )
+        self.assertTrue(
+            any(abs(segment.x1 - upper.x1) < 1.0 for segment in extended),
+            "ray extension should recover the stacked wall edge",
+        )
 
     def test_debug_rgba_is_black_with_white_stroke(self) -> None:
         try:

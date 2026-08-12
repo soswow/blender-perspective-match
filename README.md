@@ -6,7 +6,7 @@ Native port of the manual workflow from Perspective Match Studio — no Electron
 
 ## Features
 
-- Multiple match cameras per scene, each with its own still and calibration
+- Multiple match cameras per scene, each with its own still and calibration (manual K copied onto new matches when the previous one used Manual FOV / YAML / 1-point)
 - 1-, 2-, or 3-point perspective; draw or auto-detect (3-point) axis-colored VP lines
 - Solve orientation and FOV from orthogonal VPs; manual FOV / ROS `camera_info` YAML import
 - Principal point from three VPs or manual offset; optional Fitzgibbon radial undistort

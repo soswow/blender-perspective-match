@@ -2049,17 +2049,28 @@ class PM_OT_new_match_camera(bpy.types.Operator):
     bl_label = "New Match Camera"
     bl_description = (
         "Create a new Perspective Match camera session and open the "
-        "reference image file dialog"
+        "reference image file dialog. If the previous match has Manual FOV "
+        "(or YAML / 1-point K), those intrinsics are copied"
     )
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context: bpy.types.Context) -> set[str]:
+        previous = properties.active_root(context)
+        previous_session = previous.pm_session if previous is not None else None
+        copied_manual_k = bool(
+            previous_session is not None
+            and (previous_session.lock_focal or previous_session.vp_mode == "1")
+            and float(previous_session.fx) > 1.0
+        )
         try:
             root = scene.create_match_camera(context)
         except Exception as error:
             self.report({"ERROR"}, str(error))
             return {"CANCELLED"}
-        self.report({"INFO"}, f"Created {root.name}")
+        if copied_manual_k:
+            self.report({"INFO"}, f"Created {root.name} (manual K copied)")
+        else:
+            self.report({"INFO"}, f"Created {root.name}")
         # Chain into Open Image so a new match always starts with a still.
         bpy.ops.perspective_match.load_image("INVOKE_DEFAULT")
         return {"FINISHED"}

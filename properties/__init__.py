@@ -471,7 +471,7 @@ class PMSession(bpy.types.PropertyGroup):
                 "3-point: any two axes (2+ lines each); the third is derived",
             ),
         ),
-        default="2",
+        default="3",
         update=_redraw,
     )
     active_axis: bpy.props.EnumProperty(
@@ -566,7 +566,7 @@ class PMSession(bpy.types.PropertyGroup):
             "Lower keeps only strong edges. "
             "Changing this clears the debug edge plate"
         ),
-        default=0.5,
+        default=0.7,
         min=0.0,
         max=1.0,
         soft_min=0.0,

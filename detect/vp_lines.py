@@ -1,8 +1,10 @@
 """Automatic vanishing-point line detection for 3-point perspective.
 
-Pipeline: LSD segments (downscaled) → RANSAC VP clusters → pick an orthogonal
-triad that is well separated in direction space → assign X / Y / Z. Writes the
-same ``PMLineSegment`` RNA the Draw / Edit tool uses (source-image pixels).
+Pipeline: LSD segments (downscaled) → RANSAC VP clusters (plus a dedicated
+near-horizontal pass for depth edges) → pick an orthogonal triad that is well
+separated in direction space → assign X / Y / Z with the convention green=left,
+red=right, blue=up/down. Writes the same ``PMLineSegment`` RNA the Draw /
+Edit tool uses (source-image pixels).
 """
 
 from __future__ import annotations
@@ -47,8 +49,24 @@ _FOCAL_MIN_FRAC = 0.25
 _FOCAL_MAX_FRAC = 4.0
 # Weight for pairwise VP angular separation when ranking triads (radians).
 _SEPARATION_WEIGHT = 6.0
-# Midpoint of the Edge Sensitivity slider (balanced defaults).
-_DEFAULT_SENSITIVITY = 0.5
+# Prefer triads that mix upright + flatter bundles (depth edges are often short).
+_UPRIGHT_SPREAD_WEIGHT = 25.0
+# Near-2VP still counts in 3-point: reward an X/Y VP that lands on the plate.
+_INSIDE_HORIZONTAL_VP_BONUS = 12.0
+# Orientation gates when turning a mixed RANSAC cluster into an axis bundle.
+# Depth/green: keep flat floor / moulding strokes (door rails are steeper ~0.35+).
+_DEPTH_AXIS_UPRIGHT_MAX = 0.32
+# Across/red: no image-orientation gate — X strokes can look nearly vertical while
+# still converging to the across VP (hallway wall edges). Residual filters outliers.
+_ACROSS_AXIS_UPRIGHT_MAX = 1.0
+_VERTICAL_AXIS_UPRIGHT_MIN = 0.55
+# Segments below this uprightness feed a dedicated depth-VP RANSAC pass.
+_HORIZONTAL_UPRIGHT_MAX = 0.35
+# Keep more across strokes when the cluster is rich (far wall edges help FOV).
+_MAX_SEGMENTS_ACROSS = 10
+_MAX_SEGMENTS_DEPTH = 8
+# Default Edge Sensitivity slider value (fallback when RNA is missing).
+_DEFAULT_SENSITIVITY = 0.7
 
 
 def _clamp01(value: float) -> float:
@@ -499,12 +517,22 @@ def _ransac_cluster(
         if candidate is None:
             continue
         # Skip hypotheses that sit too close to an already-accepted VP.
+        # Near-2VP / slight lean: two far VPs can be angularly close yet still
+        # distinct left-vs-right convergence points — keep those.
         if avoid:
-            nearest = min(
-                _angular_separation_radians(candidate, other, cx, cy, focal)
-                for other in avoid
-            )
-            if nearest < np.radians(12.0):
+            conflicts = False
+            for other in avoid:
+                if _vanishings_conflict(
+                    candidate,
+                    other,
+                    cx=cx,
+                    cy=cy,
+                    focal=focal,
+                    image_width=image_width,
+                ):
+                    conflicts = True
+                    break
+            if conflicts:
                 continue
         residuals = _residuals_px(lines, lengths, directions, candidate)
         inlier_indices = np.flatnonzero(residuals <= residual_px)
@@ -527,6 +555,284 @@ def _ransac_cluster(
     return best
 
 
+def _vp_image_xy(vanishing: np.ndarray) -> tuple[float, float]:
+    """Finite image coordinates for a VP; ±inf when the VP is at infinity."""
+    vanishing_h = _homogeneous_vp(vanishing)
+    if abs(float(vanishing_h[2])) < 1.0e-10:
+        direction = vanishing_h[:2]
+        norm = float(np.linalg.norm(direction))
+        if norm < 1.0e-12:
+            return 0.0, 1.0e9
+        # Encode direction as a point very far along the ray for L/R compares.
+        # Preserve sign(dx) so slight left vs right lean still sorts correctly.
+        scale = 1.0e9 / norm
+        return float(direction[0] * scale), float(direction[1] * scale)
+    return float(vanishing_h[0]), float(vanishing_h[1])
+
+
+def _vp_inside_image(
+    vanishing: np.ndarray,
+    image_width: float,
+    image_height: float,
+    *,
+    margin_frac: float = 0.0,
+) -> bool:
+    """True when the VP projects inside the plate (optional normalized margin)."""
+    vx, vy = _vp_image_xy(vanishing)
+    if not np.isfinite(vx) or not np.isfinite(vy):
+        return False
+    if abs(vx) >= 1.0e8 or abs(vy) >= 1.0e8:
+        return False
+    margin_x = margin_frac * image_width
+    margin_y = margin_frac * image_height
+    return (
+        -margin_x <= vx <= image_width + margin_x
+        and -margin_y <= vy <= image_height + margin_y
+    )
+
+
+def _cluster_horizontal_lean(cluster: VpCluster) -> float:
+    """Signed lean of a bundle: negative ⇒ toward left, positive ⇒ toward right.
+
+    Uses length-weighted mean of (VP.x − midpoint.x). Almost-parallel strokes
+    still pick a side from the slight convergence.
+    """
+    vx, _vy = _vp_image_xy(cluster.vanishing)
+    total = 0.0
+    weight = 0.0
+    for segment in cluster.segments:
+        length = core.segment_length(segment)
+        if length < 1.0e-9:
+            continue
+        mid_x = 0.5 * (segment.x1 + segment.x2)
+        total += length * (vx - mid_x)
+        weight += length
+    if weight < 1.0e-9:
+        return 0.0
+    return float(total / weight)
+
+
+def _horizontal_vp_sort_key(cluster: VpCluster) -> tuple[float, float]:
+    """Sort key left → right: VP x, then segment lean."""
+    vx, _vy = _vp_image_xy(cluster.vanishing)
+    return (float(vx), _cluster_horizontal_lean(cluster))
+
+
+def _vanishings_conflict(
+    first: np.ndarray,
+    second: np.ndarray,
+    *,
+    cx: float,
+    cy: float,
+    focal: float,
+    image_width: float,
+) -> bool:
+    """Whether two VP hypotheses are duplicates for RANSAC avoidance."""
+    angle = _angular_separation_radians(first, second, cx, cy, focal)
+    if angle >= np.radians(12.0):
+        return False
+    ax, _ay = _vp_image_xy(first)
+    bx, _by = _vp_image_xy(second)
+    # Opposite sides of the principal meridian ⇒ keep both (near-2VP / lean).
+    if (ax - cx) * (bx - cx) < 0.0 and abs(ax - bx) > 0.2 * max(image_width, 1.0):
+        return False
+    # Both far but clearly different convergence distances along x.
+    if abs(ax - bx) > max(image_width, 1.0) and angle >= np.radians(3.0):
+        return False
+    return True
+
+
+def _clusters_are_similar(
+    first: VpCluster,
+    second: VpCluster,
+    *,
+    cx: float,
+    cy: float,
+    focal: float,
+    min_angle_degrees: float = 8.0,
+) -> bool:
+    """True when two clusters likely describe the same vanishing direction."""
+    # Reuse conflict logic so left/right lean pairs are not collapsed.
+    if not _vanishings_conflict(
+        first.vanishing,
+        second.vanishing,
+        cx=cx,
+        cy=cy,
+        focal=focal,
+        image_width=max(abs(cx) * 2.0, 1.0),
+    ):
+        return False
+    angle = _angular_separation_radians(
+        first.vanishing, second.vanishing, cx, cy, focal
+    )
+    return angle < np.radians(min_angle_degrees)
+
+
+def _pick_vertical_index(
+    chosen: list[VpCluster],
+    image_width: float,
+    image_height: float,
+) -> int:
+    """Index of the upright (blue/Z) cluster within a triad.
+
+    Prefers high segment uprightness. When scores are close, avoid calling an
+    on-plate / near-center VP “vertical” — that is usually an X/Y depth VP in a
+    near-2VP view.
+    """
+    upright_scores = [_cluster_uprightness(item) for item in chosen]
+    best = float(max(upright_scores))
+    candidates = [
+        index
+        for index, score in enumerate(upright_scores)
+        if score >= best - 0.12
+    ]
+    cx = 0.5 * image_width
+    cy = 0.5 * image_height
+
+    def vertical_key(index: int) -> tuple[float, float, float]:
+        cluster = chosen[index]
+        vx, vy = _vp_image_xy(cluster.vanishing)
+        inside = _vp_inside_image(
+            cluster.vanishing, image_width, image_height, margin_frac=0.05
+        )
+        near_center = (
+            abs(vx - cx) < 0.3 * image_width and abs(vy - cy) < 0.3 * image_height
+        )
+        # Higher is better: uprightness, vertical distance of VP, not on-plate center.
+        return (
+            upright_scores[index],
+            abs(vy - cy) / max(image_height, 1.0),
+            0.0 if (inside and near_center) else 1.0,
+        )
+
+    return max(candidates, key=vertical_key)
+
+
+def _expand_depth_cluster_by_refit(
+    cluster: VpCluster,
+    candidates: list[LineSegment],
+    *,
+    upright_max: float,
+    accept_residual: float,
+    max_additions: int = 8,
+) -> VpCluster:
+    """Grow a depth VP by trying flat candidates with a provisional re-fit.
+
+    A stroke can disagree with the current VP yet fit well once added (and pull
+    the VP slightly). Static residual thresholds miss those; bad outliers still
+    fail the provisional-fit residual check.
+    """
+    members = list(cluster.segments)
+    member_keys = {
+        (round(segment.x1, 1), round(segment.y1, 1), round(segment.x2, 1), round(segment.y2, 1))
+        for segment in members
+    }
+    pool = [
+        segment
+        for segment in candidates
+        if _segment_uprightness(segment) <= upright_max
+        and (
+            round(segment.x1, 1),
+            round(segment.y1, 1),
+            round(segment.x2, 1),
+            round(segment.y2, 1),
+        )
+        not in member_keys
+    ]
+    vanishing = cluster.vanishing
+    for _ in range(max_additions):
+        best_segment: LineSegment | None = None
+        best_residual = 1.0e18
+        best_vanishing = vanishing
+        for segment in pool:
+            trial_members = members + [segment]
+            trial_vanishing = core.vanishing_point_from_lines(trial_members)
+            if trial_vanishing is None:
+                continue
+            trial_vanishing = _homogeneous_vp(trial_vanishing)
+            residual = segment_vp_residual(segment, trial_vanishing)
+            if residual > accept_residual:
+                continue
+            # Existing inliers must stay reasonable under the new VP.
+            existing_residuals = [
+                segment_vp_residual(member, trial_vanishing) for member in members
+            ]
+            if max(existing_residuals) > accept_residual * 1.5:
+                continue
+            if float(np.median(np.asarray(existing_residuals, dtype=np.float64))) > (
+                accept_residual * 0.75
+            ):
+                continue
+            if residual < best_residual:
+                best_residual = residual
+                best_segment = segment
+                best_vanishing = trial_vanishing
+        if best_segment is None:
+            break
+        members.append(best_segment)
+        vanishing = best_vanishing
+        pool = [segment for segment in pool if segment is not best_segment]
+        member_keys.add(
+            (
+                round(best_segment.x1, 1),
+                round(best_segment.y1, 1),
+                round(best_segment.x2, 1),
+                round(best_segment.y2, 1),
+            )
+        )
+    # Keep every accepted stroke — a tight inlier cull undoes noisy-but-useful
+    # LSD depth rails that only fit after the provisional re-fit.
+    refined_vanishing = core.vanishing_point_from_lines(members)
+    if refined_vanishing is None:
+        return cluster
+    support = float(sum(core.segment_length(segment) for segment in members))
+    return VpCluster(
+        vanishing=_homogeneous_vp(refined_vanishing),
+        segments=tuple(members),
+        support_length=support,
+    )
+
+
+def _ransac_horizontal_cluster(
+    segments: list[LineSegment],
+    *,
+    residual_px: float,
+    iterations: int,
+    rng: np.random.Generator,
+    image_width: float,
+    image_height: float,
+    avoid_vanishings: list[np.ndarray],
+) -> VpCluster | None:
+    """RANSAC restricted to flatter segments — recovers hallway depth VPs."""
+    horizontal = [
+        segment
+        for segment in segments
+        if _segment_uprightness(segment) <= _HORIZONTAL_UPRIGHT_MAX
+    ]
+    if len(horizontal) < 2:
+        return None
+    # Slightly looser residual: short moulding / baseboard hits are noisier.
+    cluster = _ransac_cluster(
+        horizontal,
+        residual_px=max(residual_px, 6.0),
+        iterations=max(iterations, 200),
+        rng=rng,
+        avoid_vanishings=avoid_vanishings,
+        image_width=image_width,
+        image_height=image_height,
+    )
+    if cluster is None:
+        return None
+    return _expand_depth_cluster_by_refit(
+        cluster,
+        horizontal,
+        upright_max=_HORIZONTAL_UPRIGHT_MAX,
+        # Far depth VPs + LSD angle noise → large px residuals; ~180+ still rejects
+        # wrong baseboards that do not belong on this VP.
+        accept_residual=max(residual_px * 12.0, 90.0),
+    )
+
+
 def cluster_vanishing_points(
     segments: list[LineSegment],
     *,
@@ -537,12 +843,19 @@ def cluster_vanishing_points(
     image_width: int | None = None,
     image_height: int | None = None,
 ) -> list[VpCluster]:
-    """Greedily peel RANSAC VP clusters from a segment list (longest support first)."""
+    """Greedily peel RANSAC VP clusters from a segment list (longest support first).
+
+    After the main peel, a dedicated pass over near-horizontal segments tries to
+    recover a depth VP that length-weighted upright RANSAC often starves out.
+    """
     remaining = list(segments)
     clusters: list[VpCluster] = []
     rng = np.random.default_rng(seed)
     width = float(image_width or 1.0)
     height = float(image_height or 1.0)
+    cx = 0.5 * width
+    cy = 0.5 * height
+    focal = max(width, 1.0)
     for _ in range(max_clusters):
         cluster = _ransac_cluster(
             remaining,
@@ -573,6 +886,57 @@ def cluster_vanishing_points(
         ]
         if len(remaining) < 2:
             break
+
+    # Depth / green edges are often shorter; force one horizontal VP candidate.
+    # Prefer leftovers so we do not re-steal members of a stronger upright cluster;
+    # fall back to all flat strokes if leftovers cannot form a cluster.
+    horizontal_cluster = _ransac_horizontal_cluster(
+        remaining,
+        residual_px=residual_px,
+        iterations=iterations,
+        rng=rng,
+        image_width=width,
+        image_height=height,
+        avoid_vanishings=[item.vanishing for item in clusters],
+    )
+    if horizontal_cluster is None:
+        horizontal_cluster = _ransac_horizontal_cluster(
+            segments,
+            residual_px=residual_px,
+            iterations=iterations,
+            rng=rng,
+            image_width=width,
+            image_height=height,
+            avoid_vanishings=[item.vanishing for item in clusters],
+        )
+    if horizontal_cluster is not None and _cluster_uprightness(horizontal_cluster) > 0.35:
+        # Door-rail families are mid-diagonal; do not promote them as depth/green.
+        horizontal_cluster = None
+    if horizontal_cluster is not None and not any(
+        _clusters_are_similar(
+            horizontal_cluster, existing, cx=cx, cy=cy, focal=focal
+        )
+        for existing in clusters
+    ):
+        if len(clusters) < max_clusters:
+            clusters.append(horizontal_cluster)
+        else:
+            # Prefer keeping a depth VP over yet another upright duplicate.
+            weakest_index = min(
+                range(len(clusters)),
+                key=lambda index: (
+                    # Drop low-support uprights first; never drop a flat cluster.
+                    0 if _cluster_uprightness(clusters[index]) > 0.6 else 1,
+                    clusters[index].support_length,
+                ),
+            )
+            if (
+                _cluster_uprightness(clusters[weakest_index]) > 0.6
+                and horizontal_cluster.support_length
+                >= 0.15 * clusters[weakest_index].support_length
+            ):
+                clusters[weakest_index] = horizontal_cluster
+
     clusters.sort(key=lambda item: item.support_length, reverse=True)
     return clusters
 
@@ -732,15 +1096,22 @@ def select_diverse_segments(
                 )
                 for chosen in picked
             )
-            if min_angle_to_picked < min_angle:
-                continue
-            # Prefer angularly far + still reasonably long.
+            # Prefer angularly far + still reasonably long. Do not hard-reject on
+            # angle: far finite VPs make parallel wall edges subtend ~0°, and those
+            # are still useful when midpoints are far enough (already gated above).
             length_weight = np.log1p(core.segment_length(candidate))
+            min_mid_to_picked = min(
+                _midpoint_distance(candidate, chosen) for chosen in picked
+            )
             score = float(min_angle_to_picked) * float(length_weight)
+            score += 0.5 * (min_mid_to_picked / diagonal)
+            # Soft preference: when angle is below the adaptive floor, require a
+            # clearly larger midpoint gap so we still favor spread over twins.
+            if min_angle_to_picked < min_angle:
+                score *= 0.35
             if score > best_score:
                 best_score = score
                 best_index = index
-
         if best_index is None:
             break
         picked.append(remaining.pop(best_index))
@@ -792,6 +1163,220 @@ def _focal_consistency_score(
     return float(len(values)) * 10.0 + mean / image_width - 5.0 * relative_std
 
 
+def _orientation_filtered_segments(
+    segments: tuple[LineSegment, ...] | list[LineSegment],
+    *,
+    role: str,
+) -> list[LineSegment]:
+    """Keep members whose image orientation matches the axis role.
+
+    ``depth`` (green/Y): flat floor / baseboard / moulding strokes.
+    ``across`` (red/X): keep cluster members — X edges may look nearly vertical.
+    ``vertical`` (blue/Z): upright strokes.
+    """
+    if role == "vertical":
+        filtered = [
+            segment
+            for segment in segments
+            if _segment_uprightness(segment) >= _VERTICAL_AXIS_UPRIGHT_MIN
+        ]
+        if len(filtered) >= 2:
+            return filtered
+        return sorted(segments, key=_segment_uprightness, reverse=True)
+
+    if role == "across":
+        # Trust the across VP cluster; residual consensus drops true outliers.
+        return list(segments)
+
+    max_upright = _DEPTH_AXIS_UPRIGHT_MAX
+    filtered = [
+        segment
+        for segment in segments
+        if _segment_uprightness(segment) <= max_upright
+    ]
+    if len(filtered) >= 2:
+        return filtered
+    soft = [
+        segment
+        for segment in segments
+        if _segment_uprightness(segment) <= 0.55
+    ]
+    if len(soft) >= 2:
+        return soft
+    return sorted(segments, key=_segment_uprightness)[: max(2, len(segments))]
+
+
+def _add_ray_extensions(
+    picked: list[LineSegment],
+    consensus: list[LineSegment],
+    vanishing: np.ndarray,
+    *,
+    image_width: int,
+    image_height: int,
+    max_extra: int = 2,
+    max_angle_degrees: float = 2.5,
+    min_mid_frac: float = 0.08,
+) -> list[LineSegment]:
+    """Append consensus strokes that continue a picked ray toward the VP.
+
+    Hallway across edges often split into stacked uprights that subtend ~0° at a
+    finite VP. Diversity may keep only the longest; the shorter continuation is
+    still a strong constraint once midpoints are far apart.
+    """
+    if max_extra <= 0 or not picked or not consensus:
+        return picked
+    diagonal = float(np.hypot(image_width, image_height))
+    min_mid = max(80.0, min_mid_frac * diagonal)
+    max_angle = float(np.radians(max_angle_degrees))
+    result = list(picked)
+    result_keys = {
+        (round(segment.x1, 1), round(segment.y1, 1), round(segment.x2, 1), round(segment.y2, 1))
+        for segment in result
+    }
+    added = 0
+    for chosen in picked:
+        if added >= max_extra:
+            break
+        best: LineSegment | None = None
+        best_mid = 0.0
+        for candidate in consensus:
+            key = (
+                round(candidate.x1, 1),
+                round(candidate.y1, 1),
+                round(candidate.x2, 1),
+                round(candidate.y2, 1),
+            )
+            if key in result_keys:
+                continue
+            angle = segment_pair_angle_radians(
+                candidate,
+                chosen,
+                vanishing,
+                image_width=image_width,
+                image_height=image_height,
+            )
+            mid = _midpoint_distance(candidate, chosen)
+            if angle > max_angle or mid < min_mid:
+                continue
+            if mid > best_mid:
+                best_mid = mid
+                best = candidate
+        if best is not None:
+            result.append(best)
+            result_keys.add(
+                (
+                    round(best.x1, 1),
+                    round(best.y1, 1),
+                    round(best.x2, 1),
+                    round(best.y2, 1),
+                )
+            )
+            added += 1
+    return result
+
+
+def _bundle_segments_for_axis(
+    cluster: VpCluster,
+    *,
+    role: str,
+    image_width: int,
+    image_height: int,
+    limit: int,
+) -> list[LineSegment]:
+    """Orientation-filter a cluster, refine its VP, drop outliers, pick diverse strokes."""
+    filtered = _orientation_filtered_segments(cluster.segments, role=role)
+    vanishing = cluster.vanishing
+    if len(filtered) >= 2:
+        refined = core.vanishing_point_from_lines(filtered)
+        if refined is not None:
+            vanishing = _homogeneous_vp(refined)
+    # Drop members that disagree with the refined VP.
+    # Depth: adaptive vs the core inliers so a near-miss (bad baseboard) drops
+    # once better rails have locked the VP.
+    if role == "depth" and filtered:
+        # Far depth VPs amplify tiny LSD angle noise into large px residuals.
+        # Keep mid-hall rails (~60–80px) while dropping wrong baseboards (~150px+).
+        residual_thr = 85.0
+    elif role == "across":
+        residual_thr = 6.0
+    else:
+        residual_thr = 8.0
+    consensus = [
+        segment
+        for segment in filtered
+        if segment_vp_residual(segment, vanishing) <= residual_thr
+    ]
+    if len(consensus) < 2:
+        consensus = filtered
+    if role == "depth" and len(consensus) <= _MAX_SEGMENTS_DEPTH:
+        return sorted(consensus, key=core.segment_length, reverse=True)[
+            :_MAX_SEGMENTS_DEPTH
+        ]
+    pick_limit = limit
+    sep_frac = _MIN_SEGMENT_SEPARATION_FRAC
+    if role == "across":
+        pick_limit = max(limit, _MAX_SEGMENTS_ACROSS)
+        # Wall edges toward an across VP are often near-parallel uprights —
+        # allow closer midpoints so far-left / far-right strokes both survive.
+        sep_frac = 0.035
+    picked = select_diverse_segments(
+        consensus,
+        vanishing,
+        limit=pick_limit,
+        image_width=image_width,
+        image_height=image_height,
+        min_separation_frac=sep_frac,
+    )
+    if role == "across":
+        picked = _add_ray_extensions(
+            picked,
+            consensus,
+            vanishing,
+            image_width=image_width,
+            image_height=image_height,
+            max_extra=2,
+        )
+    return picked
+
+
+def _label_horizontal_clusters(
+    first: VpCluster,
+    second: VpCluster,
+    *,
+    image_width: float,
+) -> tuple[VpCluster, VpCluster]:
+    """Return (red/X, green/Y) for two non-vertical clusters.
+
+    When the vanishing points are clearly separated in x, color follows:
+    green = left VP, red = right VP. Only when both VPs sit near the same
+    meridian does flatter→green break the tie.
+    """
+    ax, _ay = _vp_image_xy(first.vanishing)
+    bx, _by = _vp_image_xy(second.vanishing)
+    if abs(ax - bx) >= 0.12 * max(float(image_width), 1.0):
+        ordered = sorted([first, second], key=_horizontal_vp_sort_key)
+        return ordered[1], ordered[0]  # red=right, green=left
+    upright_a = _cluster_uprightness(first)
+    upright_b = _cluster_uprightness(second)
+    if abs(upright_a - upright_b) >= 0.12:
+        if upright_a < upright_b:
+            return second, first  # red=steeper, green=flatter
+        return first, second
+    ordered = sorted([first, second], key=_horizontal_vp_sort_key)
+    return ordered[1], ordered[0]  # red=right, green=left
+
+
+def _horizontal_bundle_role(cluster: VpCluster) -> str:
+    """Pick orientation filter from the cluster itself, not from its color.
+
+    Green is not always the flat family (depends which side depth sits on);
+    use the flat ``depth`` gate only when the strokes are actually flat.
+    """
+    if _cluster_uprightness(cluster) <= 0.45:
+        return "depth"
+    return "across"
+
+
 def assign_axes_three_point(
     clusters: list[VpCluster],
     image_width: int,
@@ -801,9 +1386,10 @@ def assign_axes_three_point(
 ) -> dict[AxisId, list[LineSegment]]:
     """Pick three clusters and label them x / y / z for 3-point mode.
 
-    ``y`` (UI Z / Blender up) is the most upright bundle. The remaining two try
-    both X↔Y(UI) permutations and keep the more orthogonally consistent labeling.
-    Triads whose vanishing points are far apart in direction space score higher.
+    ``y`` (UI Z / Blender up) is the most upright bundle. Of the remaining two,
+    ``z`` (UI Y / green) is the left-hand vanishing point and ``x`` (UI X / red)
+    is the right-hand one when the VPs are separable in x. Orientation filters
+    follow each cluster's uprightness (flat → depth gate, steeper → across).
     """
     if len(clusters) < 3:
         raise ValueError(
@@ -812,62 +1398,90 @@ def assign_axes_three_point(
 
     cx = 0.5 * float(image_width)
     cy = 0.5 * float(image_height)
+    width = float(image_width)
+    height = float(image_height)
     pool = clusters[: min(6, len(clusters))]
     best_score = -1.0e18
     best_bundles: dict[AxisId, list[LineSegment]] | None = None
 
     for triad in combinations(range(len(pool)), 3):
         chosen = [pool[index] for index in triad]
-        upright_index = int(np.argmax([_cluster_uprightness(item) for item in chosen]))
+        upright_scores = [_cluster_uprightness(item) for item in chosen]
+        upright_index = _pick_vertical_index(chosen, width, height)
         vertical = chosen[upright_index]
         horizontals = [chosen[i] for i in range(3) if i != upright_index]
+        across, depth = _label_horizontal_clusters(
+            horizontals[0], horizontals[1], image_width=width
+        )
         separation = _triad_separation_radians(
             [item.vanishing for item in chosen],
             cx,
             cy,
-            float(image_width),
+            width,
         )
+        upright_spread = float(max(upright_scores) - min(upright_scores))
 
-        for swap in (False, True):
-            first, second = horizontals if not swap else (horizontals[1], horizontals[0])
-            vanishing_points: dict[AxisId, np.ndarray] = {
-                "x": first.vanishing,
-                "z": second.vanishing,
-                "y": vertical.vanishing,
+        vanishing_points: dict[AxisId, np.ndarray] = {
+            "x": across.vanishing,
+            "z": depth.vanishing,
+            "y": vertical.vanishing,
+        }
+        score = _focal_consistency_score(
+            vanishing_points, cx, cy, width
+        )
+        # Soften empty-focal cases: near-2VP can still be the right triad.
+        if score <= -1.0e8:
+            score = -50.0
+        score += _SEPARATION_WEIGHT * separation
+        score += _UPRIGHT_SPREAD_WEIGHT * upright_spread
+        # Prefer a clearly flatter + steeper horizontal pair.
+        score += 20.0 * abs(
+            _cluster_uprightness(across) - _cluster_uprightness(depth)
+        )
+        # Keep valid near-2VP solves (one X/Y VP on the plate) competitive.
+        inside_horizontal = sum(
+            1
+            for item in (across, depth)
+            if _vp_inside_image(item.vanishing, width, height, margin_frac=0.02)
+        )
+        if inside_horizontal:
+            score += _INSIDE_HORIZONTAL_VP_BONUS * inside_horizontal
+        # Prefer triads with stronger total edge support as a tie-breaker.
+        score += 0.001 * (
+            across.support_length + depth.support_length + vertical.support_length
+        )
+        # Soft bonus when green is left of red (requested color convention).
+        ax, _ = _vp_image_xy(across.vanishing)
+        zx, _ = _vp_image_xy(depth.vanishing)
+        if zx < ax:
+            score += 8.0
+        if score > best_score:
+            best_score = score
+            red_role = _horizontal_bundle_role(across)
+            green_role = _horizontal_bundle_role(depth)
+            best_bundles = {
+                "x": _bundle_segments_for_axis(
+                    across,
+                    role=red_role,
+                    image_width=image_width,
+                    image_height=image_height,
+                    limit=max_segments_per_axis,
+                ),
+                "z": _bundle_segments_for_axis(
+                    depth,
+                    role=green_role,
+                    image_width=image_width,
+                    image_height=image_height,
+                    limit=max_segments_per_axis,
+                ),
+                "y": _bundle_segments_for_axis(
+                    vertical,
+                    role="vertical",
+                    image_width=image_width,
+                    image_height=image_height,
+                    limit=max_segments_per_axis,
+                ),
             }
-            score = _focal_consistency_score(
-                vanishing_points, cx, cy, float(image_width)
-            )
-            score += _SEPARATION_WEIGHT * separation
-            # Prefer triads with stronger total edge support as a tie-breaker.
-            score += 0.001 * (
-                first.support_length + second.support_length + vertical.support_length
-            )
-            if score > best_score:
-                best_score = score
-                best_bundles = {
-                    "x": select_diverse_segments(
-                        first.segments,
-                        first.vanishing,
-                        limit=max_segments_per_axis,
-                        image_width=image_width,
-                        image_height=image_height,
-                    ),
-                    "z": select_diverse_segments(
-                        second.segments,
-                        second.vanishing,
-                        limit=max_segments_per_axis,
-                        image_width=image_width,
-                        image_height=image_height,
-                    ),
-                    "y": select_diverse_segments(
-                        vertical.segments,
-                        vertical.vanishing,
-                        limit=max_segments_per_axis,
-                        image_width=image_width,
-                        image_height=image_height,
-                    ),
-                }
 
     if best_bundles is None:
         raise ValueError("Could not assign three orthogonal vanishing-point bundles")
