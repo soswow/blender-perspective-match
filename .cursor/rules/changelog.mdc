@@ -1,0 +1,14 @@
+---
+description: Keep CHANGELOG.md Unreleased in sync with user-visible work
+alwaysApply: true
+---
+
+# Changelog
+
+When a change is user-visible (matching, sync, UI, install, OpenCV extras, documented behavior), add a Keep a Changelog bullet under `## [Unreleased]` in `CHANGELOG.md` in the **same commit** as the code.
+
+Skip refactors, tests, comments, and internal-only edits. Do not bump `blender_manifest.toml` version or add a dated `## [x.y.z]` heading — releases do that.
+
+Prefer one short user-facing line. If the workflow changed, update `docs/user-guide.md` / `docs/sync.md` / `README.md` too.
+
+Full conventions: `AGENTS.md`.

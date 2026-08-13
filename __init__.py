@@ -26,6 +26,7 @@ _addon_keymaps: list[tuple] = []
 
 def _register_keymaps() -> None:
     """Ctrl+Alt+NumPad 1–9 → activate match slot (poll-gated to sidebar tab)."""
+    _unregister_keymaps()
     window_manager = bpy.context.window_manager
     if window_manager is None:
         return
@@ -47,8 +48,51 @@ def _register_keymaps() -> None:
 
 def _unregister_keymaps() -> None:
     for keymap, item in _addon_keymaps:
-        keymap.keymap_items.remove(item)
+        try:
+            keymap.keymap_items.remove(item)
+        except (ReferenceError, RuntimeError):
+            pass
     _addon_keymaps.clear()
+
+
+def _register_classes() -> None:
+    """Register RNA classes; skip types that are already live (re-enable / wheels)."""
+    for cls in CLASSES:
+        if getattr(cls, "is_registered", False):
+            continue
+        try:
+            bpy.utils.register_class(cls)
+        except ValueError as error:
+            # Same Python class still in RNA after a partial unregister.
+            if "already registered" not in str(error):
+                raise
+
+
+def _unregister_classes() -> None:
+    for cls in reversed(CLASSES):
+        try:
+            bpy.utils.unregister_class(cls)
+        except RuntimeError:
+            pass
+
+
+def _attach_pointer_properties() -> None:
+    if not hasattr(bpy.types.Scene, "match_perspective"):
+        bpy.types.Scene.match_perspective = bpy.props.PointerProperty(
+            type=properties.PMWorkspace,
+        )
+    if not hasattr(bpy.types.Object, "pm_session"):
+        bpy.types.Object.pm_session = bpy.props.PointerProperty(
+            type=properties.PMSession,
+        )
+
+
+def _detach_pointer_properties() -> None:
+    # Drop type properties before unregistering PropertyGroups they reference.
+    if hasattr(bpy.types.Object, "pm_session"):
+        del bpy.types.Object.pm_session
+    if hasattr(bpy.types.Scene, "match_perspective"):
+        del bpy.types.Scene.match_perspective
 
 
 @persistent
@@ -223,14 +267,8 @@ def _notify_optional_opencv() -> None:
 
 def register() -> None:
     """Register RNA classes, scene/object state, and the viewport overlay."""
-    for cls in CLASSES:
-        bpy.utils.register_class(cls)
-    bpy.types.Scene.match_perspective = bpy.props.PointerProperty(
-        type=properties.PMWorkspace,
-    )
-    bpy.types.Object.pm_session = bpy.props.PointerProperty(
-        type=properties.PMSession,
-    )
+    _register_classes()
+    _attach_pointer_properties()
     operators._active_interact = None
     if _reset_modal_state not in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.append(_reset_modal_state)
@@ -246,26 +284,35 @@ def register() -> None:
 
 def unregister() -> None:
     """Remove drawing, scene state, and all registered classes."""
-    icons.unregister()
-    _unregister_keymaps()
+    # Always reach class teardown: a failure in icons/keymaps used to leave
+    # PMLineSegment registered, so the next enable raised "already registered".
+    try:
+        icons.unregister()
+    except Exception:
+        traceback.print_exc()
+    try:
+        _unregister_keymaps()
+    except Exception:
+        traceback.print_exc()
     if _capture_framing_before_save in bpy.app.handlers.save_pre:
         bpy.app.handlers.save_pre.remove(_capture_framing_before_save)
     if _reset_modal_state in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.remove(_reset_modal_state)
     operators._active_interact = None
-    operators.request_lens_refine_cancel()
-    operators.request_vp_detect_cancel()
-    overlay.unregister_viewport_draw_handler()
-    if hasattr(bpy.types.Object, "pm_session"):
-        del bpy.types.Object.pm_session
-    if hasattr(bpy.types.Scene, "match_perspective"):
-        del bpy.types.Scene.match_perspective
-    # Be tolerant during development reloads if a class is already gone.
-    for cls in reversed(CLASSES):
-        try:
-            bpy.utils.unregister_class(cls)
-        except RuntimeError:
-            pass
+    try:
+        operators.request_lens_refine_cancel()
+        operators.request_vp_detect_cancel()
+    except Exception:
+        traceback.print_exc()
+    try:
+        overlay.unregister_viewport_draw_handler()
+    except Exception:
+        traceback.print_exc()
+    try:
+        _detach_pointer_properties()
+    except Exception:
+        traceback.print_exc()
+    _unregister_classes()
 
 
 if __name__ == "__main__":

@@ -63,6 +63,10 @@ def main() -> None:
         try:
             extension.register()
             registered = True
+            # Disable/re-enable and wheel extract can call register() twice.
+            extension.register()
+            extension.unregister()
+            extension.register()
             core = sys.modules["match_perspective.core"]
             distortion = sys.modules["match_perspective.scene.distortion"]
             properties = sys.modules["match_perspective.properties"]
