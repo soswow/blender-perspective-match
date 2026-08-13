@@ -20,7 +20,7 @@ Exit any running Draw / Pick Origin modal before reloading. After adding, renami
 
 Re-run `./scripts/link-dev.sh` if you later **Install from Disk** and Blender overwrites the symlink with a ZIP extract.
 
-ZIP builds (`./scripts/build-extension.sh`) are only needed for packaging or a clean install test.
+ZIP builds (`./scripts/build-extension.sh`) are only needed for a local packaging check. Published zips come from GitHub Actions on version tags.
 
 User-visible changes go in `CHANGELOG.md` under `## [Unreleased]` in the same commit (see `AGENTS.md`). Do not bump `blender_manifest.toml` until a release.
 
@@ -42,10 +42,10 @@ Compile-check Python:
 python3 -m compileall -q .
 ```
 
-Run unit tests (from the repo parent, so `match_perspective` imports resolve):
+Run unit tests (works even if the checkout directory is not named `match_perspective`):
 
 ```sh
-cd .. && python3 -m unittest discover -s match_perspective/tests -v
+./scripts/run-unittests.sh
 ```
 
 Run the Blender smoke test:
@@ -69,6 +69,16 @@ BLENDER_BIN="/path/to/blender" ./scripts/build-extension.sh
 
 The smoke test covers registration, multi-match create/switch/unload/prune, VP solve, camera projection, origin placement, project import, undistorted plates, and cleanup.
 
+## Release
+
+On a clean `main`, after Unreleased bullets exist:
+
+```sh
+./scripts/release.sh 0.3.7
+```
+
+That bumps `blender_manifest.toml`, moves `## [Unreleased]` into a dated section, commits, tags `v0.3.7`, and pushes. The **Release** GitHub Action (tag `v*`) fetches OpenCV wheels, installs a pinned Blender 5.1 Linux tarball, runs `extension validate` / `extension build --split-platforms`, and publishes the four zips on the GitHub Release. Do not attach zips by hand unless Actions failed.
+
 ## Project layout
 
 ```text
@@ -83,7 +93,8 @@ match_perspective/
                           # Overlay sizes/hit radii use preferences.system.ui_scale (Retina)
   icons/                  # PNG icon assets
   wheels/                 # OpenCV wheels (gitignored; ./scripts/fetch-wheels.sh)
-  scripts/                # build / link-dev / fetch-wheels / validate_addon
+  scripts/                # build / link-dev / fetch-wheels / release / tests
+  .github/workflows/      # Tag-only zip build + GitHub Release
   tests/                  # Pure geometry / sync / detect regressions
   tools/                  # Standalone helpers (AprilTag sheets, FOV plotter)
   docs/                   # User guide, sync, development, TODOs

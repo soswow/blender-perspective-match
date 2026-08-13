@@ -22,11 +22,7 @@ No manual `pip install` into Blender’s Python. Release zips and `./scripts/fet
 
 ## Installation
 
-```sh
-./scripts/build-extension.sh
-```
-
-In Blender: **Edit → Preferences → Get Extensions → Install from Disk**, select the generated `.zip`, and enable **Perspective Match**.
+Download the zip for your OS from [Releases](https://github.com/soswow/blender-perspective-match/releases). In Blender: **Edit → Preferences → Get Extensions → Install from Disk**, then enable **Perspective Match**.
 
 For live editing against this checkout, see [docs/development.md](docs/development.md).
 

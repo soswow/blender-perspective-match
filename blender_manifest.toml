@@ -34,10 +34,14 @@ files = "Import images and write view / undistorted PNG plates"
 paths_exclude_pattern = [
   "__pycache__/",
   "/.git/",
+  "/.github/",
+  "/.cursor/",
   "/*.zip",
   "/scripts/",
   "/tests/",
   "/docs/",
   "/wheels/README.md",
   "/tools/",
+  "/AGENTS.md",
+  "/CHANGELOG.md",
 ]
