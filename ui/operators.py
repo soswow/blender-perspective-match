@@ -2230,9 +2230,16 @@ class PM_OT_reload(bpy.types.Operator):
     bl_label = "Reload Perspective Match"
     bl_description = (
         "Reload this extension from disk after the current UI event finishes "
-        "(safer than System → Reload Scripts for panel/operator edits)"
+        "(safer than System → Reload Scripts for panel/operator edits). "
+        "Only available when the extension is a linked git checkout."
     )
     bl_options = {"REGISTER"}
+
+    @classmethod
+    def poll(cls, _context: bpy.types.Context) -> bool:
+        from .. import is_dev_install
+
+        return is_dev_install()
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         # Never unregister from inside this operator — that can SIGSEGV Blender.

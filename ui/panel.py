@@ -187,8 +187,11 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             layout.label(text=settings.status, icon="INFO")
         elif workspace.sync_status:
             layout.label(text=workspace.sync_status, icon="INFO")
-        layout.separator()
-        layout.operator("perspective_match.reload", icon="FILE_REFRESH")
+        from .. import is_dev_install
+
+        if is_dev_install():
+            layout.separator()
+            layout.operator("perspective_match.reload", icon="FILE_REFRESH")
 
     def _draw_active_match(self, layout, context, workspace, settings) -> None:
         _image_header, image = _section(

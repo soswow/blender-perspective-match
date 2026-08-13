@@ -24,6 +24,16 @@ _reload_pending = False
 _addon_keymaps: list[tuple] = []
 
 
+def is_dev_install() -> bool:
+    """True when this package is a git checkout (``./scripts/link-dev.sh``), not a zip.
+
+    Release builds exclude ``/scripts/`` (see ``blender_manifest.toml``), so the
+    sidebar reload button stays hidden for Install from Disk users.
+    """
+    root = Path(__file__).resolve().parent
+    return (root / "scripts" / "link-dev.sh").is_file()
+
+
 def _register_keymaps() -> None:
     """Ctrl+Alt+NumPad 1–9 → activate match slot (poll-gated to sidebar tab)."""
     _unregister_keymaps()
