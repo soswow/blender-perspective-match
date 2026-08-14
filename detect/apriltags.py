@@ -95,12 +95,51 @@ def _gray_from_path(cv2_module, image_path: str) -> np.ndarray | None:
     return cv2_module.cvtColor(bgr, cv2_module.COLOR_BGR2GRAY)
 
 
+def _hdr_highlight_cap(rgb: np.ndarray) -> float | None:
+    """Return the p99.5 luminance scale cap for HDR plates; None when LDR.
+
+    Hard-clipping HDR linear data at 1.0 flattens everything brighter than
+    diffuse white to 255, destroying highlight edges before detection. Scaling
+    by a high luminance percentile keeps that contrast visible while a few hot
+    pixels (sun, practicals) cannot crush the rest of the plate into darkness.
+    Falls back to the peak when the percentile is degenerate (mostly-black
+    plate with rare hot pixels).
+    """
+    if rgb.size == 0:
+        return None
+    peak = float(np.max(rgb))
+    if peak <= 1.0:
+        return None
+    lum = (
+        0.2126 * rgb[:, :, 0] + 0.7152 * rgb[:, :, 1] + 0.0722 * rgb[:, :, 2]
+    )
+    cap = float(np.percentile(lum, 99.5))
+    if not np.isfinite(cap) or cap <= 1.0e-6:
+        cap = peak
+    return cap
+
+
+def _linear_rgb_to_u8(rgb: np.ndarray) -> np.ndarray:
+    """Quantize float RGB to uint8 for detection.
+
+    LDR plates (peak <= 1.0) use the legacy direct mapping unchanged. HDR
+    plates are percentile-normalized then gamma-encoded (~sRGB-like) so the
+    detector sees contrast comparable to a display-referred still: highlight
+    edges survive and mid-tones keep usable separation.
+    """
+    cap = _hdr_highlight_cap(rgb)
+    if cap is None:
+        return np.clip(np.round(rgb * 255.0), 0, 255).astype(np.uint8)
+    scaled = np.clip(rgb.astype(np.float64) / cap, 0.0, 1.0) ** (1.0 / 2.2)
+    return np.round(scaled * 255.0).astype(np.uint8)
+
+
 def _gray_from_blender_image(cv2_module, image) -> np.ndarray:
     """Convert a Blender Image to grayscale uint8 (top-left origin)."""
     from ..scene import distortion
 
     rgba = distortion._image_pixels_top_left(image)
-    rgb_u8 = np.clip(np.round(rgba[:, :, :3] * 255.0), 0, 255).astype(np.uint8)
+    rgb_u8 = _linear_rgb_to_u8(rgba[:, :, :3])
     return cv2_module.cvtColor(rgb_u8, cv2_module.COLOR_RGB2GRAY)
 
 

@@ -215,6 +215,13 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
                     emboss=False,
                 )
                 label_op.path = settings.image_path
+                # Native dropdown bound to the image datablock; items come from
+                # the active OCIO config and the choice is saved in the .blend.
+                image.prop(
+                    settings.image.colorspace_settings,
+                    "name",
+                    text="Colorspace",
+                )
             row = image.row(align=True)
             row.operator(
                 "perspective_match.load_image", text="Open Image", icon="FILE_IMAGE"
