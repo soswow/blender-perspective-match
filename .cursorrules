@@ -1,0 +1,6 @@
+When generating a Git commit message for this repository:
+
+- One short subject line, imperative mood, under ~60 characters.
+- Do not add a body unless the change is non-obvious; never restate the diff line by line.
+- Do not mention updates to CHANGELOG.md, README.md, or other docs unless the commit is docs-only.
+- Describe the actual code/behavior change, not accompanying changelog or documentation edits.
