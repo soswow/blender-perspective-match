@@ -127,8 +127,8 @@ def detect_apriltags_25h9(gray: np.ndarray) -> list[DetectedTag]:
     # Stock defaults drop fairly small tags on high-res stills (perimeter ≥ 3%
     # of max(W,H), canonical side ≥ 32 px). Halve both so mid-distance printed
     # markers still decode; no UI knobs yet.
-    parameters.minMarkerPerimeterRate = 0.015
-    parameters.minSideLengthCanonicalImg = 16
+    parameters.minMarkerPerimeterRate = 0.01
+    parameters.minSideLengthCanonicalImg = 8
     detector = cv2.aruco.ArucoDetector(dictionary, parameters)
     corners_list, ids, _rejected = detector.detectMarkers(gray)
     if ids is None or len(ids) == 0:

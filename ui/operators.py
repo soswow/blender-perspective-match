@@ -2207,6 +2207,8 @@ class PM_OT_rename_match(bpy.types.Operator):
 
     def draw(self, _context: bpy.types.Context) -> None:
         layout = self.layout
+        # Focus the name field and select its text so the next keystroke replaces it.
+        layout.activate_init = True
         layout.prop(self, "new_name")
         layout.label(text="Saved as PM_<name>_Origin", icon="INFO")
 

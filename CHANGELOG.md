@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Reload Perspective Match only appears when the extension is a linked git checkout, not a zip install
+- Rename Match focuses the name field with the current name selected, so typing replaces it
+- AprilTag detection: increase sensitivity by 2x
 
 ## [0.3.7] - 2026-08-13
 
