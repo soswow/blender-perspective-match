@@ -9,12 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Import YAML applies ROS `plumb_bob` / `rational_polynomial` distortion coefficients to undistort the still
+- Colorspace dropdown under Reference Image, bound to the loaded still (items come from the active OCIO config).
 
 ### Changed
 - Lock Rotation allows 90° world-axis jumps (including an X/Y swap) instead of forcing identity
 - Reload Perspective Match only appears when the extension is a linked git checkout, not a zip install
 - Rename Match focuses the name field with the current name selected, so typing replaces it
 - AprilTag detection: increase sensitivity by 2x
+
+### Fixed
+- HDR / EXR stills (e.g. ACEScg): Detect VP Lines and Find AprilTags no longer hard-clip highlights at 1.0 when reading Blender's pixel buffer (the fallback used when OpenCV cannot read the file, e.g. EXR). Float plates are percentile-normalized and gamma-encoded before quantization, so highlight edges survive detection.
 
 ## [0.3.7] - 2026-08-13
 

@@ -25,7 +25,7 @@ Each match remembers its last camera-view zoom and pan. Switching matches (or Un
 
 ## Load a reference
 
-With a match active, choose **Open Image** (or create a match with **New Match Camera**, which opens the same dialog). The still binds to the **active** match only. If no match is active, Open Image creates one first. Hover the filename under Reference Image to see the full path.
+With a match active, choose **Open Image** (or create a match with **New Match Camera**, which opens the same dialog). The still binds to the **active** match only. If no match is active, Open Image creates one first. Hover the filename under Reference Image to see the full path. The **Colorspace** dropdown under the filename sets the still's input colorspace (choices come from the active OCIO config; saved with the `.blend`).
 
 After bind, the hierarchy is renamed from `PM_Match_###` to `PM_<image stem>` when that name is free. The camera becomes the scene camera, the still is attached with **Stretch** frame mapping, and render dimensions match the image.
 

@@ -31,6 +31,52 @@ apriltag_detect = importlib.util.module_from_spec(_spec)
 sys.modules["match_perspective.detect.apriltags"] = apriltag_detect
 _spec.loader.exec_module(apriltag_detect)
 
+import numpy as np
+
+
+class HdrQuantizeTests(unittest.TestCase):
+    """HDR float plates must keep highlight edges through uint8 quantization."""
+
+    def test_ldr_passthrough_unchanged(self) -> None:
+        rgb = np.array([[[0.0, 0.25, 0.5], [0.75, 1.0, 0.1]]], dtype=np.float32)
+        result = apriltag_detect._linear_rgb_to_u8(rgb)
+        expected = np.clip(np.round(rgb * 255.0), 0, 255).astype(np.uint8)
+        np.testing.assert_array_equal(result, expected)
+
+    def test_hdr_highlight_edge_survives(self) -> None:
+        # Window at 3.0 next to sky at 9.0: hard clip at 1.0 flattens both
+        # to 255; percentile scaling must keep them distinct.
+        rgb = np.zeros((4, 8, 3), dtype=np.float32)
+        rgb[:, :4] = 3.0
+        rgb[:, 4:] = 9.0
+        result = apriltag_detect._linear_rgb_to_u8(rgb)
+        left = int(result[0, 0, 0])
+        right = int(result[0, 7, 0])
+        self.assertLess(left, right)
+        self.assertLessEqual(right, 255)
+
+    def test_hdr_hot_pixels_do_not_crush_plate(self) -> None:
+        # A small hot region (0.25% of pixels — a practical / the sun) must
+        # not set the scale; p99.5 only excludes outliers below 0.5% of pixels.
+        rgb = np.full((100, 100, 3), 0.5, dtype=np.float32)
+        rgb[:5, :5] = 1000.0
+        result = apriltag_detect._linear_rgb_to_u8(rgb)
+        # Mid-grey 0.5 stays well above the noise floor.
+        self.assertGreater(int(result[50, 50, 0]), 60)
+
+    def test_empty_and_zero_plates_are_safe(self) -> None:
+        empty = np.zeros((0, 0, 3), dtype=np.float32)
+        self.assertIsNone(apriltag_detect._hdr_highlight_cap(empty))
+        black = np.zeros((4, 4, 3), dtype=np.float32)
+        result = apriltag_detect._linear_rgb_to_u8(black)
+        self.assertEqual(int(result.max()), 0)
+
+    def test_negative_values_clip_to_black(self) -> None:
+        # ACEScg can carry negative values for saturated colors.
+        rgb = np.array([[[-0.5, 0.5, 2.0]]], dtype=np.float32)
+        result = apriltag_detect._linear_rgb_to_u8(rgb)
+        self.assertEqual(int(result[0, 0, 0]), 0)
+
 
 class AprilTagNamingTests(unittest.TestCase):
     def test_landmark_name_zero_padded(self) -> None:
