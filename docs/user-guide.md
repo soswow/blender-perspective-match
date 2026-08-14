@@ -58,7 +58,7 @@ Then draw lines (or auto-detect in 3-point mode):
 
 While the tool is active, left-clicks on the visible plate belong to Perspective Match. Sidebar / toolbar / header clicks still go to Blender UI. Exit with **Esc**. Middle mouse and the wheel retain normal Blender navigation. Overlay guides only draw in **camera view** of the active match.
 
-The camera refines whenever enough required lines exist. **Auto from VPs** allows orthogonal VP pairs to solve FOV. Enable **Manual FOV**, set the horizontal angle, and apply it to lock focal length while continuing to solve orientation. **Import YAML** loads a ROS `camera_info` file: locks Manual FOV from `fx`, sets the principal point from `cx`/`cy`, applies optional `fitzgibbon_lambda`, and scales K if the YAML resolution differs from the loaded still. Brown–Conrady / `plumb_bob` coefficients are skipped.
+The camera refines whenever enough required lines exist. **Auto from VPs** allows orthogonal VP pairs to solve FOV. Enable **Manual FOV**, set the horizontal angle, and apply it to lock focal length while continuing to solve orientation. **Import YAML** loads a ROS `camera_info` file: locks Manual FOV from `fx`, sets the principal point from `cx`/`cy`, and scales K if the YAML resolution differs from the loaded still. OpenCV `plumb_bob` / `rational_polynomial` coefficients (`k1, k2, p1, p2, k3[, k4, k5, k6]`) undistort the plate when present. Optional `fitzgibbon_lambda` is used only when those coefficients are zero. Fisheye / `equidistant` models are skipped. Distortion coefficients are not estimated from VP lines.
 
 **Manual PP Offset** (Camera section): drag the principal point on the plate, or click the pencil icon to type **Offset X / Offset Y** in pixels from image center. A **violet** crosshair marks it whenever it is off-center. **Reset Camera** recenters PP.
 
@@ -70,7 +70,7 @@ Build your own floor/wall geometry in Blender once the camera is matched—the e
 
 ## Lens distortion
 
-Press **Estimate Distortion** in the **Camera** section. With a successful VP solve and ≥3 concurrent segments on one axis, the solver fits Fitzgibbon λ once and generates/switches to an undistorted plate. Editing VP lines afterward keeps that λ; press the button again to re-fit. Works with **Manual FOV**. **Original Plate** clears λ, re-solves, and restores the source still. Plate file paths are logged to the console, not the sidebar status line.
+**Import YAML** with a ROS `camera_info` file that includes OpenCV `plumb_bob` (or `rational_polynomial`) coefficients applies that model and generates/switches to an undistorted plate. **Estimate Distortion** is separate: with a successful VP solve and ≥3 concurrent segments on one axis, it fits Fitzgibbon λ once (replacing imported D) and shows an undistorted plate. Editing VP lines afterward keeps the current model; press the button again to re-fit λ. Works with **Manual FOV**. **Original Plate** clears distortion, re-solves, and restores the source still. Plate file paths are logged to the console, not the sidebar status line.
 
 View lighting applies display-only exposure/contrast to a sibling `*-pm-view.png` plate (undistorted uses the same lit image).
 
@@ -80,6 +80,6 @@ View lighting applies display-only exposure/contrast to a sibling `*-pm-view.png
 - Automatic VP lines are 3-point only; 1- and 2-point still need hand-drawn strokes. Detection can mis-label axes on ambiguous stills.
 - Assumes square pixels and zero skew.
 - 1-point perspective cannot determine focal length from VP geometry alone.
-- Distortion uses one radial division parameter, not Blender's full tracking-camera lens models.
+- Distortion: imported OpenCV Brown–Conrady from ROS YAML, or one Fitzgibbon radial parameter estimated from VP lines — not Blender's full tracking-camera lens models.
 - Cropped, anamorphic, curved, or CGI plates can require manual FOV and principal-point judgment.
 - Sync absolute baseline vs the metric anchor world needs Known 3D, On Ground, or the depth heuristic. See [sync.md](sync.md).

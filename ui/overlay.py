@@ -309,7 +309,11 @@ def _ideal_screen_chains(
     first = np.asarray(point_a, dtype=np.float64)
     second = np.asarray(point_b, dtype=np.float64)
     # Straight in ideal space when λ≈0 — two samples are enough.
-    sample_count = 2 if abs(settings.division_lambda) < 1.0e-12 else max(3, samples)
+    sample_count = 2 if not core.has_lens_distortion(
+        settings.division_lambda,
+        tuple(settings.brown_conrady),
+        threshold=1.0e-12,
+    ) else max(3, samples)
     chains: list[list[Vector]] = []
     current: list[Vector] = []
     previous = None
@@ -418,8 +422,12 @@ def _draw_ideal_segment(
 
 
 def _guide_sample_count(settings) -> int:
-    """Dense enough for curved λ≠0 guides; cheap when the plate is linear."""
-    if abs(settings.division_lambda) < 1.0e-12:
+    """Dense enough for curved distorted guides; cheap when the plate is linear."""
+    if not core.has_lens_distortion(
+        settings.division_lambda,
+        tuple(settings.brown_conrady),
+        threshold=1.0e-12,
+    ):
         return 2
     return 24
 
@@ -671,6 +679,7 @@ def _vp_overlay_cache_key(settings) -> tuple:
         float(settings.cx),
         float(settings.cy),
         float(settings.division_lambda),
+        tuple(float(value) for value in settings.brown_conrady),
         int(settings.image_width),
         int(settings.image_height),
         int(len(settings.lines)),
@@ -703,6 +712,7 @@ def _cached_vp_overlay_solve(settings) -> tuple[dict, dict, tuple]:
         line_bundles,
         calibration.intrinsics,
         calibration.division_lambda,
+        calibration.brown_conrady,
     )
     vanishing_points = core.collect_vanishing_points(ideal_line_bundles)
     overlay_vanishing_points = core.complete_vanishing_points(
@@ -718,6 +728,7 @@ def _cached_vp_overlay_solve(settings) -> tuple[dict, dict, tuple]:
             calibration.intrinsics.cx,
             calibration.intrinsics.cy,
             calibration.division_lambda,
+            calibration.brown_conrady,
         )
         ideal_endpoints.append((line.axis, endpoints[0].copy(), endpoints[1].copy()))
     _vp_solve_cache["key"] = key
@@ -1117,6 +1128,7 @@ def _draw_preview(context: bpy.types.Context, settings) -> None:
         calibration.intrinsics.cx,
         calibration.intrinsics.cy,
         calibration.division_lambda,
+        calibration.brown_conrady,
     )
     _draw_ideal_segment(
         context,

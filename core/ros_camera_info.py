@@ -30,6 +30,22 @@ class RosCameraInfo:
     fitzgibbon_lambda: float | None = None
 
 
+_BROWN_MODELS = {"", "plumb_bob", "rational_polynomial"}
+_UNSUPPORTED_DISTORTION_MODELS = {
+    "equidistant",
+    "kannala_brandt",
+    "fisheye",
+}
+
+
+@dataclass(frozen=True)
+class ImportedDistortion:
+    """How ROS ``distortion_coefficients`` should be applied on import."""
+
+    brown_conrady: tuple[float, ...]
+    skip_reason: str = ""
+
+
 _KEY_VALUE = re.compile(r"^(\s*)([A-Za-z_][\w]*)\s*:\s*(.*?)\s*$")
 
 
@@ -181,3 +197,33 @@ def scale_intrinsics_to_image(
         info.cy * scale_y,
         True,
     )
+
+
+def interpret_distortion(info: RosCameraInfo) -> ImportedDistortion:
+    """Pick OpenCV Brown–Conrady D from a ROS camera_info, or a skip reason.
+
+    Coefficients live in the normalized plane, so they are not scaled with
+    image size. Fitzgibbon λ is handled separately by the importer.
+    """
+    coefficients = info.distortion_coefficients
+    if not coefficients or not any(abs(float(value)) > 1.0e-12 for value in coefficients):
+        return ImportedDistortion((), "")
+
+    model = str(info.distortion_model or "").strip().lower().replace("-", "_")
+    if model in _UNSUPPORTED_DISTORTION_MODELS:
+        return ImportedDistortion((), f"{info.distortion_model} D skipped")
+
+    extra = coefficients[8:]
+    extra_skip = ""
+    if extra and any(abs(float(value)) > 1.0e-12 for value in extra):
+        extra_skip = "thin-prism/tilt D skipped"
+
+    if model not in _BROWN_MODELS and not (4 <= len(coefficients) <= 8):
+        return ImportedDistortion((), f"{info.distortion_model} D skipped")
+    if len(coefficients) < 4:
+        return ImportedDistortion((), "D skipped (need ≥4 coefficients)")
+
+    values = [float(item) for item in coefficients[:8]]
+    while len(values) < 8:
+        values.append(0.0)
+    return ImportedDistortion(tuple(values), extra_skip)

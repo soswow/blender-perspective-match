@@ -42,6 +42,100 @@ class CoreGeometryTests(unittest.TestCase):
         observed = core.distort_points(ideal, 800.0, 800.0, 640.0, 360.0, 0.12)
         self.assertTrue(np.allclose(points, observed, atol=0.05))
 
+    def test_brown_conrady_round_trip(self) -> None:
+        # From ROS plumb_bob YAML (k1, k2, p1, p2, k3).
+        brown = (-0.0014045245854740534, 0.0004527363803767526, 0.0, 0.0, 0.0)
+        points = np.array(
+            ((100.0, 80.0), (1505.0, 2004.0), (2900.0, 3900.0), (200.0, 3500.0))
+        )
+        fx, fy, cx, cy = 1587.08, 1593.07, 1505.33, 2003.91
+        ideal = core.undistort_points(points, fx, fy, cx, cy, 0.0, brown)
+        observed = core.distort_points(ideal, fx, fy, cx, cy, 0.0, brown)
+        self.assertTrue(np.allclose(points, observed, atol=0.05))
+
+    def test_brown_conrady_with_tangential_round_trip(self) -> None:
+        brown = (0.04, -0.12, 0.0015, -0.0008, 0.18)
+        points = np.array(((80.0, 60.0), (640.0, 360.0), (1200.0, 700.0)))
+        ideal = core.undistort_points(points, 900.0, 900.0, 640.0, 360.0, 0.0, brown)
+        observed = core.distort_points(ideal, 900.0, 900.0, 640.0, 360.0, 0.0, brown)
+        self.assertTrue(np.allclose(points, observed, atol=0.05))
+
+    def test_rational_polynomial_round_trip(self) -> None:
+        brown = (0.05, -0.02, 0.001, -0.0005, 0.01, 0.002, -0.001, 0.0003)
+        points = np.array(((80.0, 60.0), (640.0, 360.0), (1200.0, 700.0)))
+        ideal = core.undistort_points(points, 900.0, 900.0, 640.0, 360.0, 0.0, brown)
+        observed = core.distort_points(ideal, 900.0, 900.0, 640.0, 360.0, 0.0, brown)
+        self.assertTrue(np.allclose(points, observed, atol=0.05))
+
+    def test_brown_conrady_strong_lens_round_trip(self) -> None:
+        # Vintage Helios-style plumb_bob with large k2/k3.
+        brown = (
+            0.03949001840032624,
+            -0.8131490107263357,
+            -0.0017174455546758443,
+            -0.00017175299763625847,
+            6.289058039435576,
+        )
+        points = np.array(
+            ((200.0, 150.0), (1727.0, 2675.0), (3000.0, 4800.0), (400.0, 5000.0))
+        )
+        fx, fy, cx, cy = 9641.58, 9683.23, 1726.89, 2675.15
+        ideal = core.undistort_points(points, fx, fy, cx, cy, 0.0, brown)
+        observed = core.distort_points(ideal, fx, fy, cx, cy, 0.0, brown)
+        self.assertTrue(np.allclose(points, observed, atol=0.2))
+
+    def test_brown_conrady_wins_over_lambda(self) -> None:
+        points = np.array(((200.0, 150.0), (900.0, 500.0)))
+        brown = (0.05, 0.0, 0.0, 0.0, 0.0)
+        mixed = core.undistort_points(points, 800.0, 800.0, 640.0, 360.0, 0.12, brown)
+        brown_only = core.undistort_points(
+            points, 800.0, 800.0, 640.0, 360.0, 0.0, brown
+        )
+        lambda_only = core.undistort_points(points, 800.0, 800.0, 640.0, 360.0, 0.12)
+        self.assertTrue(np.allclose(mixed, brown_only, atol=1.0e-9))
+        self.assertFalse(np.allclose(mixed, lambda_only, atol=0.5))
+
+    def test_brown_conrady_matches_opencv_when_present(self) -> None:
+        try:
+            import cv2
+        except ImportError:
+            self.skipTest("OpenCV not installed")
+        brown = (-0.0014045245854740534, 0.0004527363803767526, 0.001, -0.0005, 0.0)
+        fx, fy, cx, cy = 1587.08, 1593.07, 1505.33, 2003.91
+        points = np.array(
+            ((120.0, 90.0), (1505.0, 2004.0), (2800.0, 3700.0)),
+            dtype=np.float64,
+        )
+        ours = core.undistort_points(points, fx, fy, cx, cy, 0.0, brown)
+        camera_matrix = np.array(
+            ((fx, 0.0, cx), (0.0, fy, cy), (0.0, 0.0, 1.0)),
+            dtype=np.float64,
+        )
+        dist = np.array(brown, dtype=np.float64)
+        opencv = cv2.undistortPoints(
+            points.reshape(-1, 1, 2).astype(np.float32),
+            camera_matrix,
+            dist,
+            P=camera_matrix,
+        ).reshape(-1, 2)
+        self.assertTrue(np.allclose(ours, opencv, atol=0.05))
+        xyz = np.column_stack(
+            (
+                (points[:, 0] - cx) / fx,
+                (points[:, 1] - cy) / fy,
+                np.ones(len(points)),
+            )
+        )
+        projected, _jacobian = cv2.projectPoints(
+            xyz.astype(np.float64),
+            np.zeros(3),
+            np.zeros(3),
+            camera_matrix,
+            dist,
+        )
+        distorted = core.distort_points(points, fx, fy, cx, cy, 0.0, brown)
+        self.assertTrue(np.allclose(distorted, projected.reshape(-1, 2), atol=0.05))
+
     def test_three_vp_principal_point(self) -> None:
         points = {
             "x": np.array((5.0, 5.0, 1.0)),

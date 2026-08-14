@@ -519,6 +519,12 @@ class PMSession(bpy.types.PropertyGroup):
         precision=5,
     )
     lambda_saturated: bpy.props.BoolProperty(default=False, options={"HIDDEN"})
+    # OpenCV D: k1, k2, p1, p2, k3, k4, k5, k6 (imported; not estimated from VPs).
+    brown_conrady: bpy.props.FloatVectorProperty(
+        size=8,
+        default=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+        options={"HIDDEN"},
+    )
 
     origin_is_set: bpy.props.BoolProperty(default=False, options={"HIDDEN"})
     origin_image: bpy.props.FloatVectorProperty(size=2, default=(0.0, 0.0))

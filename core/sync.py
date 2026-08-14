@@ -222,6 +222,7 @@ def project_private_point(
         intrinsics.cx,
         intrinsics.cy,
         calibration.division_lambda,
+        calibration.brown_conrady,
     )[0]
     return distorted
 
@@ -259,6 +260,7 @@ def _project_shared_points(
         intrinsics.cx,
         intrinsics.cy,
         calibration.division_lambda,
+        calibration.brown_conrady,
     )
     return projected, valid
 
@@ -276,6 +278,7 @@ def camera_ray_private(
         calibration.intrinsics.cx,
         calibration.intrinsics.cy,
         calibration.division_lambda,
+        calibration.brown_conrady,
     )[0]
     direction_camera = core.pixel_ray(
         float(ideal[0]),
@@ -909,7 +912,7 @@ def _project_private_jacobian(
         dtype=np.float64,
     )
     d_ideal_d_private = d_ideal_d_camera @ calibration.rotation_w2c
-    if abs(float(calibration.division_lambda)) < 1.0e-15:
+    if not calibration.has_distortion:
         return ideal, d_ideal_d_private
     # Distortion: chain a tiny FD through the 2D ideal → observed map.
     distorted = core.distort_points(
@@ -919,6 +922,7 @@ def _project_private_jacobian(
         intrinsics.cx,
         intrinsics.cy,
         calibration.division_lambda,
+        calibration.brown_conrady,
     )[0]
     d_dist_d_ideal = np.zeros((2, 2), dtype=np.float64)
     for axis in range(2):
@@ -931,6 +935,7 @@ def _project_private_jacobian(
             intrinsics.cx,
             intrinsics.cy,
             calibration.division_lambda,
+            calibration.brown_conrady,
         )[0]
         d_dist_d_ideal[:, axis] = (sample - distorted) / 1.0e-4
     return distorted, d_dist_d_ideal @ d_ideal_d_private
@@ -2162,6 +2167,7 @@ def _normalized_camera_ray(
         calibration.intrinsics.cx,
         calibration.intrinsics.cy,
         calibration.division_lambda,
+        calibration.brown_conrady,
     )[0]
     return core.pixel_ray(float(ideal[0]), float(ideal[1]), calibration.intrinsics)
 

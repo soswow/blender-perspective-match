@@ -79,6 +79,44 @@ class RosCameraInfoTests(unittest.TestCase):
         self.assertAlmostEqual(cx, info.cx * 0.5)
         self.assertAlmostEqual(cy, info.cy * 0.5)
 
+    def test_interpret_plumb_bob(self) -> None:
+        info = ros_camera_info.parse_ros_camera_info_yaml(_SAMPLE)
+        imported = ros_camera_info.interpret_distortion(info)
+        self.assertEqual(imported.skip_reason, "")
+        self.assertAlmostEqual(imported.brown_conrady[0], 0.016138166817855664)
+        self.assertEqual(len(imported.brown_conrady), 8)
+
+    def test_interpret_zero_d_is_identity(self) -> None:
+        text = _SAMPLE.replace(
+            "data: [0.016138166817855664, 0.0, 0.0, 0.0, 0.0]",
+            "data: [0.0, 0.0, 0.0, 0.0, 0.0]",
+        )
+        info = ros_camera_info.parse_ros_camera_info_yaml(text)
+        imported = ros_camera_info.interpret_distortion(info)
+        self.assertEqual(imported.brown_conrady, ())
+        self.assertEqual(imported.skip_reason, "")
+
+    def test_interpret_equidistant_skipped(self) -> None:
+        text = _SAMPLE.replace("distortion_model: plumb_bob", "distortion_model: equidistant")
+        info = ros_camera_info.parse_ros_camera_info_yaml(text)
+        imported = ros_camera_info.interpret_distortion(info)
+        self.assertEqual(imported.brown_conrady, ())
+        self.assertIn("equidistant", imported.skip_reason)
+
+    def test_interpret_real_no_crop_yaml_when_present(self) -> None:
+        path = Path(
+            "/Users/sasha/hobby/camera-calibration-checkerboard/"
+            "output/intrinsics-0.5x-no-crop-simple.yaml"
+        )
+        if not path.is_file():
+            self.skipTest("sample YAML not on this machine")
+        info = ros_camera_info.parse_ros_camera_info_yaml(path.read_text(encoding="utf-8"))
+        imported = ros_camera_info.interpret_distortion(info)
+        self.assertEqual(info.distortion_model, "plumb_bob")
+        self.assertAlmostEqual(imported.brown_conrady[0], -0.0014045245854740534)
+        self.assertAlmostEqual(imported.brown_conrady[1], 0.0004527363803767526)
+        self.assertEqual(imported.skip_reason, "")
+
     def test_no_scale_when_sizes_match(self) -> None:
         info = ros_camera_info.parse_ros_camera_info_yaml(_SAMPLE)
         fx, fy, cx, cy, scaled = ros_camera_info.scale_intrinsics_to_image(

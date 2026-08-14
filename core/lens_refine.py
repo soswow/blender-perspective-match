@@ -38,6 +38,7 @@ class MatchLensInput:
     line_bundles: dict[core.AxisId, list[core.LineSegment]]
     intrinsics: core.CameraIntrinsics
     division_lambda: float = 0.0
+    brown_conrady: tuple[float, ...] = ()
     origin_image: tuple[float, float] | None = None
     # When True, keep the starting fx (Manual FOV / 1-point / not enough lines).
     freeze_focal: bool = False
@@ -155,6 +156,7 @@ def calibration_at_focal(
         estimate_principal_point=False,
         estimate_distortion=False,
         initial_division_lambda=float(match.division_lambda),
+        initial_brown_conrady=match.brown_conrady,
         initial_rotation=(
             None
             if match.base_calibration is None

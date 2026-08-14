@@ -116,6 +116,7 @@ def _refine_after_vp_detect(context: bpy.types.Context) -> str:
         + (
             f" · λ {calibration.division_lambda:.4f}"
             if abs(calibration.division_lambda) > 1.0e-6
+            and not calibration.uses_brown_conrady
             else ""
         )
     )
@@ -482,8 +483,8 @@ class PM_OT_import_ros_yaml(bpy.types.Operator, ImportHelper):
     bl_label = "Import YAML"
     bl_description = (
         "Import ROS camera_info YAML: lock Manual FOV from fx, set principal "
-        "point from cx/cy, and apply fitzgibbon_lambda when present. "
-        "Brown–Conrady distortion coefficients are skipped"
+        "point from cx/cy, and apply OpenCV D (plumb_bob / rational) or "
+        "fitzgibbon_lambda when D is zero"
     )
     bl_options = {"REGISTER", "UNDO"}
 
@@ -614,6 +615,7 @@ class PM_OT_reset_camera(bpy.types.Operator):
         settings.cy = settings.image_height * 0.5
         settings.division_lambda = 0.0
         settings.lambda_saturated = False
+        settings.brown_conrady = (0.0,) * 8
         settings.lock_focal = True
         scene.invalidate_undistorted_cache(settings)
         try:
@@ -1212,7 +1214,7 @@ class PM_OT_generate_undistorted(bpy.types.Operator):
 
     bl_idname = "perspective_match.generate_undistorted"
     bl_label = "Generate Undistorted Plate"
-    bl_description = "Remap the still with division λ and activate it as camera background"
+    bl_description = "Remap the still with current lens distortion and activate it as camera background"
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
@@ -1221,7 +1223,10 @@ class PM_OT_generate_undistorted(bpy.types.Operator):
         return (
             settings is not None
             and settings.image is not None
-            and abs(settings.division_lambda) > 1.0e-8
+            and core.has_lens_distortion(
+                settings.division_lambda,
+                tuple(settings.brown_conrady),
+            )
         )
 
     def execute(self, context: bpy.types.Context) -> set[str]:
@@ -1279,7 +1284,7 @@ class PM_OT_use_original_plate(bpy.types.Operator):
     bl_idname = "perspective_match.use_original_plate"
     bl_label = "Original Plate"
     bl_description = (
-        "Clear λ, re-solve the camera, and show the original reference image"
+        "Clear imported D / estimated λ, re-solve the camera, and show the original reference image"
     )
     bl_options = {"REGISTER", "UNDO"}
 

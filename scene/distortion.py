@@ -10,17 +10,32 @@ import numpy as np
 from .. import core, properties, scene
 
 
+def _session_has_distortion(settings: properties.PMSession, *, threshold: float = 1.0e-8) -> bool:
+    return core.has_lens_distortion(
+        settings.division_lambda,
+        tuple(settings.brown_conrady),
+        threshold=threshold,
+    )
+
+
+def _clear_session_distortion(settings: properties.PMSession) -> None:
+    settings.division_lambda = 0.0
+    settings.lambda_saturated = False
+    settings.brown_conrady = (0.0,) * 8
+
+
 def compute_canvas(
     width: int,
     height: int,
     intrinsics: core.CameraIntrinsics,
     division_lambda: float,
+    brown_conrady: tuple[float, ...] = (),
     *,
     samples_per_edge: int = 64,
     max_scale: float = 2.5,
 ) -> tuple[int, int, float, float]:
     """Return expanded undistorted width, height, and ideal-space offsets."""
-    if abs(division_lambda) < 1.0e-15:
+    if not core.has_lens_distortion(division_lambda, brown_conrady, threshold=1.0e-15):
         return width, height, 0.0, 0.0
     sample_count = max(8, samples_per_edge)
     horizontal = np.linspace(0.0, float(width - 1), sample_count)
@@ -40,6 +55,7 @@ def compute_canvas(
         intrinsics.cx,
         intrinsics.cy,
         division_lambda,
+        brown_conrady,
     )
     ideal = ideal[np.isfinite(ideal).all(axis=1)]
     if len(ideal) == 0:
@@ -94,6 +110,7 @@ def remap_rgba(
     intrinsics: core.CameraIntrinsics,
     division_lambda: float,
     canvas: tuple[int, int, float, float],
+    brown_conrady: tuple[float, ...] = (),
 ) -> np.ndarray:
     """Bilinearly remap a top-left-origin RGBA image without OpenCV."""
     source_height, source_width = source_rgba.shape[:2]
@@ -118,6 +135,7 @@ def remap_rgba(
             intrinsics.cx,
             intrinsics.cy,
             division_lambda,
+            brown_conrady,
         )
         source_x = observed[:, 0]
         source_y = observed[:, 1]
@@ -146,7 +164,7 @@ def remap_rgba(
 
     if covered == 0:
         raise ValueError(
-            "Undistort remap produced an empty plate — check FOV, principal point, and λ"
+            "Undistort remap produced an empty plate — check FOV, principal point, and distortion"
         )
     return output
 
@@ -282,7 +300,7 @@ def apply_view_lighting(context: bpy.types.Context) -> bpy.types.Image:
     settings.view_baked_contrast = float(settings.view_contrast)
 
     # Undistorted cache must follow the same re-lit plate when active.
-    if settings.view_undistorted and abs(settings.division_lambda) > 1.0e-8:
+    if settings.view_undistorted and _session_has_distortion(settings):
         generate_undistorted_plate(context)
     else:
         # Drop a stale undistorted cache so the next generate uses the lit plate.
@@ -391,7 +409,7 @@ def reset_view_lighting(context: bpy.types.Context) -> None:
     if cached is not None and cached.users == 0:
         bpy.data.images.remove(cached)
 
-    if settings.view_undistorted and abs(settings.division_lambda) > 1.0e-8:
+    if settings.view_undistorted and _session_has_distortion(settings):
         generate_undistorted_plate(context)
     else:
         if settings.undistorted_image is not None:
@@ -417,8 +435,10 @@ def generate_undistorted_plate(
         raise ValueError("Create or activate a match camera first")
     if settings.image is None:
         raise ValueError("Load a reference image first")
-    if abs(settings.division_lambda) < 1.0e-8:
-        raise ValueError("No lens distortion is currently estimated")
+    if abs(settings.division_lambda) < 1.0e-8 and not core.has_brown_conrady(
+        tuple(settings.brown_conrady)
+    ):
+        raise ValueError("No lens distortion is currently set")
 
     source_image = display_source_image(settings)
     width = int(source_image.size[0])
@@ -440,12 +460,14 @@ def generate_undistorted_plate(
         height,
         calibration.intrinsics,
         settings.division_lambda,
+        tuple(settings.brown_conrady),
     )
     remapped = remap_rgba(
         source,
         calibration.intrinsics,
         settings.division_lambda,
         canvas,
+        tuple(settings.brown_conrady),
     )
     output_width, output_height, offset_x, offset_y = canvas
     if float(np.mean(remapped[:, :, 3])) < 0.01:
@@ -524,7 +546,7 @@ def sync_undistorted_plate_after_refine(context: bpy.types.Context) -> None:
         return
     if (
         settings.view_undistorted
-        and abs(settings.division_lambda) > 1.0e-8
+        and _session_has_distortion(settings)
         and not settings.lambda_saturated
     ):
         # Cache still present ⇒ K/λ unchanged (invalidate clears the pointer).
@@ -543,12 +565,11 @@ def sync_undistorted_plate_after_refine(context: bpy.types.Context) -> None:
 
 
 def revert_to_original_plate(context: bpy.types.Context) -> None:
-    """Clear λ, drop undistorted cache, re-solve, and show the source plate."""
+    """Clear distortion, drop undistorted cache, re-solve, and show the source plate."""
     settings = properties.active_session(context)
     if settings is None:
         raise ValueError("Create or activate a match camera first")
-    settings.division_lambda = 0.0
-    settings.lambda_saturated = False
+    _clear_session_distortion(settings)
     scene.invalidate_undistorted_cache(settings)
     line_bundles = scene.line_bundles_from_settings(settings)
     lock_focal = bool(settings.lock_focal or settings.vp_mode == "1")
@@ -565,7 +586,7 @@ def revert_to_original_plate(context: bpy.types.Context) -> None:
 
 
 def use_original_plate(context: bpy.types.Context) -> None:
-    """Clear λ and restore the original plate + camera."""
+    """Clear distortion and restore the original plate + camera."""
     revert_to_original_plate(context)
 
 
@@ -578,6 +599,7 @@ def estimate_distortion(context: bpy.types.Context) -> None:
     if settings is None or settings.image is None:
         raise ValueError("Load a reference image first")
     # Keep Manual FOV if set — λ is estimated at the locked focal.
+    # estimate_distortion drops imported Brown–Conrady D in the solver result.
     line_bundles = scene.line_bundles_from_settings(settings)
     lock_focal = bool(settings.lock_focal or settings.vp_mode == "1")
     if not core.can_solve_orientation(

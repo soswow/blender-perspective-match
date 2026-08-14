@@ -48,6 +48,8 @@ class Calibration:
     camera_center: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float64))
     division_lambda: float = 0.0
     lambda_saturated: bool = False
+    # OpenCV Brown–Conrady D: k1, k2, p1, p2, k3[, k4, k5, k6]. Empty = unused.
+    brown_conrady: tuple[float, ...] = ()
 
     @property
     def hfov_degrees(self) -> float:
@@ -56,6 +58,18 @@ class Calibration:
     @property
     def vfov_degrees(self) -> float:
         return vfov_from_focal(self.intrinsics.fy, self.intrinsics.image_height)
+
+    @property
+    def uses_brown_conrady(self) -> bool:
+        return has_brown_conrady(self.brown_conrady)
+
+    @property
+    def has_distortion(self) -> bool:
+        return has_lens_distortion(
+            self.division_lambda,
+            self.brown_conrady,
+            threshold=1.0e-15,
+        )
 
 
 def focal_from_hfov(hfov_degrees: float, image_width: int) -> float:
@@ -147,6 +161,111 @@ def vanishing_point_from_lines(segments: list[LineSegment]) -> np.ndarray | None
     return vanishing_h / vanishing_h[2]
 
 
+_BROWN_IDENTITY_EPS = 1.0e-15
+_LAMBDA_IDENTITY_EPS = 1.0e-15
+
+
+def pad_brown_conrady(coefficients: tuple[float, ...] | list[float]) -> tuple[float, ...]:
+    """Pad OpenCV D to 8 values; return empty when all coefficients are ~0."""
+    values = [float(item) for item in list(coefficients)[:8]]
+    while len(values) < 8:
+        values.append(0.0)
+    if not any(abs(value) > _BROWN_IDENTITY_EPS for value in values):
+        return ()
+    return tuple(values)
+
+
+def has_brown_conrady(brown_conrady: tuple[float, ...] | list[float]) -> bool:
+    return any(abs(float(value)) > _BROWN_IDENTITY_EPS for value in brown_conrady)
+
+
+def has_lens_distortion(
+    division_lambda: float = 0.0,
+    brown_conrady: tuple[float, ...] | list[float] = (),
+    *,
+    threshold: float = 1.0e-8,
+) -> bool:
+    """True when Fitzgibbon λ or OpenCV D should affect remap / overlays."""
+    if abs(float(division_lambda)) > threshold:
+        return True
+    return any(abs(float(value)) > threshold for value in brown_conrady)
+
+
+def _brown_coeffs(brown_conrady: tuple[float, ...] | list[float]) -> np.ndarray:
+    padded = pad_brown_conrady(tuple(float(value) for value in brown_conrady))
+    if not padded:
+        return np.zeros(8, dtype=np.float64)
+    return np.asarray(padded, dtype=np.float64)
+
+
+def _distort_brown_conrady(
+    points: np.ndarray,
+    fx: float,
+    fy: float,
+    cx: float,
+    cy: float,
+    brown_conrady: tuple[float, ...] | list[float],
+) -> np.ndarray:
+    """Map ideal pixels to observed pixels (OpenCV projectPoints distortion)."""
+    coeffs = _brown_coeffs(brown_conrady)
+    ideal_x = (points[:, 0] - cx) / fx
+    ideal_y = (points[:, 1] - cy) / fy
+    radius_squared = ideal_x * ideal_x + ideal_y * ideal_y
+    radius_fourth = radius_squared * radius_squared
+    radius_sixth = radius_fourth * radius_squared
+    k1, k2, p1, p2, k3, k4, k5, k6 = coeffs
+    radial = 1.0 + k1 * radius_squared + k2 * radius_fourth + k3 * radius_sixth
+    if abs(k4) > _BROWN_IDENTITY_EPS or abs(k5) > _BROWN_IDENTITY_EPS or abs(k6) > _BROWN_IDENTITY_EPS:
+        denominator = 1.0 + k4 * radius_squared + k5 * radius_fourth + k6 * radius_sixth
+        denominator = np.where(
+            np.abs(denominator) < 1.0e-12,
+            np.where(denominator < 0.0, -1.0e-12, 1.0e-12),
+            denominator,
+        )
+        radial = radial / denominator
+    two_xy = 2.0 * ideal_x * ideal_y
+    observed_x = ideal_x * radial + p1 * two_xy + p2 * (radius_squared + 2.0 * ideal_x * ideal_x)
+    observed_y = ideal_y * radial + p1 * (radius_squared + 2.0 * ideal_y * ideal_y) + p2 * two_xy
+    return np.column_stack([observed_x * fx + cx, observed_y * fy + cy])
+
+
+def _undistort_brown_conrady(
+    points: np.ndarray,
+    fx: float,
+    fy: float,
+    cx: float,
+    cy: float,
+    brown_conrady: tuple[float, ...] | list[float],
+    *,
+    iterations: int = 10,
+) -> np.ndarray:
+    """Iterative inverse of OpenCV Brown–Conrady (same scheme as undistortPoints)."""
+    coeffs = _brown_coeffs(brown_conrady)
+    observed_x = (points[:, 0] - cx) / fx
+    observed_y = (points[:, 1] - cy) / fy
+    k1, k2, p1, p2, k3, k4, k5, k6 = coeffs
+    ideal_x = observed_x.copy()
+    ideal_y = observed_y.copy()
+    for _iteration in range(max(1, iterations)):
+        radius_squared = ideal_x * ideal_x + ideal_y * ideal_y
+        radius_fourth = radius_squared * radius_squared
+        radius_sixth = radius_fourth * radius_squared
+        radial_num = 1.0 + k4 * radius_squared + k5 * radius_fourth + k6 * radius_sixth
+        radial_den = 1.0 + k1 * radius_squared + k2 * radius_fourth + k3 * radius_sixth
+        radial_den = np.where(
+            np.abs(radial_den) < 1.0e-12,
+            np.where(radial_den < 0.0, -1.0e-12, 1.0e-12),
+            radial_den,
+        )
+        inverse_radial = radial_num / radial_den
+        two_xy = 2.0 * ideal_x * ideal_y
+        delta_x = p1 * two_xy + p2 * (radius_squared + 2.0 * ideal_x * ideal_x)
+        delta_y = p1 * (radius_squared + 2.0 * ideal_y * ideal_y) + p2 * two_xy
+        ideal_x = (observed_x - delta_x) * inverse_radial
+        ideal_y = (observed_y - delta_y) * inverse_radial
+    return np.column_stack([ideal_x * fx + cx, ideal_y * fy + cy])
+
+
 def undistort_points(
     points_xy: np.ndarray,
     fx: float,
@@ -154,10 +273,17 @@ def undistort_points(
     cx: float,
     cy: float,
     division_lambda: float,
+    brown_conrady: tuple[float, ...] | list[float] = (),
 ) -> np.ndarray:
-    """Map observed pixels to ideal pixels using the Fitzgibbon division model."""
+    """Map observed pixels to ideal pixels.
+
+    Imported OpenCV Brown–Conrady D wins over Fitzgibbon λ so the two models
+    are never composed.
+    """
     points = np.asarray(points_xy, dtype=np.float64).reshape(-1, 2)
-    if abs(division_lambda) < 1.0e-15:
+    if has_brown_conrady(brown_conrady):
+        return _undistort_brown_conrady(points, fx, fy, cx, cy, brown_conrady)
+    if abs(division_lambda) < _LAMBDA_IDENTITY_EPS:
         return points.copy()
     normalized_x = (points[:, 0] - cx) / fx
     normalized_y = (points[:, 1] - cy) / fy
@@ -180,10 +306,13 @@ def distort_points(
     cx: float,
     cy: float,
     division_lambda: float,
+    brown_conrady: tuple[float, ...] | list[float] = (),
 ) -> np.ndarray:
     """Map ideal pixels back to observed pixels."""
     points = np.asarray(points_xy, dtype=np.float64).reshape(-1, 2)
-    if abs(division_lambda) < 1.0e-15:
+    if has_brown_conrady(brown_conrady):
+        return _distort_brown_conrady(points, fx, fy, cx, cy, brown_conrady)
+    if abs(division_lambda) < _LAMBDA_IDENTITY_EPS:
         return points.copy()
     ideal_x = (points[:, 0] - cx) / fx
     ideal_y = (points[:, 1] - cy) / fy
@@ -213,6 +342,7 @@ def undistort_line_bundles(
     line_bundles: dict[AxisId, list[LineSegment]],
     intrinsics: CameraIntrinsics,
     division_lambda: float,
+    brown_conrady: tuple[float, ...] | list[float] = (),
 ) -> dict[AxisId, list[LineSegment]]:
     output: dict[AxisId, list[LineSegment]] = {"x": [], "y": [], "z": []}
     for axis, segments in line_bundles.items():
@@ -224,6 +354,7 @@ def undistort_line_bundles(
                 intrinsics.cx,
                 intrinsics.cy,
                 division_lambda,
+                brown_conrady,
             )
             output[axis].append(
                 LineSegment(mapped[0, 0], mapped[0, 1], mapped[1, 0], mapped[1, 1])
@@ -878,16 +1009,20 @@ def refine_camera(
     estimate_principal_point: bool = True,
     estimate_distortion: bool = False,
     initial_division_lambda: float = 0.0,
+    initial_brown_conrady: tuple[float, ...] = (),
     initial_rotation: np.ndarray | None = None,
 ) -> Calibration:
     """Refine focal, principal point, radial λ, and orientation from line bundles.
 
     With ``lock_focal`` and ≥1 line on each axis, orientation comes from the
     known-K orthogonal-line solve (vanishing points need not be intersected
-    from parallel pairs).
+    from parallel pairs). Imported Brown–Conrady D is applied to line
+    undistort when present; ``estimate_distortion`` switches to Fitzgibbon λ
+    and drops D.
     """
     current = CameraIntrinsics(**intrinsics.__dict__)
     division_lambda = float(initial_division_lambda)
+    brown_conrady = pad_brown_conrady(initial_brown_conrady)
     lambda_saturated = False
     vanishing_points: dict[AxisId, np.ndarray] = {}
     known_k_rotation: np.ndarray | None = None
@@ -901,11 +1036,17 @@ def refine_camera(
             division_lambda,
         )
         if estimate_distortion:
+            brown_conrady = ()
             division_lambda = estimate_division_lambda(line_bundles, current)
             lambda_saturated = abs(division_lambda) >= 0.588
             if lambda_saturated:
                 division_lambda = 0.0
-        working = undistort_line_bundles(line_bundles, current, division_lambda)
+        working = undistort_line_bundles(
+            line_bundles,
+            current,
+            division_lambda,
+            brown_conrady,
+        )
         use_known_k = lock_focal and all(
             len(working.get(axis, [])) >= 1 for axis in ("x", "y", "z")
         )
@@ -964,6 +1105,7 @@ def refine_camera(
         camera_center=default_camera_center(rotation),
         division_lambda=division_lambda,
         lambda_saturated=lambda_saturated,
+        brown_conrady=brown_conrady,
     )
 
 
@@ -981,6 +1123,7 @@ def vp_angular_residual_degrees(
         line_bundles,
         calibration.intrinsics,
         calibration.division_lambda,
+        calibration.brown_conrady,
     )
     vanishing_points = collect_vanishing_points(working_lines)
     if not vanishing_points:
@@ -1058,6 +1201,7 @@ def vp_line_residual_rms(
         line_bundles,
         calibration.intrinsics,
         calibration.division_lambda,
+        calibration.brown_conrady,
     )
     weighted_sse = 0.0
     weight_sum = 0.0
@@ -1115,6 +1259,7 @@ def ground_hit(
         calibration.intrinsics.cx,
         calibration.intrinsics.cy,
         calibration.division_lambda,
+        calibration.brown_conrady,
     )[0]
     direction = camera_to_world @ pixel_ray(
         float(ideal_point[0]),

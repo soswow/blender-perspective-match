@@ -56,6 +56,7 @@ def calibration_from_settings(settings: properties.PMSession) -> core.Calibratio
         camera_center=center,
         division_lambda=settings.division_lambda,
         lambda_saturated=settings.lambda_saturated,
+        brown_conrady=core.pad_brown_conrady(tuple(settings.brown_conrady)),
     )
 
 
@@ -71,6 +72,8 @@ def store_calibration(settings: properties.PMSession, calibration: core.Calibrat
     settings.camera_center = tuple(float(value) for value in calibration.camera_center)
     settings.division_lambda = calibration.division_lambda
     settings.lambda_saturated = calibration.lambda_saturated
+    padded = core.pad_brown_conrady(calibration.brown_conrady)
+    settings.brown_conrady = padded if padded else (0.0,) * 8
 
 
 def _parent_keep_world(child: bpy.types.Object, parent: bpy.types.Object) -> None:
@@ -185,6 +188,7 @@ def _copy_manual_k_from_session(
         height,
         hfov_fallback=float(source.hfov_degrees),
     )
+    calibration.brown_conrady = core.pad_brown_conrady(tuple(source.brown_conrady))
     store_calibration(target, calibration)
     return calibration
 
@@ -850,6 +854,7 @@ def refine_match(
         # λ is button-only; locked Manual FOV still allows a one-shot estimate.
         estimate_distortion=bool(estimate_distortion),
         initial_division_lambda=previous_calibration.division_lambda,
+        initial_brown_conrady=previous_calibration.brown_conrady,
         initial_rotation=previous_calibration.rotation_w2c,
     )
 
@@ -871,6 +876,7 @@ def refine_match(
         + (
             f" · λ {calibration.division_lambda:.4f}"
             if abs(calibration.division_lambda) > 1.0e-6
+            and not calibration.uses_brown_conrady
             else ""
         )
     )
@@ -889,6 +895,7 @@ def _update_diagnostics(
         line_bundles,
         calibration.intrinsics,
         calibration.division_lambda,
+        calibration.brown_conrady,
     )
     working = core.collect_vanishing_points(working_lines)
     estimates = core.focal_estimates_by_pair(
@@ -959,12 +966,13 @@ def apply_manual_fov(context: bpy.types.Context) -> None:
 
 
 def apply_ros_camera_info_yaml(context: bpy.types.Context, filepath: str) -> str:
-    """Import ROS camera_info YAML: HFOV, principal point, optional Fitzgibbon λ.
+    """Import ROS camera_info YAML: HFOV, principal point, and distortion.
 
-    Brown–Conrady / plumb_bob coefficients are ignored. When ``fitzgibbon_lambda``
-    is present it becomes ``division_lambda`` (resolution-invariant in the
-    normalized plane — not scaled with image size). A non-zero imported λ also
-    builds/shows the undistorted plate (without re-fitting λ from VP lines).
+    Brown–Conrady / plumb_bob (and rational_polynomial) coefficients undistort
+    the plate. ``fitzgibbon_lambda`` is used only when D is zero/absent.
+    Coefficients are resolution-invariant in the normalized plane. A non-zero
+    imported model also builds/shows the undistorted plate (without fitting
+    λ from VP lines).
     """
     from . import distortion
     from ..core import ros_camera_info
@@ -982,6 +990,7 @@ def apply_ros_camera_info_yaml(context: bpy.types.Context, filepath: str) -> str
         int(settings.image_width),
         int(settings.image_height),
     )
+    imported = ros_camera_info.interpret_distortion(info)
 
     previous = calibration_from_settings(settings)
     settings.lock_focal = True
@@ -991,10 +1000,17 @@ def apply_ros_camera_info_yaml(context: bpy.types.Context, filepath: str) -> str
     settings.cy = float(cy)
     settings.hfov_degrees = core.hfov_from_focal(fx, max(int(settings.image_width), 1))
 
-    imported_lambda = info.fitzgibbon_lambda is not None
-    if imported_lambda:
-        settings.division_lambda = float(info.fitzgibbon_lambda)
+    imported_brown = bool(imported.brown_conrady)
+    imported_lambda = (not imported_brown) and info.fitzgibbon_lambda is not None
+    if imported_brown:
+        settings.brown_conrady = imported.brown_conrady
+        settings.division_lambda = 0.0
         settings.lambda_saturated = False
+    else:
+        settings.brown_conrady = (0.0,) * 8
+        if imported_lambda:
+            settings.division_lambda = float(info.fitzgibbon_lambda)
+            settings.lambda_saturated = False
 
     line_bundles = line_bundles_from_settings(settings)
     if core.can_solve_orientation(
@@ -1002,7 +1018,7 @@ def apply_ros_camera_info_yaml(context: bpy.types.Context, filepath: str) -> str
         lock_focal=True,
         vp_mode=settings.vp_mode,
     ):
-        # Locked FOV + imported PP; keep YAML λ (do not re-fit from VP lines).
+        # Locked FOV + imported PP; keep YAML distortion (do not re-fit λ).
         refine_match(context, estimate_distortion=False)
     else:
         calibration = calibration_from_settings(settings)
@@ -1014,12 +1030,16 @@ def apply_ros_camera_info_yaml(context: bpy.types.Context, filepath: str) -> str
         if settings.origin_is_set:
             reapply_placement(context)
 
-    # Undistorted background: only sync/generate after intrinsics + λ are final.
-    if imported_lambda and abs(settings.division_lambda) > 1.0e-8:
+    has_imported_distortion = (
+        imported_brown
+        or (imported_lambda and abs(settings.division_lambda) > 1.0e-8)
+    )
+    if has_imported_distortion:
         try:
             distortion.generate_undistorted_plate(context)
         except Exception as error:
-            settings.status = f"Imported λ; plate failed: {error}"
+            kind = "D" if imported_brown else "λ"
+            settings.status = f"Imported {kind}; plate failed: {error}"
             print(f"Perspective Match: undistorted plate failed: {error}")
     else:
         distortion.sync_undistorted_plate_after_refine(context)
@@ -1032,17 +1052,21 @@ def apply_ros_camera_info_yaml(context: bpy.types.Context, filepath: str) -> str
         f"HFOV {settings.hfov_degrees:.2f}°",
         f"PP {offset_x:+.1f},{offset_y:+.1f} px",
     ]
-    if imported_lambda:
+    if imported_brown:
+        k1, k2, p1, p2, k3 = settings.brown_conrady[:5]
+        parts.append(f"D k1={k1:.4g} k2={k2:.4g} k3={k3:.4g}")
+        if abs(p1) > 1.0e-12 or abs(p2) > 1.0e-12:
+            parts.append(f"p1={p1:.4g} p2={p2:.4g}")
+        if info.fitzgibbon_lambda is not None:
+            parts.append("λ ignored (using D)")
+    elif imported_lambda:
         parts.append(f"λ {settings.division_lambda:.5f}")
+    if imported.skip_reason:
+        parts.append(imported.skip_reason)
     if scaled:
         parts.append(
             f"scaled from {info.image_width}×{info.image_height}"
         )
-    # plumb_bob k1… is not Fitzgibbon λ.
-    if info.distortion_coefficients and any(
-        abs(value) > 1.0e-12 for value in info.distortion_coefficients
-    ):
-        parts.append("plumb_bob D skipped")
     message = " · ".join(parts)
     settings.status = message
     settings.error = ""
@@ -1063,6 +1087,7 @@ def _intrinsics_or_distortion_changed(
         or abs(first.cx - second.cx) > 1.0e-6
         or abs(first.cy - second.cy) > 1.0e-6
         or abs(previous.division_lambda - current.division_lambda) > 1.0e-9
+        or previous.brown_conrady != current.brown_conrady
     )
 
 
@@ -1269,10 +1294,12 @@ def set_principal_point(
             estimate_principal_point=False,
             estimate_distortion=False,
             initial_division_lambda=previous.division_lambda,
+            initial_brown_conrady=previous.brown_conrady,
             initial_rotation=previous.rotation_w2c,
         )
         calibration.division_lambda = previous.division_lambda
         calibration.lambda_saturated = previous.lambda_saturated
+        calibration.brown_conrady = previous.brown_conrady
         if settings.origin_is_set:
             origin = tuple(float(value) for value in settings.origin_image)
             calibration.camera_center, _scale = core.apply_origin_and_scale(
@@ -1693,6 +1720,7 @@ def ideal_to_region(
         settings.cx,
         settings.cy,
         settings.division_lambda,
+        tuple(settings.brown_conrady),
     )[0]
     return image_to_region(
         context,
@@ -1748,7 +1776,11 @@ def _storage_to_display(
 ) -> tuple[float, float, float, float]:
     """Map stored distorted source pixels to the visible plate."""
     display_width, display_height = _display_size(settings)
-    if not settings.view_undistorted or abs(settings.division_lambda) < 1.0e-12:
+    if not settings.view_undistorted or not core.has_lens_distortion(
+        settings.division_lambda,
+        tuple(settings.brown_conrady),
+        threshold=1.0e-12,
+    ):
         return image_x, image_y, display_width, display_height
     mapped = core.undistort_points(
         np.array([[image_x, image_y]], dtype=np.float64),
@@ -1757,6 +1789,7 @@ def _storage_to_display(
         settings.cx,
         settings.cy,
         settings.division_lambda,
+        tuple(settings.brown_conrady),
     )[0]
     return (
         float(mapped[0] - settings.undistorted_offset_x),
@@ -1772,7 +1805,11 @@ def _display_to_storage(
     display_y: float,
 ) -> tuple[float, float]:
     """Map the visible plate back to stored distorted source pixels."""
-    if not settings.view_undistorted or abs(settings.division_lambda) < 1.0e-12:
+    if not settings.view_undistorted or not core.has_lens_distortion(
+        settings.division_lambda,
+        tuple(settings.brown_conrady),
+        threshold=1.0e-12,
+    ):
         return display_x, display_y
     ideal = np.array(
         [[
@@ -1788,6 +1825,7 @@ def _display_to_storage(
         settings.cx,
         settings.cy,
         settings.division_lambda,
+        tuple(settings.brown_conrady),
     )[0]
     return float(mapped[0]), float(mapped[1])
 
@@ -2601,6 +2639,7 @@ def prepare_lens_refine(context: bpy.types.Context) -> LensRefinePrep:
                 line_bundles=line_bundles,
                 intrinsics=item.calibration.intrinsics,
                 division_lambda=float(item.calibration.division_lambda),
+                brown_conrady=item.calibration.brown_conrady,
                 origin_image=origin_image,
                 freeze_focal=freeze,
                 base_calibration=item.calibration,

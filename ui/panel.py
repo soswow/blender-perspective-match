@@ -6,7 +6,7 @@ from pathlib import Path
 
 import bpy
 
-from .. import properties, scene
+from .. import core, properties, scene
 from ..detect import opencv as opencv_support
 from . import icons, operators
 
@@ -402,12 +402,21 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
                 text="Estimate Distortion",
                 icon="MOD_SIMPLEDEFORM",
             )
-            camera.label(text=f"Division λ: {settings.division_lambda:.5f}")
+            if core.has_brown_conrady(tuple(settings.brown_conrady)):
+                k1, k2, p1, p2, k3 = tuple(settings.brown_conrady[:5])
+                camera.label(text=f"Imported D: k1 {k1:.4g}  k2 {k2:.4g}  k3 {k3:.4g}")
+                if abs(p1) > 1.0e-8 or abs(p2) > 1.0e-8:
+                    camera.label(text=f"p1 {p1:.4g}  p2 {p2:.4g}")
+            else:
+                camera.label(text=f"Division λ: {settings.division_lambda:.5f}")
             if settings.lambda_saturated:
                 camera.label(
                     text="Estimate saturated; pinhole retained", icon="ERROR"
                 )
-            if settings.view_undistorted or abs(settings.division_lambda) > 1.0e-8:
+            if settings.view_undistorted or core.has_lens_distortion(
+                settings.division_lambda,
+                tuple(settings.brown_conrady),
+            ):
                 camera.operator(
                     "perspective_match.use_original_plate",
                     text="Original Plate",

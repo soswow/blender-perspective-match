@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Import YAML applies ROS `plumb_bob` / `rational_polynomial` distortion coefficients to undistort the still
+
 ### Changed
 - Reload Perspective Match only appears when the extension is a linked git checkout, not a zip install
 - Rename Match focuses the name field with the current name selected, so typing replaces it
