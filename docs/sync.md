@@ -42,7 +42,7 @@ Without Known 3D ends, a free line needs **three or more** stills — two views 
 
 **Solve Sync** seeds pairwise pose then runs a joint bundle-adjustment over Empty transforms + landmarks (Cauchy-weighted). Options between Solve Sync and Refine Lenses:
 
-- **Lock Rotation** — keep each Empty’s rotation at identity; only solve translation/scale.
+- **Lock Rotation** — keep each Empty’s rotation on a 90° world-axis jump (identity, ±90°, 180° about X/Y/Z, including an X/Y swap); only solve translation/scale. Use when VP axes already match across stills so a free solve would only add a few degrees of noise.
 - **Lock Translation** — keep Empty translation fixed; only solve rotation/scale.
 - Both checked — leave cameras unmoved; only adjust 3D landmark / Empty positions.
 

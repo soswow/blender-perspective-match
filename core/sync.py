@@ -14,6 +14,7 @@ frozen here; ``lens_refine`` can adjust focals in an outer loop.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from functools import lru_cache
 
 import numpy as np
 
@@ -1322,10 +1323,21 @@ def _bundle_adjust_registration(
     # Prefer rigid Empty transforms when every seed is already metric.
     if lock_scale and any(abs(scale - 1.0) > 1.0e-3 for scale in fixed_scales.values()):
         lock_scale = False
-    # Identity rotation for every free Empty when rotation is locked.
-    fixed_rotations = {
-        match_id: np.eye(3, dtype=np.float64) for match_id in free_match_ids
-    } if lock_rotation else {}
+    # Locked rotation stays on the cube group (90° axis jumps), not identity.
+    if lock_rotation:
+        for match_id in free_match_ids:
+            similarity = similarities[match_id]
+            similarities[match_id] = SimilarityTransform(
+                scale=float(similarity.scale),
+                rotation=_snap_to_axis_aligned_rotation(similarity.rotation),
+                translation=np.asarray(similarity.translation, dtype=np.float64).copy(),
+            )
+        fixed_rotations = {
+            match_id: similarities[match_id].rotation.copy()
+            for match_id in free_match_ids
+        }
+    else:
+        fixed_rotations = {}
     # Zero translation when translation is locked (private worlds share origin axes).
     fixed_translations = {
         match_id: np.zeros(3, dtype=np.float64) for match_id in free_match_ids
@@ -2382,6 +2394,64 @@ def _similarity_from_camera_pose(
 
 
 
+@lru_cache(maxsize=1)
+def _axis_aligned_rotations() -> tuple[np.ndarray, ...]:
+    """The 24 proper rotations that map world axes onto world axes."""
+    matrices: list[np.ndarray] = []
+    for perm in (
+        (0, 1, 2),
+        (0, 2, 1),
+        (1, 0, 2),
+        (1, 2, 0),
+        (2, 0, 1),
+        (2, 1, 0),
+    ):
+        inversions = int(perm[0] > perm[1]) + int(perm[0] > perm[2]) + int(perm[1] > perm[2])
+        perm_sign = 1.0 if inversions % 2 == 0 else -1.0
+        for sign_x in (1.0, -1.0):
+            for sign_y in (1.0, -1.0):
+                sign_z = perm_sign * sign_x * sign_y
+                matrix = np.zeros((3, 3), dtype=np.float64)
+                matrix[perm[0], 0] = sign_x
+                matrix[perm[1], 1] = sign_y
+                matrix[perm[2], 2] = sign_z
+                matrices.append(matrix)
+    return tuple(matrices)
+
+
+def _snap_to_axis_aligned_rotation(rotation: np.ndarray) -> np.ndarray:
+    """Nearest 90° axis permutation (preserves handedness)."""
+    rotation = np.asarray(rotation, dtype=np.float64).reshape(3, 3)
+    best = _axis_aligned_rotations()[0]
+    best_score = float("-inf")
+    for candidate in _axis_aligned_rotations():
+        score = float(np.tensordot(candidate, rotation))
+        if score > best_score:
+            best_score = score
+            best = candidate
+    return best.copy()
+
+
+def _axis_aligned_pose_seeds(
+    anchor: core.Calibration,
+    other: core.Calibration,
+    scale_guesses: list[float],
+) -> list[SimilarityTransform]:
+    """Empty poses whose rotation is a 90° world-axis jump."""
+    seeds: list[SimilarityTransform] = []
+    for scale in scale_guesses:
+        for rotation in _axis_aligned_rotations():
+            seeds.append(
+                SimilarityTransform(
+                    scale=scale,
+                    rotation=rotation.copy(),
+                    translation=anchor.camera_center
+                    - scale * (rotation @ other.camera_center),
+                )
+            )
+    return seeds
+
+
 def _apply_pose_locks(
     seed: SimilarityTransform,
     *,
@@ -2389,13 +2459,12 @@ def _apply_pose_locks(
     lock_rotation: bool = False,
     lock_translation: bool = False,
 ) -> SimilarityTransform:
-    """Force locked similarity components to identity defaults."""
+    """Force locked scale/translation to identity; snap locked rotation to 90°."""
     scale = 1.0 if lock_scale else float(seed.scale)
-    rotation = (
-        np.eye(3, dtype=np.float64)
-        if lock_rotation
-        else np.asarray(seed.rotation, dtype=np.float64).reshape(3, 3).copy()
-    )
+    if lock_rotation:
+        rotation = _snap_to_axis_aligned_rotation(seed.rotation)
+    else:
+        rotation = np.asarray(seed.rotation, dtype=np.float64).reshape(3, 3).copy()
     translation = (
         np.zeros(3, dtype=np.float64)
         if lock_translation
@@ -2487,10 +2556,41 @@ def _pnp_similarity(
 
     ``lock_scale=True`` (default) keeps ``s=1`` — preferred when private worlds
     already share metric units. Free scale is a fallback when rigid PnP fails.
-    ``lock_rotation=True`` keeps ``R=I``; ``lock_translation=True`` keeps ``t=0``.
+    ``lock_rotation=True`` keeps R on a 90° axis jump; ``lock_translation=True``
+    keeps ``t=0``.
     """
     if len(points_shared) < 3:
         return None
+    if lock_rotation and not lock_translation and initial is None:
+        best: SimilarityTransform | None = None
+        best_cost = float("inf")
+        shared_array = np.asarray(points_shared, dtype=np.float64).reshape(-1, 3)
+        image_array = np.asarray(points_image, dtype=np.float64).reshape(-1, 2)
+        for rotation in _axis_aligned_rotations():
+            candidate = _pnp_similarity(
+                match_id,
+                points_shared,
+                points_image,
+                calibration,
+                initial=SimilarityTransform(rotation=rotation.copy()),
+                max_iterations=max_iterations,
+                weights=weights,
+                lock_scale=lock_scale,
+                lock_rotation=True,
+                lock_translation=False,
+            )
+            if candidate is None:
+                continue
+            projected, valid = _project_shared_points(
+                shared_array, calibration, candidate
+            )
+            errors = projected - image_array
+            errors[~valid] = 1.0e3
+            cost = float(np.mean(errors * errors))
+            if cost < best_cost:
+                best_cost = cost
+                best = candidate
+        return best
     seed = _apply_pose_locks(
         initial or SimilarityTransform(),
         lock_scale=lock_scale,
@@ -3102,15 +3202,18 @@ def _solve_relative_from_pairs(
         return None
     if lock_rotation and lock_translation:
         return SimilarityTransform()
-    seeds: list[SimilarityTransform] = [
-        SimilarityTransform(),
-        SimilarityTransform(
-            scale=1.0,
-            rotation=np.eye(3),
-            translation=anchor.camera_center - other.camera_center,
-        ),
-    ]
-    # Locked rotation: only identity-R seeds; skip essential / yaw multi-start.
+    if lock_rotation:
+        seeds = _axis_aligned_pose_seeds(anchor, other, [1.0])
+    else:
+        seeds = [
+            SimilarityTransform(),
+            SimilarityTransform(
+                scale=1.0,
+                rotation=np.eye(3),
+                translation=anchor.camera_center - other.camera_center,
+            ),
+        ]
+    # Locked rotation: only 90° axis-aligned seeds; skip essential / yaw.
     if not lock_rotation:
         if len(pairs) >= 8:
             rays_a = np.stack(
@@ -3518,18 +3621,11 @@ def _mixed_pose_seeds(
                 ):
                     scale_guesses.append(guess)
 
-    # Locked pose components use identity defaults (R=I and/or t=0).
+    # Both locks: identity Empty. Rotation-only lock: 90° axis jumps.
     if lock_rotation and lock_translation:
         return [SimilarityTransform(scale=scale) for scale in scale_guesses]
     if lock_rotation:
-        return [
-            SimilarityTransform(
-                scale=scale,
-                rotation=np.eye(3, dtype=np.float64),
-                translation=anchor.camera_center - scale * other.camera_center,
-            )
-            for scale in scale_guesses
-        ]
+        return _axis_aligned_pose_seeds(anchor, other, scale_guesses)
     if lock_translation:
         seeds = [SimilarityTransform(scale=scale) for scale in scale_guesses]
         for yaw in (-0.8, -0.4, 0.4, 0.8):

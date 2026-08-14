@@ -42,7 +42,7 @@ def _project(point, calibration: core.Calibration) -> tuple[float, float]:
     return float(projected[0]), float(projected[1])
 
 
-def _synthetic_scene(*, with_ground: bool) -> tuple:
+def _synthetic_scene(*, with_ground: bool, yaw: float = 0.35) -> tuple:
     """Build two calibrated matches + landmark observations for sync tests."""
     intrinsics = core.CameraIntrinsics(
         fx=800.0,
@@ -65,7 +65,7 @@ def _synthetic_scene(*, with_ground: bool) -> tuple:
 
     true_sim = sync.SimilarityTransform(
         scale=1.0,
-        rotation=_rodrigues_z(0.35),
+        rotation=_rodrigues_z(yaw),
         translation=np.array((3.0, -2.0, 0.5), dtype=np.float64),
     )
 
@@ -269,6 +269,52 @@ class LandmarkSyncTests(unittest.TestCase):
         self.assertAlmostEqual(other.scale, 1.0, places=6)
         self.assertGreaterEqual(len(result.landmarks), 5)
         self.assertLess(result.mean_reprojection_px, 2.0)
+
+    def test_lock_rotation_allows_90_degree_axis_jumps(self) -> None:
+        """Lock Rotation may permute world axes by 90°, but not finer angles."""
+        rotations = sync._axis_aligned_rotations()
+        self.assertEqual(len(rotations), 24)
+        for matrix in rotations:
+            self.assertAlmostEqual(float(np.linalg.det(matrix)), 1.0, places=9)
+            self.assertTrue(np.allclose(matrix @ matrix.T, np.eye(3), atol=1.0e-12))
+        noisy = _rodrigues_z(0.5 * np.pi + 0.08)
+        snapped = sync._snap_to_axis_aligned_rotation(noisy)
+        self.assertTrue(np.allclose(snapped, _rodrigues_z(0.5 * np.pi), atol=1.0e-12))
+
+        matches, observations, true_sim, center_private, shared_center = _synthetic_scene(
+            with_ground=True,
+            yaw=0.5 * np.pi,
+        )
+        result = sync.solve_landmark_sync(
+            matches,
+            observations,
+            anchor_id="anchor",
+            lock_rotation=True,
+        )
+        self.assertTrue(result.success, result.message)
+        self.assertLess(result.mean_reprojection_px, 2.0)
+        recovered = result.similarities["other"]
+        self.assertTrue(np.allclose(recovered.rotation, true_sim.rotation, atol=1.0e-8))
+        self.assertTrue(np.allclose(recovered.translation, true_sim.translation, atol=0.2))
+        recovered_center = recovered.transform_point(center_private)
+        self.assertTrue(np.allclose(recovered_center, shared_center, atol=0.2))
+
+        identity_matches, identity_observations, identity_sim, _, _ = _synthetic_scene(
+            with_ground=True,
+            yaw=0.0,
+        )
+        identity_result = sync.solve_landmark_sync(
+            identity_matches,
+            identity_observations,
+            anchor_id="anchor",
+            lock_rotation=True,
+        )
+        self.assertTrue(identity_result.success, identity_result.message)
+        identity_recovered = identity_result.similarities["other"]
+        self.assertTrue(np.allclose(identity_recovered.rotation, np.eye(3), atol=1.0e-8))
+        self.assertTrue(
+            np.allclose(identity_recovered.translation, identity_sim.translation, atol=0.2)
+        )
 
     def test_leave_one_out_flags_outlier_landmark(self) -> None:
         """Diagnose helper should show removing a bad pick improves RMSE."""

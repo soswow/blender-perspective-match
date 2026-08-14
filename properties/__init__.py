@@ -796,10 +796,11 @@ class PMWorkspace(bpy.types.PropertyGroup):
     lock_rotation: bpy.props.BoolProperty(
         name="Lock Rotation",
         description=(
-            "When solving sync, keep each match Empty's rotation fixed (identity) "
-            "and only solve translation and scale to fit landmarks. "
-            "With Lock Translation also on, cameras stay put and only 3D "
-            "landmark positions are adjusted"
+            "When solving sync, keep each match Empty's rotation on a 90° "
+            "world-axis jump (identity, ±90°, 180°) and only solve translation "
+            "and scale. Use when VP axes already match across stills, including "
+            "an X/Y swap. With Lock Translation also on, cameras stay put and "
+            "only 3D landmark positions are adjusted"
         ),
         default=False,
         update=_redraw,
