@@ -27,6 +27,7 @@ If the sidebar workflow, sync rules, or install story changed, update `docs/user
 
 ## Do not
 
+- Commit or push unless the user explicitly asks to (e.g. “commit this”, “create a commit”)
 - Commit `*.zip` or `wheels/*.whl`
 - `pip install` into Blender’s Python
 - Create GitHub releases or tags unless asked (use `./scripts/release.sh` when asked to release)
