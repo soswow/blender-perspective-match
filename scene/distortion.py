@@ -169,28 +169,75 @@ def remap_rgba(
     return output
 
 
-def default_view_path(source_path: str, match_key: str = "") -> str:
-    """Return the sibling display plate path: ``<stem>[-match]-pm-view.png``."""
-    path = Path(source_path)
-    token = "".join(
+POSTPROCESSED_DIRNAME = "post-processed"
+
+
+def _match_path_token(match_key: str) -> str:
+    return "".join(
         character if character.isalnum() or character in "-_" else "_"
         for character in match_key
     ).strip("_")[:48]
-    if token:
-        return str(path.with_name(f"{path.stem}-{token}-pm-view.png"))
-    return str(path.with_name(f"{path.stem}-pm-view.png"))
+
+
+def is_derived_plate_filepath(filepath: str) -> bool:
+    """True when a path is a view / undistort / VP-debug plate, not a source still."""
+    if not filepath:
+        return False
+    try:
+        resolved = Path(filepath).expanduser().resolve()
+    except Exception:
+        resolved = Path(filepath)
+    if resolved.parent.name == POSTPROCESSED_DIRNAME:
+        return True
+    lower = str(resolved).lower()
+    return (
+        lower.endswith("-pm-view.png")
+        or lower.endswith("-pm-vp-edges.png")
+        or lower.endswith(".undistorted.png")
+    )
+
+
+def derived_plate_path(source_path: str, filename: str) -> str:
+    """``<source-dir>/post-processed/<filename>`` (directory created on save)."""
+    return str(Path(source_path).parent / POSTPROCESSED_DIRNAME / filename)
+
+
+def ensure_derived_plate_parent(path: str) -> None:
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+
+
+def default_view_path(source_path: str, match_key: str = "") -> str:
+    """Display plate: ``post-processed/<stem>[-match]-pm-view.png``."""
+    path = Path(source_path)
+    token = _match_path_token(match_key)
+    filename = (
+        f"{path.stem}-{token}-pm-view.png" if token else f"{path.stem}-pm-view.png"
+    )
+    return derived_plate_path(source_path, filename)
 
 
 def default_output_path(source_path: str, match_key: str = "") -> str:
-    """Return the conventional cached undistorted PNG path beside the source image."""
+    """Undistorted plate: ``post-processed/<stem>[-match].undistorted.png``."""
     path = Path(source_path)
-    token = "".join(
-        character if character.isalnum() or character in "-_" else "_"
-        for character in match_key
-    ).strip("_")[:48]
-    if token:
-        return str(path.with_name(f"{path.stem}-{token}.undistorted.png"))
-    return str(path.with_name(f"{path.stem}.undistorted.png"))
+    token = _match_path_token(match_key)
+    filename = (
+        f"{path.stem}-{token}.undistorted.png"
+        if token
+        else f"{path.stem}.undistorted.png"
+    )
+    return derived_plate_path(source_path, filename)
+
+
+def default_vp_detect_debug_path(source_path: str, match_key: str = "") -> str:
+    """VP-detect debug plate: ``post-processed/<stem>[-match]-pm-vp-edges.png``."""
+    path = Path(source_path)
+    token = _match_path_token(match_key)
+    filename = (
+        f"{path.stem}-{token}-pm-vp-edges.png"
+        if token
+        else f"{path.stem}-pm-vp-edges.png"
+    )
+    return derived_plate_path(source_path, filename)
 
 
 def _plate_key(settings: properties.PMSession) -> str:
@@ -231,7 +278,7 @@ def display_source_image(settings: properties.PMSession) -> bpy.types.Image:
 
 
 def apply_view_lighting(context: bpy.types.Context) -> bpy.types.Image:
-    """Bake EV/contrast from the original still into ``*-pm-view.png`` and activate it."""
+    """Bake EV/contrast from the original still into ``post-processed/*-pm-view.png``."""
     settings = properties.active_session(context)
     if settings is None:
         raise ValueError("Create or activate a match camera first")
@@ -278,6 +325,7 @@ def apply_view_lighting(context: bpy.types.Context) -> bpy.types.Image:
     if hasattr(output_image, "use_view_as_render"):
         output_image.use_view_as_render = False
     _write_image_pixels(output_image, lit)
+    ensure_derived_plate_parent(resolved_path)
     output_image.filepath_raw = resolved_path
     output_image.file_format = "PNG"
     try:
@@ -504,6 +552,7 @@ def generate_undistorted_plate(
     )
     if Path(resolved_path).suffix.lower() != ".png":
         resolved_path = str(Path(resolved_path).with_suffix(".png"))
+    ensure_derived_plate_parent(resolved_path)
     output_image.filepath_raw = resolved_path
     output_image.file_format = "PNG"
     try:

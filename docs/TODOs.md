@@ -1,7 +1,8 @@
 TODOs to be done:
-- (none)
 
 Done TODOs:
+- Ability create number of images in bulk making PM for each of them. There is a button right now New Match Camera for single image. I want a new button in the same row (Button group) to the right from main one to say "Bulk Create". When loading images from a folder those for which PM already exists should be ignored. Use same logic in terms of reusing currenly loaded image's camera intrinsics. Apply them to all images.
+- Processed images (undistorted, b/w line representation when auto-detection, constrast/brightness etc) - all should be placed in `post-processed` folder next to original image (if dir doesn't exist, create it)
 - Retina / HiDPI: scale overlay strokes, handles, fonts, and hit radii by `system.ui_scale`.
 - Remove numbers from section headers. 
 - Creating new PM should open image loading dialog automatically.

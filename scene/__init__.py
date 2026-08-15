@@ -14,6 +14,17 @@ from .. import core, properties
 
 CV_CAMERA_TO_BLENDER_CAMERA = np.diag([1.0, -1.0, -1.0])
 
+REFERENCE_IMAGE_SUFFIXES = {
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".tif",
+    ".tiff",
+    ".bmp",
+    ".exr",
+    ".webp",
+}
+
 
 def safe_identifier(name: str) -> str:
     """Return a compact Blender-friendly id derived from a file stem."""
@@ -193,14 +204,21 @@ def _copy_manual_k_from_session(
     return calibration
 
 
-def create_match_camera(context: bpy.types.Context) -> bpy.types.Object:
+def create_match_camera(
+    context: bpy.types.Context,
+    *,
+    copy_k_from: bpy.types.Object | None = None,
+) -> bpy.types.Object:
     """Create a new Empty + Camera match hierarchy and make it active.
 
     When the previously active match has manual K (Manual FOV / YAML / 1-point),
     that K is copied onto the new match (scaled later when a still is bound).
+    Pass ``copy_k_from`` to copy from a specific root instead of the active one.
     """
     # Snapshot before we replace the active root.
-    previous_root = properties.active_root(context)
+    previous_root = (
+        copy_k_from if copy_k_from is not None else properties.active_root(context)
+    )
     manual_source = (
         previous_root.pm_session
         if previous_root is not None and _session_has_manual_k(previous_root.pm_session)
@@ -286,6 +304,68 @@ def create_match_camera(context: bpy.types.Context) -> bpy.types.Object:
     session.status = status
     properties.tag_viewport_redraw(context)
     return root
+
+
+def _resolved_still_path(image_path: str) -> str:
+    return str(Path(bpy.path.abspath(image_path)).expanduser().resolve())
+
+
+def bound_still_paths() -> set[str]:
+    """Resolved source stills already attached to a match in this scene."""
+    bound: set[str] = set()
+    for root in properties.iter_match_roots():
+        path = (root.pm_session.image_path or "").strip()
+        if not path:
+            continue
+        try:
+            bound.add(_resolved_still_path(path))
+        except Exception:
+            bound.add(path)
+    return bound
+
+
+def stills_in_folder(folder: str) -> list[Path]:
+    """Image files in ``folder`` (not recursive; skip derived plates)."""
+    from . import distortion as distortion_module
+
+    directory = Path(bpy.path.abspath(folder)).expanduser().resolve()
+    if not directory.is_dir():
+        raise ValueError(f"Not a folder: {directory}")
+    stills: list[Path] = []
+    for child in sorted(directory.iterdir(), key=lambda path: path.name.lower()):
+        if not child.is_file():
+            continue
+        if child.suffix.lower() not in REFERENCE_IMAGE_SUFFIXES:
+            continue
+        if distortion_module.is_derived_plate_filepath(str(child)):
+            continue
+        stills.append(child)
+    return stills
+
+
+def bulk_create_match_cameras(
+    context: bpy.types.Context, folder: str
+) -> tuple[int, int]:
+    """Create a match per still in ``folder``. Returns (created, skipped).
+
+    Skips files that already have a match. Copies Manual FOV / YAML / 1-point K
+    from the match that was active when bulk started, same as New Match Camera.
+    """
+    source_root = properties.active_root(context)
+    stills = stills_in_folder(folder)
+    bound = bound_still_paths()
+    created = 0
+    skipped = 0
+    for still in stills:
+        resolved = str(still.resolve())
+        if resolved in bound:
+            skipped += 1
+            continue
+        create_match_camera(context, copy_k_from=source_root)
+        bind_reference_image(context, resolved)
+        bound.add(resolved)
+        created += 1
+    return created, skipped
 
 
 def set_active_match(context: bpy.types.Context, root: bpy.types.Object) -> None:
@@ -1480,17 +1560,13 @@ def _is_derived_display_image(
     filepath = getattr(image, "filepath", "") or getattr(image, "filepath_raw", "") or ""
     if not filepath:
         return False
+    from . import distortion as distortion_module
+
     try:
-        resolved = str(
-            Path(bpy.path.abspath(filepath)).expanduser().resolve()
-        ).lower()
+        resolved = str(Path(bpy.path.abspath(filepath)).expanduser().resolve())
     except Exception:
-        return False
-    return (
-        resolved.endswith("-pm-view.png")
-        or resolved.endswith("-pm-vp-edges.png")
-        or resolved.endswith(".undistorted.png")
-    )
+        resolved = filepath
+    return distortion_module.is_derived_plate_filepath(resolved)
 
 
 def _resolved_source_image_path(settings: properties.PMSession) -> str | None:
@@ -1503,9 +1579,10 @@ def _resolved_source_image_path(settings: properties.PMSession) -> str | None:
         )
     except Exception:
         return None
-    lower = absolute_path.lower()
-    # Never treat a baked view/undistorted sibling as the solver source.
-    if lower.endswith("-pm-view.png") or lower.endswith(".undistorted.png"):
+    from . import distortion as distortion_module
+
+    # Never treat a baked view/undistorted plate as the solver source.
+    if distortion_module.is_derived_plate_filepath(absolute_path):
         return None
     if not Path(absolute_path).is_file():
         return None
@@ -1566,11 +1643,9 @@ def ensure_session_image(settings: properties.PMSession) -> bool:
                 candidate_path = str(
                     Path(bpy.path.abspath(candidate.filepath)).expanduser().resolve()
                 )
-                lower = candidate_path.lower()
-                if not (
-                    lower.endswith("-pm-view.png")
-                    or lower.endswith(".undistorted.png")
-                ):
+                from . import distortion as distortion_module
+
+                if not distortion_module.is_derived_plate_filepath(candidate_path):
                     settings.image_path = candidate_path
             return True
     return False

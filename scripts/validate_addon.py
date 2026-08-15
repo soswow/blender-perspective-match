@@ -279,6 +279,7 @@ def main() -> None:
                 reloaded.image_path,
                 distortion._plate_key(reloaded),
             ))
+            assert view_path.parent.name == "post-processed"
             assert view_path.exists()
             assert reloaded.view_lighting_applied
             assert reloaded.camera_object.data.background_images[0].image == view_image
@@ -479,6 +480,33 @@ def main() -> None:
             assert session_b.sync_is_applied
             assert abs(session_b.sync_scale - 1.0) < 1.0e-6
             assert abs(session_b.sync_translation[0] - translation_sim[0]) < 0.2
+
+            # Bulk Create: skip stills that already have a match; copy locked K.
+            bulk_dir = temporary_path / "bulk_stills"
+            bulk_dir.mkdir()
+            bulk_a = _write_png(bulk_dir, "bulk_a", 800, 600, (0.4, 0.1, 0.1, 1.0))
+            _write_png(bulk_dir, "bulk_b", 800, 600, (0.1, 0.4, 0.1, 1.0))
+            _write_png(bulk_dir, "bulk_c", 400, 300, (0.1, 0.1, 0.4, 1.0))
+            scene.set_active_match(bpy.context, root_sync_a)
+            session_a.lock_focal = True
+            source_fx = float(session_a.fx)
+            source_width = int(session_a.image_width)
+            scene.bind_reference_image(bpy.context, str(bulk_a))
+            created, skipped = scene.bulk_create_match_cameras(
+                bpy.context, str(bulk_dir)
+            )
+            assert created == 2, (created, skipped)
+            assert skipped == 1
+            created_again, skipped_again = scene.bulk_create_match_cameras(
+                bpy.context, str(bulk_dir)
+            )
+            assert created_again == 0
+            assert skipped_again == 3
+            last = properties.active_session(bpy.context)
+            assert last is not None and last.lock_focal
+            assert last.image_path.endswith("bulk_c.png")
+            expected_fx = source_fx * (400.0 / float(source_width))
+            assert abs(float(last.fx) - expected_fx) < 1.0e-3, (last.fx, expected_fx)
 
             print("Perspective Match smoke test passed")
         finally:

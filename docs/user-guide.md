@@ -12,7 +12,7 @@ PM_<image>
     PM_<image>_Camera
 ```
 
-1. Click **New Match Camera** to create an empty match, activate it, and open the reference image file dialog. If the previously active match has **Manual FOV** (including YAML import) or is in **1 Point** mode, its camera matrix K is copied onto the new match and scaled when you load a still.
+1. Click **New Match Camera** to create an empty match, activate it, and open the reference image file dialog. If the previously active match has **Manual FOV** (including YAML import) or is in **1 Point** mode, its camera matrix K is copied onto the new match and scaled when you load a still. **Bulk Create** (same row) picks a folder of stills and makes a match for each image that does not already have one, copying that same K onto every new match.
 2. Use **Active Match** to switch which session the sidebar edits. Switching also sets the scene camera and enters that camera view.
 3. With the **Perspective Match** sidebar tab selected, **Ctrl+Alt+NumPad 1–9** jumps to the Nth match (name-sorted). Any Draw / Pick Origin / PP / Landmark tool is cancelled first.
 4. Click the rename button (font icon) next to **New** to rename the active match. Opening a still defaults the name from the image stem; rename anytime afterward. The hierarchy stays `PM_<name>` / `PM_<name>_Origin` / `PM_<name>_Camera`.
@@ -25,7 +25,7 @@ Each match remembers its last camera-view zoom and pan. Switching matches (or Un
 
 ## Load a reference
 
-With a match active, choose **Open Image** (or create a match with **New Match Camera**, which opens the same dialog). The still binds to the **active** match only. If no match is active, Open Image creates one first. Hover the filename under Reference Image to see the full path.
+With a match active, choose **Open Image** (or create a match with **New Match Camera**, which opens the same dialog). The still binds to the **active** match only. If no match is active, Open Image creates one first. Hover the filename under Reference Image to see the full path. **Bulk Create** loads every still in a folder (not subfolders), skips images that already have a match, and copies the active match’s locked K when Manual FOV / YAML / 1-point applies.
 
 After bind, the hierarchy is renamed from `PM_Match_###` to `PM_<image stem>` when that name is free. The camera becomes the scene camera, the still is attached with **Stretch** frame mapping, and render dimensions match the image.
 
@@ -72,7 +72,7 @@ Build your own floor/wall geometry in Blender once the camera is matched—the e
 
 **Import YAML** with a ROS `camera_info` file that includes OpenCV `plumb_bob` (or `rational_polynomial`) coefficients applies that model and generates/switches to an undistorted plate. **Estimate Distortion** is separate: with a successful VP solve and ≥3 concurrent segments on one axis, it fits Fitzgibbon λ once (replacing imported D) and shows an undistorted plate. Editing VP lines afterward keeps the current model; press the button again to re-fit λ. Works with **Manual FOV**. **Original Plate** clears distortion, re-solves, and restores the source still. Plate file paths are logged to the console, not the sidebar status line.
 
-View lighting applies display-only exposure/contrast to a sibling `*-pm-view.png` plate (undistorted uses the same lit image).
+View lighting applies display-only exposure/contrast to `post-processed/<stem>-pm-view.png` next to the source still (undistorted and VP-detect debug plates go in the same folder). The folder is created if needed.
 
 ## Limitations
 

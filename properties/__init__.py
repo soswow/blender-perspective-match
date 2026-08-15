@@ -614,7 +614,7 @@ class PMSession(bpy.types.PropertyGroup):
         update=_redraw,
     )
 
-    # Display-only lighting; baked into a sibling *-pm-view.png, never feeds the solver.
+    # Display-only lighting; baked into post-processed/*-pm-view.png, never feeds the solver.
     view_exposure: bpy.props.FloatProperty(
         name="Exposure",
         description="Display-only exposure in stops (−2…+2). Apply to bake into the view plate",

@@ -1210,7 +1210,7 @@ class PM_OT_clear_placement(bpy.types.Operator):
 
 
 class PM_OT_generate_undistorted(bpy.types.Operator):
-    """Generate a transparent expanded undistorted PNG beside the source."""
+    """Generate a transparent expanded undistorted PNG in post-processed/."""
 
     bl_idname = "perspective_match.generate_undistorted"
     bl_label = "Generate Undistorted Plate"
@@ -1324,12 +1324,13 @@ class PM_OT_toggle_undistorted(bpy.types.Operator):
 
 
 class PM_OT_apply_view_lighting(bpy.types.Operator):
-    """Bake display-only exposure/contrast into a sibling view plate."""
+    """Bake display-only exposure/contrast into a post-processed view plate."""
 
     bl_idname = "perspective_match.apply_view_lighting"
     bl_label = "Apply Lighting"
     bl_description = (
-        "Bake exposure and contrast into <stem>-pm-view.png and use it as the camera background"
+        "Bake exposure and contrast into post-processed/<stem>-pm-view.png "
+        "and use it as the camera background"
     )
     bl_options = {"REGISTER", "UNDO"}
 
@@ -2086,6 +2087,53 @@ class PM_OT_new_match_camera(bpy.types.Operator):
             self.report({"INFO"}, f"Created {root.name}")
         # Chain into Open Image so a new match always starts with a still.
         bpy.ops.perspective_match.load_image("INVOKE_DEFAULT")
+        return {"FINISHED"}
+
+
+class PM_OT_bulk_create_matches(bpy.types.Operator):
+    """Create a match camera for each still in a folder."""
+
+    bl_idname = "perspective_match.bulk_create_matches"
+    bl_label = "Bulk Create"
+    bl_description = (
+        "Create a Perspective Match for each still in a folder. Skips images "
+        "that already have a match. Copies Manual FOV / YAML / 1-point "
+        "intrinsics from the currently active match onto every new one"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    directory: bpy.props.StringProperty(
+        name="Folder",
+        description="Folder of stills to turn into match cameras",
+        subtype="DIR_PATH",
+    )
+    filepath: bpy.props.StringProperty(subtype="FILE_PATH", options={"HIDDEN"})
+    filter_folder: bpy.props.BoolProperty(default=True, options={"HIDDEN"})
+
+    def invoke(self, context: bpy.types.Context, _event) -> set[str]:
+        settings = properties.active_session(context)
+        if settings is not None and settings.image_path:
+            parent = Path(bpy.path.abspath(settings.image_path)).expanduser().parent
+            if parent.is_dir():
+                self.directory = str(parent)
+        context.window_manager.fileselect_add(self)
+        return {"RUNNING_MODAL"}
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        folder = (self.directory or "").strip()
+        if not folder:
+            self.report({"ERROR"}, "Choose a folder of stills")
+            return {"CANCELLED"}
+        try:
+            created, skipped = scene.bulk_create_match_cameras(context, folder)
+        except Exception as error:
+            return _report_exception(self, error)
+        if created == 0 and skipped == 0:
+            self.report({"WARNING"}, "No stills in that folder")
+            return {"CANCELLED"}
+        created_label = "match" if created == 1 else "matches"
+        skipped_bit = f", {skipped} skipped" if skipped else ""
+        self.report({"INFO"}, f"Created {created} {created_label}{skipped_bit}")
         return {"FINISHED"}
 
 
@@ -2897,6 +2945,7 @@ class PM_OT_clear_sync(bpy.types.Operator):
 
 CLASSES = (
     PM_OT_new_match_camera,
+    PM_OT_bulk_create_matches,
     PM_OT_reference_image_label,
     PM_OT_report_info,
     PM_OT_unload_match,

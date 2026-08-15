@@ -190,15 +190,10 @@ def _enhance_gray_for_detection(
 
 
 def default_vp_detect_debug_path(source_path: str, match_key: str = "") -> str:
-    """Sibling debug plate: ``<stem>[-match]-pm-vp-edges.png``."""
-    path = Path(source_path)
-    token = "".join(
-        character if character.isalnum() or character in "-_" else "_"
-        for character in match_key
-    ).strip("_")[:48]
-    if token:
-        return str(path.with_name(f"{path.stem}-{token}-pm-vp-edges.png"))
-    return str(path.with_name(f"{path.stem}-pm-vp-edges.png"))
+    """VP-detect debug plate under ``post-processed/`` next to the source still."""
+    from ..scene import distortion
+
+    return distortion.default_vp_detect_debug_path(source_path, match_key)
 
 
 def _prepare_detection_gray(gray: np.ndarray) -> tuple[np.ndarray, float]:
@@ -1597,6 +1592,7 @@ def write_vp_detect_debug_plate(
         output_image.use_view_as_render = False
     distortion._write_image_pixels(output_image, rgba)
     if resolved_path:
+        distortion.ensure_derived_plate_parent(resolved_path)
         output_image.filepath_raw = resolved_path
         output_image.file_format = "PNG"
         try:
@@ -1682,6 +1678,7 @@ def install_debug_rgba_plate(settings, debug_rgba: np.ndarray):
             .expanduser()
             .resolve()
         )
+        distortion.ensure_derived_plate_parent(resolved_path)
         output_image.filepath_raw = resolved_path
         output_image.file_format = "PNG"
         try:

@@ -155,7 +155,13 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             layout, "PM_match_cameras", "Match Cameras", "CAMERA_DATA"
         )
         if cameras is not None:
-            cameras.operator("perspective_match.new_match_camera", icon="ADD")
+            create_row = cameras.row(align=True)
+            create_row.operator("perspective_match.new_match_camera", icon="ADD")
+            create_row.operator(
+                "perspective_match.bulk_create_matches",
+                text="Bulk Create",
+                icon="FILE_FOLDER",
+            )
             cameras.prop(workspace, "active_match", text="")
             actions = cameras.row(align=True)
             actions.enabled = settings is not None
