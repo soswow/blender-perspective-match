@@ -265,6 +265,13 @@ _NUMPAD_SLOT_KEYS = {
     "NUMPAD_9": 9,
 }
 
+_ARROW_CYCLE_KEYS = {
+    "LEFT_ARROW": -1,
+    "UP_ARROW": -1,
+    "RIGHT_ARROW": 1,
+    "DOWN_ARROW": 1,
+}
+
 
 def _clear_interact_flags(context: bpy.types.Context) -> None:
     """Reset workspace modal flags without touching a live operator."""
@@ -359,6 +366,13 @@ def _match_slot_from_event(event) -> int | None:
     return _NUMPAD_SLOT_KEYS.get(event.type)
 
 
+def _match_cycle_from_event(event) -> int | None:
+    """Ctrl+Alt+Arrow → +1 (next) or -1 (previous), else None."""
+    if event.value != "PRESS" or not event.ctrl or not event.alt:
+        return None
+    return _ARROW_CYCLE_KEYS.get(event.type)
+
+
 def cancel_active_interact(context: bpy.types.Context) -> bool:
     """Cancel Draw / Pick Origin / PP / Landmark modal. True if one was live."""
     global _active_interact
@@ -405,6 +419,28 @@ def activate_match_by_slot(
     if report is not None:
         report({"INFO"}, f"Active match {index}: {root.name}")
     return {"FINISHED"}
+
+
+def activate_match_by_delta(
+    context: bpy.types.Context,
+    delta: int,
+    *,
+    report=None,
+) -> set[str]:
+    """Activate the previous/next match in the name-sorted list (wraps)."""
+    roots = properties.iter_match_roots()
+    if not roots:
+        if report is not None:
+            report({"WARNING"}, "No Perspective Match cameras")
+        return {"CANCELLED"}
+    step = 1 if int(delta) >= 0 else -1
+    current = properties.active_root(context)
+    try:
+        index = roots.index(current)
+        index = (index + step) % len(roots)
+    except ValueError:
+        index = 0 if step > 0 else len(roots) - 1
+    return activate_match_by_slot(context, index + 1, report=report)
 
 
 def _delete_selected_item(context: bpy.types.Context) -> bool:
@@ -1900,11 +1936,17 @@ class PM_OT_interact(bpy.types.Operator):
         # External clears (match switch / unload) or lost session end the tool.
         if settings is None or not workspace.is_modal or _active_interact is not self:
             return self._finish(context, cancelled=True)
-        # Ctrl+Alt+NumPad must be handled here — modal handlers see keys first.
+        # Ctrl+Alt+NumPad / arrows must be handled here — modal handlers see keys first.
         slot = _match_slot_from_event(event)
         if slot is not None:
             result = activate_match_by_slot(context, slot, report=self.report)
             # Successful switch already finished this modal via set_active_match.
+            if result == {"FINISHED"}:
+                return {"CANCELLED"}
+            return {"RUNNING_MODAL"}
+        cycle = _match_cycle_from_event(event)
+        if cycle is not None:
+            result = activate_match_by_delta(context, cycle, report=self.report)
             if result == {"FINISHED"}:
                 return {"CANCELLED"}
             return {"RUNNING_MODAL"}
@@ -2035,6 +2077,7 @@ class PM_OT_activate_match_slot(bpy.types.Operator):
     bl_label = "Activate Match Slot"
     bl_description = (
         "Switch to a Perspective Match by slot (Ctrl+Alt+NumPad 1–9). "
+        "Re-selecting the current match keeps live zoom/pan. "
         "Cancels any active Draw / Pick tool"
     )
     bl_options = {"REGISTER", "UNDO"}
@@ -2054,6 +2097,35 @@ class PM_OT_activate_match_slot(bpy.types.Operator):
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         return activate_match_by_slot(context, int(self.index), report=self.report)
+
+
+class PM_OT_cycle_match(bpy.types.Operator):
+    """Activate the previous or next match in the name-sorted list."""
+
+    bl_idname = "perspective_match.cycle_match"
+    bl_label = "Cycle Match"
+    bl_description = (
+        "Switch to the previous or next Perspective Match "
+        "(Ctrl+Alt+Arrow). Wraps around the name-sorted list"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    direction: bpy.props.IntProperty(
+        name="Direction",
+        description="+1 next, -1 previous",
+        default=1,
+        min=-1,
+        max=1,
+    )
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        return _perspective_match_sidebar_active(context)
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        return activate_match_by_delta(
+            context, int(self.direction), report=self.report
+        )
 
 
 class PM_OT_new_match_camera(bpy.types.Operator):
@@ -2985,5 +3057,6 @@ CLASSES = (
     PM_OT_cancel_refine_lenses,
     PM_OT_clear_sync,
     PM_OT_activate_match_slot,
+    PM_OT_cycle_match,
     PM_OT_interact,
 )

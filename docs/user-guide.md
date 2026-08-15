@@ -14,14 +14,14 @@ PM_<image>
 
 1. Click **New Match Camera** to create an empty match, activate it, and open the reference image file dialog. If the previously active match has **Manual FOV** (including YAML import) or is in **1 Point** mode, its camera matrix K is copied onto the new match and scaled when you load a still. **Bulk Create** (same row) picks a folder of stills and makes a match for each image that does not already have one, copying that same K onto every new match.
 2. Use **Active Match** to switch which session the sidebar edits. Switching also sets the scene camera and enters that camera view.
-3. With the **Perspective Match** sidebar tab selected, **Ctrl+Alt+NumPad 1–9** jumps to the Nth match (name-sorted). Any Draw / Pick Origin / PP / Landmark tool is cancelled first.
+3. With the **Perspective Match** sidebar tab selected, **Ctrl+Alt+NumPad 1–9** jumps to the Nth match (name-sorted). **Ctrl+Alt+←/↑** and **Ctrl+Alt+→/↓** step to the previous or next match (wraps). Any Draw / Pick Origin / PP / Landmark tool is cancelled first. Pressing the shortcut for the match that is already active keeps the current zoom and pan.
 4. Click the rename button (font icon) next to **New** to rename the active match. Opening a still defaults the name from the image stem; rename anytime afterward. The hierarchy stays `PM_<name>` / `PM_<name>_Origin` / `PM_<name>_Camera`.
 5. Click **Unload** to detach the sidebar from editing without deleting objects.
 6. Click the trash button to **Delete** the active match (asks for confirmation). This removes its collection / Origin / Camera and that match’s landmark picks. You can still delete via the Outliner; the dropdown prunes dead entries automatically.
 
-Selecting objects in the viewport does **not** change the active match—only New, Rename, Unload, Delete, the dropdown, and the NumPad shortcuts do.
+Selecting objects in the viewport does **not** change the active match—only New, Rename, Unload, Delete, the dropdown, and the match shortcuts do.
 
-Each match remembers its last camera-view zoom and pan. Switching matches (or Unload / save) stores the current framing; activating a match restores it.
+Each match remembers its last camera-view zoom and pan. Switching matches (or Unload / save) stores the current framing; activating a different match restores it. Re-activating the current match does not reset zoom/pan.
 
 ## Load a reference
 

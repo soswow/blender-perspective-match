@@ -35,7 +35,7 @@ def is_dev_install() -> bool:
 
 
 def _register_keymaps() -> None:
-    """Ctrl+Alt+NumPad 1–9 → activate match slot (poll-gated to sidebar tab)."""
+    """Ctrl+Alt+NumPad 1–9 and Ctrl+Alt+Arrows (poll-gated to sidebar tab)."""
     _unregister_keymaps()
     window_manager = bpy.context.window_manager
     if window_manager is None:
@@ -53,6 +53,21 @@ def _register_keymaps() -> None:
             alt=True,
         )
         item.properties.index = index
+        _addon_keymaps.append((keymap, item))
+    for key, direction in (
+        ("RIGHT_ARROW", 1),
+        ("DOWN_ARROW", 1),
+        ("LEFT_ARROW", -1),
+        ("UP_ARROW", -1),
+    ):
+        item = keymap.keymap_items.new(
+            "perspective_match.cycle_match",
+            key,
+            "PRESS",
+            ctrl=True,
+            alt=True,
+        )
+        item.properties.direction = direction
         _addon_keymaps.append((keymap, item))
 
 

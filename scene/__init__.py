@@ -378,12 +378,10 @@ def set_active_match(context: bpy.types.Context, root: bpy.types.Object) -> None
     operators_module.cancel_active_interact(context)
     space = properties.workspace(context)
     previous = space.active_root
-    # Persist the outgoing match's camera-view zoom/pan before replacing it.
-    if (
-        previous is not None
-        and previous != root
-        and properties.is_match_root(previous)
-    ):
+    same_match = previous == root
+    # Persist live zoom/pan even when re-activating the same match, so a
+    # slot shortcut cannot restore the framing from the previous switch.
+    if previous is not None and properties.is_match_root(previous):
         capture_camera_view_framing(context, previous.pm_session)
     space.active_root = root
     # Keep the dropdown in sync without re-entering its update callback.
@@ -410,7 +408,7 @@ def set_active_match(context: bpy.types.Context, root: bpy.types.Object) -> None
             session.undistorted_height if use_undistorted else session.image_height
         )
         context.scene.render.resolution_percentage = 100
-    enter_camera_view(context, restore_framing=True)
+    enter_camera_view(context, restore_framing=not same_match)
     properties.tag_viewport_redraw(context)
 
 
