@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Re-activating the current match (slot shortcut or cycle wrap) keeps live camera-view zoom/pan
+- Selected landmark picks draw in red (still larger than other picks)
 - View lighting, undistorted plates, and VP-detect debug images are written to a `post-processed` folder next to the source still
 - Lock Rotation allows 90° world-axis jumps (including an X/Y swap) instead of forcing identity
 - Reload Perspective Match only appears when the extension is a linked git checkout, not a zip install

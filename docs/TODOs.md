@@ -1,6 +1,7 @@
 TODOs to be done:
 
 Done TODOs:
+- Make selected landmarks red color (keep bigger size as it is right now)
 - If I switch to PM, change zoom/pan and then press shortcut for same PM - it resets zoom/pan to what it was then I switch to it initially.
 - Add a shortcuts cltr + option/alt + arrow keys to move between PMs.
 - Ability create number of images in bulk making PM for each of them. There is a button right now New Match Camera for single image. I want a new button in the same row (Button group) to the right from main one to say "Bulk Create". When loading images from a folder those for which PM already exists should be ignored. Use same logic in terms of reusing currenly loaded image's camera intrinsics. Apply them to all images.
