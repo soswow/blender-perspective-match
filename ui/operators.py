@@ -781,7 +781,8 @@ class PM_OT_detect_vp_lines(bpy.types.Operator):
     def poll(cls, context: bpy.types.Context) -> bool:
         if vp_detect_is_running():
             return False
-        if not opencv_support.capabilities().line_segment_detector:
+        caps = opencv_support.cached_capabilities()
+        if caps is None or not caps.line_segment_detector:
             return False
         settings = properties.active_session(context)
         return (
@@ -998,7 +999,8 @@ class PM_OT_toggle_vp_detect_debug(bpy.types.Operator):
     def poll(cls, context: bpy.types.Context) -> bool:
         if vp_detect_is_running():
             return False
-        if not opencv_support.capabilities().line_segment_detector:
+        caps = opencv_support.cached_capabilities()
+        if caps is None or not caps.line_segment_detector:
             return False
         settings = properties.active_session(context)
         return (
@@ -2570,7 +2572,8 @@ class PM_OT_find_apriltag_landmarks(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
-        if not opencv_support.capabilities().apriltag_25h9:
+        caps = opencv_support.cached_capabilities()
+        if caps is None or not caps.apriltag_25h9:
             return False
         settings = properties.active_session(context)
         return (

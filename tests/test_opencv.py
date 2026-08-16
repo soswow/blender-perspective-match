@@ -31,6 +31,14 @@ _spec.loader.exec_module(opencv_support)
 
 
 class OpenCvProbeTests(unittest.TestCase):
+    def test_cached_capabilities_none_before_probe(self) -> None:
+        previous = opencv_support._cached
+        opencv_support._cached = None
+        try:
+            self.assertIsNone(opencv_support.cached_capabilities())
+        finally:
+            opencv_support._cached = previous
+
     def test_capabilities_are_booleans(self) -> None:
         caps = opencv_support.capabilities(refresh=True)
         self.assertIsInstance(caps.apriltag_25h9, bool)

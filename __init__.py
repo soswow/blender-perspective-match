@@ -270,15 +270,17 @@ def schedule_reload() -> bool:
 
 
 def _notify_optional_opencv() -> None:
-    """Info + console when OpenCV extras are missing; core matching still loads."""
+    """Import OpenCV off the enable path; Info + console if extras are missing."""
     from .detect import opencv as opencv_support
 
     message = opencv_support.load_warning()
+    # Detect / AprilTag buttons appear once the probe has run.
+    properties.tag_viewport_redraw()
     if not message:
-        return
+        return None
     print(message)
     if bpy.app.background:
-        return
+        return None
 
     def _report_to_info() -> None:
         try:
@@ -288,6 +290,7 @@ def _notify_optional_opencv() -> None:
         return None
 
     bpy.app.timers.register(_report_to_info, first_interval=0.05)
+    return None
 
 
 def register() -> None:
@@ -304,13 +307,17 @@ def register() -> None:
     overlay.register_viewport_draw_handler()
     icons.register()
     _register_keymaps()
-    _notify_optional_opencv()
+    # ``import cv2`` is slow; do it after Preferences enable returns.
+    if not bpy.app.timers.is_registered(_notify_optional_opencv):
+        bpy.app.timers.register(_notify_optional_opencv, first_interval=0.01)
 
 
 def unregister() -> None:
     """Remove drawing, scene state, and all registered classes."""
     # Always reach class teardown: a failure in icons/keymaps used to leave
     # PMLineSegment registered, so the next enable raised "already registered".
+    if bpy.app.timers.is_registered(_notify_optional_opencv):
+        bpy.app.timers.unregister(_notify_optional_opencv)
     try:
         icons.unregister()
     except Exception:

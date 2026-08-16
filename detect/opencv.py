@@ -27,6 +27,15 @@ class OpenCvCapabilities:
 _cached: OpenCvCapabilities | None = None
 
 
+def cached_capabilities() -> OpenCvCapabilities | None:
+    """Last probe result, or ``None`` if ``cv2`` has not been imported yet.
+
+    UI poll/draw should use this so enabling the add-on does not ``import cv2``
+    on the main thread (OpenCV's native load is seconds).
+    """
+    return _cached
+
+
 def capabilities(refresh: bool = False) -> OpenCvCapabilities:
     """Probe OpenCV once; later calls reuse the result unless ``refresh``."""
     global _cached

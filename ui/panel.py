@@ -267,7 +267,8 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             operator.mode = "LINE"
             row.operator("perspective_match.delete_selected", text="", icon="TRASH")
             row.operator("perspective_match.clear_axis", text="", icon="X")
-            if opencv_support.capabilities().line_segment_detector:
+            caps = opencv_support.cached_capabilities()
+            if caps is not None and caps.line_segment_detector:
                 detect_row = line_body.row(align=True)
                 detect_row.operator_context = "INVOKE_DEFAULT"
                 detect_row.operator(
@@ -510,7 +511,8 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             text="",
             icon="IMPORT",
         )
-        if opencv_support.capabilities().apriltag_25h9:
+        caps = opencv_support.cached_capabilities()
+        if caps is not None and caps.apriltag_25h9:
             list_column.operator(
                 "perspective_match.find_apriltag_landmarks",
                 text="",

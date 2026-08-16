@@ -1,4 +1,5 @@
 TODOs to be done:
+- See if there is a bug where new PM doesn't pick up all camera intrinsics from current one.
 
 Done TODOs:
 - Make selected landmarks red color (keep bigger size as it is right now)

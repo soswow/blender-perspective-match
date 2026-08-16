@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Import YAML applies ROS `plumb_bob` / `rational_polynomial` distortion coefficients to undistort the still
 
 ### Changed
+- Enable no longer waits on OpenCV; Detect VP Lines / Find AprilTags appear after a short probe
 - Re-activating the current match (slot shortcut or cycle wrap) keeps live camera-view zoom/pan
 - Selected landmark picks draw in red (still larger than other picks)
 - View lighting, undistorted plates, and VP-detect debug images are written to a `post-processed` folder next to the source still
