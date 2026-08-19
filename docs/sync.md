@@ -24,7 +24,7 @@ Each landmark keeps a stable `item_id` plus a `creation_index` (add order). UI h
 
 ### Find AprilTags
 
-Scans the active match still for **AprilTag 25h9** markers (same family as `tools/print-apriltags`). Each tag centre becomes a point pick. Landmark names are `idNN-25h9` (NN = 00–99): if a landmark whose name **starts with** that prefix already exists, its pick for this match is updated; otherwise a new point landmark is created. Needs OpenCV (`opencv-contrib-python-headless`); the button is hidden when that wheel is missing.
+Scans the active match still for **AprilTag 25h9** markers (same family as `tools/print-apriltags`). Each tag's perspective-correct physical centre (the corner-diagonal intersection, corrected for active lens distortion) becomes a point pick. Landmark names are `idNN-25h9` (NN = 00–99): if a landmark whose name **starts with** that prefix already exists, its pick for this match is updated; otherwise a new point landmark is created. Needs OpenCV (`opencv-contrib-python-headless`); the button is hidden when that wheel is missing.
 
 ### Known 3D workflow
 

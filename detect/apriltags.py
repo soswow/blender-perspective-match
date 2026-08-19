@@ -25,6 +25,7 @@ class DetectedTag:
 
     tag_id: int
     center_xy: tuple[float, float]
+    corners_xy: tuple[tuple[float, float], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -117,6 +118,29 @@ def _load_detection_gray(cv2_module, settings) -> np.ndarray:
     return _gray_from_blender_image(cv2_module, image)
 
 
+def _cross_2d(first: np.ndarray, second: np.ndarray) -> float:
+    return float(first[0] * second[1] - first[1] * second[0])
+
+
+def _projective_quad_center(points_xy: np.ndarray) -> np.ndarray:
+    """Return the intersection of a quadrilateral's corner diagonals.
+
+    OpenCV orders marker corners around the perimeter. The diagonal
+    intersection is the projection of the tag's physical center; averaging
+    the four image-space corners is only correct for affine projections.
+    """
+    points = np.asarray(points_xy, dtype=np.float64).reshape(4, 2)
+    first_direction = points[2] - points[0]
+    second_direction = points[3] - points[1]
+    denominator = _cross_2d(first_direction, second_direction)
+    if abs(denominator) < 1.0e-12:
+        # A decoded marker should never be degenerate, but retain a finite
+        # fallback if a detector supplies pathological corners.
+        return points.mean(axis=0)
+    distance = _cross_2d(points[1] - points[0], second_direction) / denominator
+    return points[0] + distance * first_direction
+
+
 def detect_apriltags_25h9(gray: np.ndarray) -> list[DetectedTag]:
     """Run ArUco AprilTag 25h9 detection; return tag id + center pixels."""
     cv2 = _import_cv2()
@@ -140,13 +164,16 @@ def detect_apriltags_25h9(gray: np.ndarray) -> list[DetectedTag]:
         # Skip ids outside the naming scheme (print sheets use 0–19 typically).
         if tag_id < 0 or tag_id > 99:
             continue
-        # corners shape: (1, 4, 2) — mean is the tag centre in image pixels.
+        # corners shape: (1, 4, 2), ordered around the marker perimeter.
         points = np.asarray(corners, dtype=np.float64).reshape(-1, 2)
-        center = points.mean(axis=0)
+        center = _projective_quad_center(points)
         detections.append(
             DetectedTag(
                 tag_id=tag_id,
                 center_xy=(float(center[0]), float(center[1])),
+                corners_xy=tuple(
+                    (float(point[0]), float(point[1])) for point in points
+                ),
             )
         )
     # Stable order for UI / status messages.
@@ -154,11 +181,69 @@ def detect_apriltags_25h9(gray: np.ndarray) -> list[DetectedTag]:
     return detections
 
 
+def _correct_centers_for_lens(
+    detections: list[DetectedTag], settings
+) -> list[DetectedTag]:
+    """Recompute tag centers in ideal space when the source has distortion."""
+    # Lens distortion breaks projective straight lines. Find each center after
+    # mapping its four corners into the ideal pinhole image, then map the center
+    # back to source-image storage coordinates. Overlay and sync will apply the
+    # normal source→ideal mapping exactly once later.
+    from .. import core
+
+    division_lambda = float(getattr(settings, "division_lambda", 0.0))
+    brown_conrady = tuple(getattr(settings, "brown_conrady", ()))
+    if not core.has_lens_distortion(
+        division_lambda,
+        brown_conrady,
+        threshold=1.0e-15,
+    ):
+        return detections
+
+    fx = max(float(getattr(settings, "fx", 0.0)), 1.0e-6)
+    fy = max(float(getattr(settings, "fy", 0.0)), 1.0e-6)
+    cx = float(getattr(settings, "cx", 0.0))
+    cy = float(getattr(settings, "cy", 0.0))
+    corrected: list[DetectedTag] = []
+    for detection in detections:
+        if len(detection.corners_xy) != 4:
+            corrected.append(detection)
+            continue
+        ideal_corners = core.undistort_points(
+            np.asarray(detection.corners_xy, dtype=np.float64),
+            fx,
+            fy,
+            cx,
+            cy,
+            division_lambda,
+            brown_conrady,
+        )
+        ideal_center = _projective_quad_center(ideal_corners)
+        storage_center = core.distort_points(
+            ideal_center.reshape(1, 2),
+            fx,
+            fy,
+            cx,
+            cy,
+            division_lambda,
+            brown_conrady,
+        )[0]
+        corrected.append(
+            DetectedTag(
+                tag_id=detection.tag_id,
+                center_xy=(float(storage_center[0]), float(storage_center[1])),
+                corners_xy=detection.corners_xy,
+            )
+        )
+    return corrected
+
+
 def detect_apriltags_in_session(settings) -> list[DetectedTag]:
     """Detect AprilTags in the active match's reference still."""
     cv2 = _import_cv2()
     gray = _load_detection_gray(cv2, settings)
-    return detect_apriltags_25h9(gray)
+    detections = detect_apriltags_25h9(gray)
+    return _correct_centers_for_lens(detections, settings)
 
 
 def _set_point_observation(

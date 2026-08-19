@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Bulk Create now copies the complete locked camera intrinsics and distortion model to every new match
+- AprilTag landmarks now use the perspective-correct tag center instead of the average of its projected corners
 
 ## [0.3.7] - 2026-08-13
 

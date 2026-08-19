@@ -9,6 +9,8 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
+
 # Load apriltags without executing the add-on's bpy-dependent __init__.
 _ROOT = Path(__file__).resolve().parents[1]
 if "match_perspective" not in sys.modules:
@@ -24,12 +26,13 @@ if "match_perspective.detect" not in sys.modules:
 _spec = importlib.util.spec_from_file_location(
     "match_perspective.detect.apriltags",
     _ROOT / "detect/apriltags.py",
-    submodule_search_locations=[str(_ROOT / "detect")],
 )
 assert _spec is not None and _spec.loader is not None
 apriltag_detect = importlib.util.module_from_spec(_spec)
 sys.modules["match_perspective.detect.apriltags"] = apriltag_detect
 _spec.loader.exec_module(apriltag_detect)
+
+from match_perspective import core
 
 
 class AprilTagNamingTests(unittest.TestCase):
@@ -56,6 +59,76 @@ class AprilTagNamingTests(unittest.TestCase):
         found_extra = apriltag_detect.find_landmark_for_tag(landmarks, 7)
         self.assertIs(found_extra, landmarks[2])
         self.assertIsNone(apriltag_detect.find_landmark_for_tag(landmarks, 3))
+
+
+class AprilTagCenterTests(unittest.TestCase):
+    def test_projective_center_is_diagonal_intersection(self) -> None:
+        # The mean is (2, 1), but perspective maps the square's physical center
+        # to the diagonal intersection (2, 4/3).
+        trapezoid = np.array(
+            ((0.0, 0.0), (4.0, 0.0), (3.0, 2.0), (1.0, 2.0)),
+            dtype=np.float64,
+        )
+        center = apriltag_detect._projective_quad_center(trapezoid)
+        self.assertTrue(np.allclose(center, (2.0, 4.0 / 3.0), atol=1.0e-9))
+
+    def test_degenerate_corners_have_finite_fallback(self) -> None:
+        collapsed = np.array(
+            ((1.0, 2.0), (1.0, 2.0), (1.0, 2.0), (1.0, 2.0)),
+            dtype=np.float64,
+        )
+        center = apriltag_detect._projective_quad_center(collapsed)
+        self.assertTrue(np.allclose(center, (1.0, 2.0), atol=1.0e-9))
+
+    def test_distorted_corners_are_centered_in_ideal_space(self) -> None:
+        ideal_corners = np.array(
+            (
+                (240.0, 180.0),
+                (760.0, 210.0),
+                (690.0, 640.0),
+                (300.0, 590.0),
+            ),
+            dtype=np.float64,
+        )
+        fx, fy, cx, cy = 780.0, 790.0, 500.0, 400.0
+        coefficients = (-0.18, 0.035, 0.002, -0.001, 0.0, 0.0, 0.0, 0.0)
+        observed_corners = core.distort_points(
+            ideal_corners,
+            fx,
+            fy,
+            cx,
+            cy,
+            0.0,
+            coefficients,
+        )
+        detection = apriltag_detect.DetectedTag(
+            tag_id=6,
+            center_xy=tuple(observed_corners.mean(axis=0)),
+            corners_xy=tuple(tuple(point) for point in observed_corners),
+        )
+        settings = SimpleNamespace(
+            fx=fx,
+            fy=fy,
+            cx=cx,
+            cy=cy,
+            division_lambda=0.0,
+            brown_conrady=coefficients,
+        )
+
+        corrected = apriltag_detect._correct_centers_for_lens(
+            [detection], settings
+        )[0]
+        recovered_ideal = core.undistort_points(
+            np.asarray([corrected.center_xy]),
+            fx,
+            fy,
+            cx,
+            cy,
+            0.0,
+            coefficients,
+        )[0]
+        expected_ideal = apriltag_detect._projective_quad_center(ideal_corners)
+        self.assertTrue(np.allclose(recovered_ideal, expected_ideal, atol=1.0e-3))
 
 
 class AprilTagDetectSmokeTests(unittest.TestCase):
