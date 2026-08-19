@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "match_perspective"
-version = "0.3.7"
+version = "0.4.0"
 name = "Perspective Match"
 tagline = "Match a Blender camera to a reference image"
 maintainer = "Aleksandr 'Sasha' Motsjonov"

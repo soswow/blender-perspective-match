@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-19
+
 ### Added
 - Ctrl+Alt+Arrow keys cycle to the previous/next match (name-sorted, wraps)
 - Bulk Create next to New Match Camera: one match per still in a folder, skipping images that already have a match and copying the active camera’s K
