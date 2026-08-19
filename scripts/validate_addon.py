@@ -488,10 +488,28 @@ def main() -> None:
             _write_png(bulk_dir, "bulk_b", 800, 600, (0.1, 0.4, 0.1, 1.0))
             _write_png(bulk_dir, "bulk_c", 400, 300, (0.1, 0.1, 0.4, 1.0))
             scene.set_active_match(bpy.context, root_sync_a)
-            session_a.lock_focal = True
-            source_fx = float(session_a.fx)
-            source_width = int(session_a.image_width)
             scene.bind_reference_image(bpy.context, str(bulk_a))
+            session_a.lock_focal = True
+            session_a.fx = 910.0
+            session_a.fy = 930.0
+            session_a.cx = 390.0
+            session_a.cy = 305.0
+            session_a.brown_conrady = (
+                -0.08,
+                0.015,
+                0.001,
+                -0.002,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+            )
+            source_k = (
+                float(session_a.fx),
+                float(session_a.fy),
+                float(session_a.cx),
+                float(session_a.cy),
+            )
             created, skipped = scene.bulk_create_match_cameras(
                 bpy.context, str(bulk_dir)
             )
@@ -505,8 +523,22 @@ def main() -> None:
             last = properties.active_session(bpy.context)
             assert last is not None and last.lock_focal
             assert last.image_path.endswith("bulk_c.png")
-            expected_fx = source_fx * (400.0 / float(source_width))
-            assert abs(float(last.fx) - expected_fx) < 1.0e-3, (last.fx, expected_fx)
+            expected_k = tuple(value * 0.5 for value in source_k)
+            actual_k = (
+                float(last.fx),
+                float(last.fy),
+                float(last.cx),
+                float(last.cy),
+            )
+            assert np.allclose(actual_k, expected_k, atol=1.0e-3), (
+                actual_k,
+                expected_k,
+            )
+            assert np.allclose(
+                tuple(last.brown_conrady), tuple(session_a.brown_conrady)
+            )
+            assert last.view_undistorted
+            assert last.undistorted_image is not None
 
             print("Perspective Match smoke test passed")
         finally:

@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rename Match focuses the name field with the current name selected, so typing replaces it
 - AprilTag detection: increase sensitivity by 2x
 
+### Fixed
+- Bulk Create now copies the complete locked camera intrinsics and distortion model to every new match
+
 ## [0.3.7] - 2026-08-13
 
 ### Changed

@@ -2138,7 +2138,7 @@ class PM_OT_new_match_camera(bpy.types.Operator):
     bl_description = (
         "Create a new Perspective Match camera session and open the "
         "reference image file dialog. If the previous match has Manual FOV "
-        "(or YAML / 1-point K), those intrinsics are copied"
+        "(or YAML / 1-point K), its intrinsics and distortion are copied"
     )
     bl_options = {"REGISTER", "UNDO"}
 
@@ -2171,8 +2171,8 @@ class PM_OT_bulk_create_matches(bpy.types.Operator):
     bl_label = "Bulk Create"
     bl_description = (
         "Create a Perspective Match for each still in a folder. Skips images "
-        "that already have a match. Copies Manual FOV / YAML / 1-point "
-        "intrinsics from the currently active match onto every new one"
+        "that already have a match. Copies the complete Manual FOV / YAML / "
+        "1-point camera model from the active match onto every new one"
     )
     bl_options = {"REGISTER", "UNDO"}
 

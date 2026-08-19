@@ -161,13 +161,19 @@ def _calibration_from_manual_k(
     height: int,
     *,
     hfov_fallback: float = 50.0,
+    division_lambda: float = 0.0,
+    lambda_saturated: bool = False,
+    brown_conrady: tuple[float, ...] = (),
 ) -> core.Calibration:
-    """Default pose with an explicit locked K (no distortion copy)."""
+    """Default pose with an explicit locked K and reusable lens model."""
     calibration = _default_calibration(hfov_fallback, width, height)
     calibration.intrinsics.fx = float(fx)
     calibration.intrinsics.fy = float(fy)
     calibration.intrinsics.cx = float(cx)
     calibration.intrinsics.cy = float(cy)
+    calibration.division_lambda = float(division_lambda)
+    calibration.lambda_saturated = bool(lambda_saturated)
+    calibration.brown_conrady = core.pad_brown_conrady(brown_conrady)
     return calibration
 
 
@@ -178,7 +184,7 @@ def _copy_manual_k_from_session(
     width: int,
     height: int,
 ) -> core.Calibration:
-    """Copy locked K from source into target, scaled to the target plate size."""
+    """Copy locked K and distortion, scaling K to the target plate size."""
     fx, fy, cx, cy = _scale_intrinsics_pixels(
         float(source.fx),
         float(source.fy),
@@ -198,8 +204,10 @@ def _copy_manual_k_from_session(
         width,
         height,
         hfov_fallback=float(source.hfov_degrees),
+        division_lambda=float(source.division_lambda),
+        lambda_saturated=bool(source.lambda_saturated),
+        brown_conrady=tuple(source.brown_conrady),
     )
-    calibration.brown_conrady = core.pad_brown_conrady(tuple(source.brown_conrady))
     store_calibration(target, calibration)
     return calibration
 
@@ -211,8 +219,9 @@ def create_match_camera(
 ) -> bpy.types.Object:
     """Create a new Empty + Camera match hierarchy and make it active.
 
-    When the previously active match has manual K (Manual FOV / YAML / 1-point),
-    that K is copied onto the new match (scaled later when a still is bound).
+    When the previously active match has locked intrinsics (Manual FOV / YAML /
+    1-point), its K and distortion are copied onto the new match. K is scaled
+    later when a still is bound.
     Pass ``copy_k_from`` to copy from a specific root instead of the active one.
     """
     # Snapshot before we replace the active root.
@@ -293,7 +302,7 @@ def create_match_camera(
             width=int(session.image_width),
             height=int(session.image_height),
         )
-        status = "Manual K copied — load a reference image"
+        status = "Camera intrinsics copied — load a reference image"
     else:
         calibration = _default_calibration(session.hfov_degrees)
         store_calibration(session, calibration)
@@ -348,8 +357,9 @@ def bulk_create_match_cameras(
 ) -> tuple[int, int]:
     """Create a match per still in ``folder``. Returns (created, skipped).
 
-    Skips files that already have a match. Copies Manual FOV / YAML / 1-point K
-    from the match that was active when bulk started, same as New Match Camera.
+    Skips files that already have a match. Copies Manual FOV / YAML / 1-point
+    intrinsics and distortion from the match that was active when bulk started,
+    same as New Match Camera.
     """
     source_root = properties.active_root(context)
     stills = stills_in_folder(folder)
@@ -649,8 +659,8 @@ def bind_reference_image(context: bpy.types.Context, image_path: str) -> bpy.typ
     if width <= 0 or height <= 0:
         raise ValueError("The selected image has no readable pixel dimensions")
 
-    # Capture locked K before plate size is overwritten (new match may have
-    # inherited Manual FOV / YAML / 1-point intrinsics from the previous PM).
+    # Capture the reusable camera model before plate size is overwritten (a new
+    # match may have inherited Manual FOV / YAML / 1-point intrinsics).
     keep_manual_k = _session_has_manual_k(session)
     source_width = int(session.image_width)
     source_height = int(session.image_height)
@@ -659,6 +669,9 @@ def bind_reference_image(context: bpy.types.Context, image_path: str) -> bpy.typ
     source_cx = float(session.cx)
     source_cy = float(session.cy)
     source_hfov = float(session.hfov_degrees)
+    source_division_lambda = float(session.division_lambda)
+    source_lambda_saturated = bool(session.lambda_saturated)
+    source_brown_conrady = tuple(session.brown_conrady)
 
     _reset_session_edit_state(session)
     root.matrix_world = Matrix.Identity(4)
@@ -702,17 +715,34 @@ def bind_reference_image(context: bpy.types.Context, image_path: str) -> bpy.typ
         )
         session.lock_focal = True
         calibration = _calibration_from_manual_k(
-            fx, fy, cx, cy, width, height, hfov_fallback=source_hfov
+            fx,
+            fy,
+            cx,
+            cy,
+            width,
+            height,
+            hfov_fallback=source_hfov,
+            division_lambda=source_division_lambda,
+            lambda_saturated=source_lambda_saturated,
+            brown_conrady=source_brown_conrady,
         )
         store_calibration(session, calibration)
         session.status = (
-            f"Manual K kept · HFOV {session.hfov_degrees:.2f}° — draw VP lines"
+            f"Camera intrinsics kept · HFOV {session.hfov_degrees:.2f}° — draw VP lines"
         )
     else:
         calibration = _default_calibration(session.hfov_degrees, width, height)
         store_calibration(session, calibration)
         session.status = "Choose a perspective mode, then draw VP lines"
     apply_camera(context.scene, session, calibration)
+    if keep_manual_k and calibration.has_distortion and not calibration.lambda_saturated:
+        from . import distortion
+
+        try:
+            distortion.generate_undistorted_plate(context)
+        except Exception as error:
+            session.status = f"Camera intrinsics kept; plate failed: {error}"
+            print(f"Perspective Match: undistorted plate failed: {error}")
     context.scene.render.resolution_x = width
     context.scene.render.resolution_y = height
     context.scene.render.resolution_percentage = 100
