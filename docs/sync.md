@@ -13,6 +13,8 @@ When several matches show the same scene, register them into one Blender world.
 
 Why not “any corresponding points”? Photogrammetry / SfM solves relative orientation and baseline *direction* from enough 2D↔2D matches — and so does this sync. Absolute baseline **length** stays free when dropping the second camera into an already-metric Blender world (classic stereo scale ambiguity). **Known 3D** Empties, On Ground picks, or a later ruler pin that one DOF; without them, a depth heuristic chooses a plausible scale.
 
+A match does not need five landmarks in common with the anchor itself. Sync can register it through any already-registered match with at least five well-spread shared point landmarks, then carry that pose into the anchor world. This also covers cameras on the opposite side of a surface — for example, a camera below the ground plane looking upward. When a strong five-or-more-point bridge conflicts with only one or two sparse overlaps elsewhere, the bridge chooses the initial pose branch; joint adjustment still uses the sparse observations and can downweight them as outliers.
+
 ### Calibrated ground-only workflow (no VP lines)
 
 When the anchor has no usable VP solve, **Solve Sync** and **Diagnose** can initialize its ground frame directly from calibrated views:

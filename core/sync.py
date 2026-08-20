@@ -51,6 +51,32 @@ class SimilarityTransform:
         return self.rotation.T @ ((point - self.translation) / scale)
 
 
+def _compose_similarities(
+    outer: SimilarityTransform,
+    inner: SimilarityTransform,
+) -> SimilarityTransform:
+    """Return the transform that applies ``inner`` and then ``outer``."""
+    return SimilarityTransform(
+        scale=float(outer.scale) * float(inner.scale),
+        rotation=outer.rotation @ inner.rotation,
+        translation=(
+            float(outer.scale) * (outer.rotation @ inner.translation)
+            + outer.translation
+        ),
+    )
+
+
+def _inverse_similarity(similarity: SimilarityTransform) -> SimilarityTransform:
+    """Return the inverse private/shared similarity."""
+    scale = max(float(similarity.scale), 1.0e-12)
+    rotation = similarity.rotation.T
+    return SimilarityTransform(
+        scale=1.0 / scale,
+        rotation=rotation,
+        translation=-(rotation @ similarity.translation) / scale,
+    )
+
+
 # Relative least-squares weights for pick confidence (UI: High / Normal / Low).
 CONFIDENCE_WEIGHTS = {
     "HIGH": 4.0,
@@ -3715,6 +3741,24 @@ def _solve_relative_from_pairs(
                     - rotation_yaw @ other.camera_center,
                 )
             )
+        # Five-to-seven calibrated pairs cannot use the linear eight-point
+        # seed above. Cover the opposite camera hemisphere explicitly so LM
+        # can reach cameras below a plane and looking upward.
+        flip_x = np.diag((1.0, -1.0, -1.0)).astype(np.float64)
+        for yaw in np.linspace(-np.pi, np.pi, 16, endpoint=False):
+            cosine = float(np.cos(yaw))
+            sine = float(np.sin(yaw))
+            rotation_yaw = np.array(
+                ((cosine, -sine, 0.0), (sine, cosine, 0.0), (0.0, 0.0, 1.0)),
+                dtype=np.float64,
+            )
+            seeds.append(
+                SimilarityTransform(
+                    scale=1.0,
+                    rotation=rotation_yaw @ flip_x,
+                    translation=np.zeros(3, dtype=np.float64),
+                )
+            )
 
     best: SimilarityTransform | None = None
     best_key: tuple[float, float, float] | None = None
@@ -4586,6 +4630,213 @@ def _relative_pose_from_correspondences(
     return best, ""
 
 
+def _point_pairs_between_matches(
+    reference_id: str,
+    other_id: str,
+    observations_by_landmark: dict[str, list[SyncObservation]],
+    *,
+    excluded_landmark_ids: set[str] | None = None,
+) -> list[tuple[SyncObservation, SyncObservation]]:
+    """Return ordinary 2D↔2D pairs ordered reference then other."""
+    excluded = excluded_landmark_ids or set()
+    pairs: list[tuple[SyncObservation, SyncObservation]] = []
+    for landmark_id, items in observations_by_landmark.items():
+        if landmark_id in excluded:
+            continue
+        by_match = {item.match_id: item for item in items}
+        if reference_id in by_match and other_id in by_match:
+            pairs.append((by_match[reference_id], by_match[other_id]))
+    return pairs
+
+
+def _registration_candidate_rmse(
+    match_id: str,
+    candidate: SimilarityTransform,
+    registered: dict[str, SimilarityTransform],
+    observations_by_landmark: dict[str, list[SyncObservation]],
+    matches: dict[str, SyncMatchInput],
+    landmarks: dict[str, np.ndarray],
+    *,
+    known_world_ids: set[str] | None = None,
+) -> float:
+    """Score one shared-frame pose against every currently registered view."""
+    errors: list[float] = []
+    for reference_id, reference_similarity in registered.items():
+        pairs = _point_pairs_between_matches(
+            reference_id,
+            match_id,
+            observations_by_landmark,
+            excluded_landmark_ids=known_world_ids,
+        )
+        if not pairs:
+            continue
+        relative = _compose_similarities(
+            _inverse_similarity(reference_similarity),
+            candidate,
+        )
+        errors.extend(
+            _reprojection_errors_for_similarity(
+                relative,
+                pairs,
+                matches[reference_id].calibration,
+                matches[match_id].calibration,
+                [],
+                [],
+                weighted=True,
+            )
+        )
+
+    # Multi-view points enforce one shared 3D location and therefore resolve
+    # the scale that an isolated two-view relative pose cannot observe.
+    for landmark_id, point in landmarks.items():
+        items = observations_by_landmark.get(landmark_id, [])
+        observation = next(
+            (item for item in items if item.match_id == match_id),
+            None,
+        )
+        if observation is None:
+            continue
+        projected = project_private_point(
+            candidate.inverse_point(point),
+            matches[match_id].calibration,
+        )
+        scale = _observation_scale(observation)
+        if projected is None:
+            errors.append(scale * 1.0e3)
+            continue
+        errors.append(
+            scale
+            * float(
+                np.hypot(
+                    projected[0] - observation.u,
+                    projected[1] - observation.v,
+                )
+            )
+        )
+    if not errors:
+        return float("inf")
+    return float(np.sqrt(np.mean(np.square(errors))))
+
+
+def _registration_strong_pair_rmse(
+    match_id: str,
+    candidate: SimilarityTransform,
+    registered: dict[str, SimilarityTransform],
+    observations_by_landmark: dict[str, list[SyncObservation]],
+    matches: dict[str, SyncMatchInput],
+    *,
+    known_world_ids: set[str] | None = None,
+) -> float:
+    """Score against registered views that independently constrain pose."""
+    errors: list[float] = []
+    for reference_id, reference_similarity in registered.items():
+        pairs = _point_pairs_between_matches(
+            reference_id,
+            match_id,
+            observations_by_landmark,
+            excluded_landmark_ids=known_world_ids,
+        )
+        if len(pairs) < 5:
+            continue
+        relative = _compose_similarities(
+            _inverse_similarity(reference_similarity),
+            candidate,
+        )
+        errors.extend(
+            _reprojection_errors_for_similarity(
+                relative,
+                pairs,
+                matches[reference_id].calibration,
+                matches[match_id].calibration,
+                [],
+                [],
+                weighted=True,
+            )
+        )
+    if not errors:
+        return float("inf")
+    return float(np.sqrt(np.mean(np.square(errors))))
+
+
+def _bridge_pose_candidates(
+    match_id: str,
+    registered: dict[str, SimilarityTransform],
+    observations_by_landmark: dict[str, list[SyncObservation]],
+    matches: dict[str, SyncMatchInput],
+    landmarks: dict[str, np.ndarray],
+    *,
+    known_world_ids: set[str] | None = None,
+) -> list[SimilarityTransform]:
+    """Register a pending match through any solved view with 5+ shared picks."""
+    candidates: list[SimilarityTransform] = []
+    for reference_id, reference_similarity in registered.items():
+        pairs = _point_pairs_between_matches(
+            reference_id,
+            match_id,
+            observations_by_landmark,
+            excluded_landmark_ids=known_world_ids,
+        )
+        if len(pairs) < 5:
+            continue
+        if _correspondence_geometry_issue(pairs, match_id) is not None:
+            continue
+        relative = _solve_relative_from_pairs(
+            pairs,
+            matches[reference_id].calibration,
+            matches[match_id].calibration,
+        )
+        if relative is None:
+            continue
+        relative_candidates = [relative]
+
+        points_reference: list[np.ndarray] = []
+        points_image: list[np.ndarray] = []
+        point_weights: list[float] = []
+        inverse_reference = _inverse_similarity(reference_similarity)
+        for landmark_id, point in landmarks.items():
+            observation = next(
+                (
+                    item
+                    for item in observations_by_landmark.get(landmark_id, [])
+                    if item.match_id == match_id
+                ),
+                None,
+            )
+            if observation is None:
+                continue
+            points_reference.append(inverse_reference.transform_point(point))
+            points_image.append(
+                np.array((observation.u, observation.v), dtype=np.float64)
+            )
+            point_weights.append(float(observation.weight))
+        if points_reference:
+            scaled = _apply_known_baseline_scale(
+                relative,
+                points_reference,
+                points_image,
+                matches[match_id].calibration,
+                matches[reference_id].calibration,
+            )
+            relative_candidates.append(scaled)
+            relative_candidates.append(
+                _refine_rigid_mixed(
+                    scaled,
+                    pairs,
+                    points_reference,
+                    points_image,
+                    matches[reference_id].calibration,
+                    matches[match_id].calibration,
+                    point_weights=point_weights,
+                )
+            )
+
+        candidates.extend(
+            _compose_similarities(reference_similarity, item)
+            for item in relative_candidates
+        )
+    return candidates
+
+
 
 def _register_from_relative_pose(
     anchor_id: str,
@@ -4612,8 +4863,52 @@ def _register_from_relative_pose(
         return similarities, ""
     pending = set(free_match_ids)
     failure_details: list[str] = []
+    known_world_ids = set(known_world or {})
+    anchor_metric = _metric_landmarks(
+        observations_by_landmark,
+        anchor_id,
+        matches[anchor_id].calibration,
+        known_world,
+    )
+
+    def strong_anchor_support(match_id: str) -> bool:
+        """Avoid accepting a minimal direct-anchor pose before graph bridges."""
+        pairs = _point_pairs_between_matches(
+            anchor_id,
+            match_id,
+            observations_by_landmark,
+            excluded_landmark_ids=known_world_ids,
+        )
+        metric_count = sum(
+            1
+            for landmark_id in anchor_metric
+            if any(
+                item.match_id == match_id
+                for item in observations_by_landmark.get(landmark_id, [])
+            )
+        )
+        known_line_count = sum(
+            1
+            for landmark_id in (known_lines or {})
+            if any(
+                item.match_id == match_id
+                for item in (line_observations_by_landmark or {}).get(
+                    landmark_id, []
+                )
+            )
+        )
+        return bool(
+            len(pairs) >= 5
+            or metric_count >= 3
+            or known_line_count >= 3
+            or match_id in (initial_similarities or {})
+            or lock_rotation
+            or lock_translation
+        )
 
     for match_id in sorted(list(pending)):
+        if not strong_anchor_support(match_id):
+            continue
         solved, detail = _relative_pose_from_correspondences(
             anchor_id,
             match_id,
@@ -4693,9 +4988,10 @@ def _register_from_relative_pose(
                     )
                 )
             solved = None
+            pose_candidates: list[SimilarityTransform] = []
             if collected is not None:
                 points_shared, points_image = collected
-                solved = _pnp_similarity(
+                pnp_candidate = _pnp_similarity(
                     match_id,
                     points_shared,
                     points_image,
@@ -4703,9 +4999,9 @@ def _register_from_relative_pose(
                     lock_rotation=lock_rotation,
                     lock_translation=lock_translation,
                 )
-                if solved is not None and line_constraints:
-                    solved = _refine_rigid_mixed(
-                        solved,
+                if pnp_candidate is not None and line_constraints:
+                    pnp_candidate = _refine_rigid_mixed(
+                        pnp_candidate,
                         [],
                         list(points_shared),
                         list(points_image),
@@ -4715,7 +5011,64 @@ def _register_from_relative_pose(
                         lock_rotation=lock_rotation,
                         lock_translation=lock_translation,
                     )
-            elif len(line_constraints) >= 3:
+                if pnp_candidate is not None:
+                    pose_candidates.append(pnp_candidate)
+
+            if not lock_rotation and not lock_translation:
+                pose_candidates.extend(
+                    _bridge_pose_candidates(
+                        match_id,
+                        similarities,
+                        observations_by_landmark,
+                        matches,
+                        landmarks,
+                        known_world_ids=known_world_ids,
+                    )
+                )
+
+            ranked_candidates = []
+            for candidate in pose_candidates:
+                graph_rmse = _registration_candidate_rmse(
+                    match_id,
+                    candidate,
+                    similarities,
+                    observations_by_landmark,
+                    matches,
+                    landmarks,
+                    known_world_ids=known_world_ids,
+                )
+                strong_pair_rmse = _registration_strong_pair_rmse(
+                    match_id,
+                    candidate,
+                    similarities,
+                    observations_by_landmark,
+                    matches,
+                    known_world_ids=known_world_ids,
+                )
+                primary_rmse = (
+                    strong_pair_rmse
+                    if np.isfinite(strong_pair_rmse)
+                    else graph_rmse
+                )
+                ranked_candidates.append(
+                    (primary_rmse, graph_rmse, candidate)
+                )
+            if ranked_candidates:
+                best_primary = min(item[0] for item in ranked_candidates)
+                # Translation scale is invisible to a two-view reprojection
+                # score, so equivalent raw/scaled seeds differ only by float
+                # noise. Preserve generation order in that tie: the raw
+                # relative-pose branch is the least influenced by sparse,
+                # contradictory overlaps elsewhere in the graph.
+                selected = next(
+                    item
+                    for item in ranked_candidates
+                    if item[0] <= best_primary + 0.25
+                )
+                if selected[0] <= 40.0:
+                    solved = selected[2]
+
+            if solved is None and len(line_constraints) >= 3:
                 for seed in _mixed_pose_seeds(
                     matches[anchor_id].calibration,
                     matches[match_id].calibration,
@@ -4753,7 +5106,47 @@ def _register_from_relative_pose(
             pending.discard(match_id)
             progressed = True
         if not progressed:
-            break
+            # Preserve minimal direct-anchor workflows as a fallback, but do
+            # not let a weak direct pose override a stronger registered-view
+            # bridge that merely failed its whole-graph quality check.
+            for match_id in sorted(list(pending)):
+                has_pair_bridge = any(
+                    len(
+                        _point_pairs_between_matches(
+                            reference_id,
+                            match_id,
+                            observations_by_landmark,
+                            excluded_landmark_ids=known_world_ids,
+                        )
+                    )
+                    >= 5
+                    for reference_id in similarities
+                    if reference_id != anchor_id
+                )
+                if has_pair_bridge:
+                    continue
+                solved, detail = _relative_pose_from_correspondences(
+                    anchor_id,
+                    match_id,
+                    observations_by_landmark,
+                    matches,
+                    known_world,
+                    known_lines=known_lines,
+                    line_observations_by_landmark=line_observations_by_landmark,
+                    parallel_pairs=parallel_pairs,
+                    initial_similarity=(initial_similarities or {}).get(match_id),
+                    lock_rotation=lock_rotation,
+                    lock_translation=lock_translation,
+                )
+                if solved is None:
+                    if detail:
+                        failure_details.append(detail)
+                    continue
+                similarities[match_id] = solved
+                pending.discard(match_id)
+                progressed = True
+            if not progressed:
+                break
 
     if pending:
         pending_list = ", ".join(f"'{name}'" for name in sorted(pending))

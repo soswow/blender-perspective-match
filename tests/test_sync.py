@@ -350,6 +350,129 @@ class LandmarkSyncTests(unittest.TestCase):
         recovered = transform.inverse_point(shared)
         self.assertTrue(np.allclose(point, recovered, atol=1.0e-9))
 
+    def test_graph_bridge_recovers_camera_below_ground(self) -> None:
+        """A pending camera may bridge through a solved non-anchor view and flip."""
+        intrinsics = core.CameraIntrinsics(
+            fx=900.0,
+            fy=900.0,
+            cx=400.0,
+            cy=300.0,
+            image_width=800,
+            image_height=600,
+        )
+        local_center = np.array((-3.0, -4.0, 2.4), dtype=np.float64)
+        local_rotation = _look_at_rotation(
+            local_center,
+            np.array((0.7, 0.7, 0.4), dtype=np.float64),
+        )
+
+        def local_calibration() -> core.Calibration:
+            return core.Calibration(
+                intrinsics,
+                local_rotation.copy(),
+                local_center.copy(),
+            )
+
+        def similarity_for_camera(
+            center_shared: np.ndarray,
+            target_shared: np.ndarray,
+        ) -> sync.SimilarityTransform:
+            shared_rotation = _look_at_rotation(center_shared, target_shared)
+            rotation = shared_rotation.T @ local_rotation
+            return sync.SimilarityTransform(
+                scale=1.0,
+                rotation=rotation,
+                translation=center_shared - rotation @ local_center,
+            )
+
+        anchor_similarity = sync.SimilarityTransform()
+        back_similarity = similarity_for_camera(
+            np.array((4.0, -3.0, 2.2), dtype=np.float64),
+            np.array((0.7, 0.7, 0.4), dtype=np.float64),
+        )
+        bottom_center = np.array((0.0, 2.5, -2.0), dtype=np.float64)
+        bottom_similarity = similarity_for_camera(
+            bottom_center,
+            np.array((0.7, 0.7, 0.6), dtype=np.float64),
+        )
+        similarities = {
+            "anchor": anchor_similarity,
+            "back": back_similarity,
+            "bottom": bottom_similarity,
+        }
+        match_map = {
+            match_id: sync.SyncMatchInput(match_id, local_calibration())
+            for match_id in similarities
+        }
+        matches = list(match_map.values())
+        ground_points = {
+            "g0": np.array((-1.2, -0.8, 0.0)),
+            "g1": np.array((1.8, -0.7, 0.0)),
+            "g2": np.array((1.7, 1.8, 0.0)),
+            "g3": np.array((-1.1, 1.6, 0.0)),
+            "g4": np.array((0.2, 0.1, 0.0)),
+            "g5": np.array((0.8, 1.0, 0.0)),
+        }
+        bridge_points = {
+            "b0": np.array((-0.4, -0.2, 0.2)),
+            "b1": np.array((1.4, -0.1, 1.1)),
+            "b2": np.array((1.5, 1.2, 0.3)),
+            "b3": np.array((-0.3, 1.3, 1.0)),
+            "b4": np.array((0.5, 0.4, 0.7)),
+            "b5": np.array((1.0, 0.8, 0.2)),
+        }
+        observations: list[sync.SyncObservation] = []
+
+        def observe(
+            match_id: str,
+            landmark_id: str,
+            point: np.ndarray,
+            ground=False,
+            pixel_offset=(0.0, 0.0),
+        ):
+            private_point = similarities[match_id].inverse_point(point)
+            u_coord, v_coord = _project(
+                private_point,
+                match_map[match_id].calibration,
+            )
+            observations.append(
+                sync.SyncObservation(
+                    match_id,
+                    landmark_id,
+                    u_coord + pixel_offset[0],
+                    v_coord + pixel_offset[1],
+                    on_ground=ground,
+                )
+            )
+
+        for landmark_id, point in ground_points.items():
+            observe("anchor", landmark_id, point, True)
+            observe("back", landmark_id, point, True)
+        for index, (landmark_id, point) in enumerate(bridge_points.items()):
+            if index < 2:
+                # Sparse overlaps can be imprecise or accidentally disagree
+                # with the stronger bridge; they must not choose its pose branch.
+                observe(
+                    "anchor",
+                    landmark_id,
+                    point,
+                    pixel_offset=(80.0, -60.0),
+                )
+            observe("back", landmark_id, point)
+            observe("bottom", landmark_id, point)
+
+        result = sync.solve_landmark_sync(
+            matches,
+            observations,
+            anchor_id="anchor",
+        )
+        self.assertTrue(result.success, result.message)
+        recovered = result.similarities["bottom"]
+        recovered_center = recovered.transform_point(local_center)
+        self.assertLess(float(recovered_center[2]), -0.5)
+        recovered_forward = recovered.rotation @ local_rotation.T[:, 2]
+        self.assertGreater(float(recovered_forward[2]), 0.05)
+
     def test_batched_shared_projection_matches_scalar_projection(self) -> None:
         """The optimized projection path must preserve scalar solver geometry."""
         matches, _observations, true_sim, _center, _shared = _synthetic_scene(

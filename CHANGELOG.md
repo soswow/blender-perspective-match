@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Calibrated sync can infer the shared ground frame from four or more matching On Ground landmarks across three or more images, without requiring VP lines
 
+### Fixed
+- Sync can register upside-down or below-ground cameras through five or more landmarks shared with any already-solved view
+
 ## [0.4.0] - 2026-08-19
 
 ### Added
