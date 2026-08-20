@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Calibrated sync can infer the shared ground frame from four or more matching On Ground landmarks across three or more images, without requiring VP lines
+
 ## [0.4.0] - 2026-08-19
 
 ### Added

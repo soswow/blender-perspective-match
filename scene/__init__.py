@@ -2377,6 +2377,150 @@ def build_sync_problem(context: bpy.types.Context):
     )
 
 
+def ensure_ground_frame_from_landmarks(
+    context: bpy.types.Context,
+) -> str:
+    """Infer VP-free camera orientations from calibrated ground correspondences.
+
+    The anchor gets an arbitrary but deterministic horizontal yaw; its Z axis
+    comes from the shared plane. Other unsolved matches inherit orientations
+    from their calibrated homographies. Existing VP-solved orientations win.
+    """
+    from ..core import sync as sync_module
+
+    anchor = properties.anchor_root(context)
+    if anchor is None:
+        return ""
+    anchor_session = anchor.pm_session
+    anchor_lines = line_bundles_from_settings(anchor_session)
+    anchor_lock_focal = bool(
+        anchor_session.lock_focal or anchor_session.vp_mode == "1"
+    )
+    if core.can_solve_orientation(
+        anchor_lines,
+        lock_focal=anchor_lock_focal,
+        vp_mode=anchor_session.vp_mode,
+    ):
+        return ""
+    if not _session_has_manual_k(anchor_session):
+        return ""
+
+    matches, observations, _known, _line_obs, _known_lines, _parallel = (
+        build_sync_problem(context)
+    )
+    root_by_name = {
+        root.name: root
+        for root in properties.iter_match_roots()
+        if getattr(root.pm_session, "sync_enabled", True)
+    }
+    calibrated_ids = {
+        match_id
+        for match_id, root in root_by_name.items()
+        if _session_has_manual_k(root.pm_session)
+    }
+    calibrated_matches = [
+        item for item in matches if item.match_id in calibrated_ids
+    ]
+    calibrated_observations = [
+        item for item in observations if item.match_id in calibrated_ids
+    ]
+    initialization = sync_module.estimate_anchor_ground_plane(
+        calibrated_matches,
+        calibrated_observations,
+        anchor_id=anchor.name,
+    )
+    if initialization is None:
+        return ""
+
+    anchor_calibration = calibration_from_settings(anchor_session)
+    yaw_reference = anchor_calibration.rotation_w2c
+    for match_id in initialization.supporting_match_ids:
+        root = root_by_name.get(match_id)
+        relative_rotation = initialization.relative_rotations.get(match_id)
+        if root is None or relative_rotation is None:
+            continue
+        session = root.pm_session
+        line_bundles = line_bundles_from_settings(session)
+        lock_focal = bool(session.lock_focal or session.vp_mode == "1")
+        if not core.can_solve_orientation(
+            line_bundles,
+            lock_focal=lock_focal,
+            vp_mode=session.vp_mode,
+        ):
+            continue
+        # The plane fixes vertical but not compass yaw. Preserve the semantic
+        # X/Y axes from an already VP-solved supporting view when available.
+        yaw_reference = (
+            relative_rotation.T @ calibration_from_settings(session).rotation_w2c
+        )
+        break
+    anchor_calibration.rotation_w2c = sync_module.rotation_from_ground_normal(
+        -initialization.plane_normal_camera,
+        reference_rotation=yaw_reference,
+    )
+    anchor_calibration.camera_center = core.default_camera_center(
+        anchor_calibration.rotation_w2c
+    )
+    if anchor_session.origin_is_set:
+        anchor_calibration.camera_center, _scale = core.apply_origin_and_scale(
+            anchor_calibration,
+            tuple(float(value) for value in anchor_session.origin_image),
+        )
+    store_calibration(anchor_session, anchor_calibration)
+    apply_camera(
+        context.scene,
+        anchor_session,
+        anchor_calibration,
+        update_scene_camera=False,
+    )
+
+    inferred_count = 1
+    for match_id in initialization.supporting_match_ids:
+        root = root_by_name.get(match_id)
+        relative_rotation = initialization.relative_rotations.get(match_id)
+        if root is None or relative_rotation is None:
+            continue
+        session = root.pm_session
+        line_bundles = line_bundles_from_settings(session)
+        lock_focal = bool(session.lock_focal or session.vp_mode == "1")
+        if core.can_solve_orientation(
+            line_bundles,
+            lock_focal=lock_focal,
+            vp_mode=session.vp_mode,
+        ):
+            continue
+        calibration = calibration_from_settings(session)
+        calibration.rotation_w2c = (
+            relative_rotation @ anchor_calibration.rotation_w2c
+        )
+        height = 1.7 * float(
+            initialization.plane_distance_ratios.get(match_id, 1.0)
+        )
+        calibration.camera_center = core.default_camera_center(
+            calibration.rotation_w2c,
+            height=float(np.clip(height, 0.2, 20.0)),
+        )
+        if session.origin_is_set:
+            calibration.camera_center, _scale = core.apply_origin_and_scale(
+                calibration,
+                tuple(float(value) for value in session.origin_image),
+            )
+        store_calibration(session, calibration)
+        apply_camera(
+            context.scene,
+            session,
+            calibration,
+            update_scene_camera=False,
+        )
+        inferred_count += 1
+
+    properties.tag_viewport_redraw(context)
+    return (
+        f"Ground frame inferred for {inferred_count} match(es) from "
+        f"{len(initialization.supporting_match_ids)} calibrated view(s)"
+    )
+
+
 def known_anchor_pick_warnings(context: bpy.types.Context) -> list[str]:
     """Flag Known 3D Empties whose stored anchor pick disagrees with re-projection.
 
@@ -2441,6 +2585,7 @@ def diagnose_sync(context: bpy.types.Context):
     if anchor is None:
         raise ValueError("Choose an anchor match first")
 
+    ground_frame_note = ensure_ground_frame_from_landmarks(context)
     auto_origin_notes = ensure_origins_from_ground_landmarks(context)
     warnings = known_anchor_pick_warnings(context)
     matches, observations, known_world, line_observations, known_lines, parallel_pairs = (
@@ -2485,6 +2630,8 @@ def diagnose_sync(context: bpy.types.Context):
     _apply_sync_landmark_diagnostics(context, result)
 
     parts = []
+    if ground_frame_note:
+        parts.append(ground_frame_note)
     if auto_origin_notes:
         parts.append("Auto origin: " + ", ".join(auto_origin_notes))
     skipped_matches = sum(
@@ -2549,6 +2696,8 @@ def solve_and_apply_sync(context: bpy.types.Context):
     if anchor is None:
         raise ValueError("Choose an anchor match first")
 
+    ground_frame_note = ensure_ground_frame_from_landmarks(context)
+
     # Matches without Pick Origin use a default eye-height private frame; that
     # scale often disagrees with the anchor and sync absorbs it as a bad tilt.
     # Seed origin from the earliest On Ground pick before building the problem.
@@ -2581,6 +2730,8 @@ def solve_and_apply_sync(context: bpy.types.Context):
     )
     _apply_sync_landmark_diagnostics(context, result)
     message = result.message
+    if ground_frame_note:
+        message = ground_frame_note + " · " + message
     if auto_origin_notes:
         message = "Auto origin: " + ", ".join(auto_origin_notes) + " · " + message
     skipped_matches = sum(

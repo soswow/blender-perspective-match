@@ -2695,7 +2695,9 @@ class PM_OT_solve_sync(bpy.types.Operator):
     bl_description = (
         "Register non-anchor match Empties from 2D landmarks and/or Known 3D "
         "Blender objects. On Ground / Known 3D pin absolute scale vs the anchor. "
-        "Matches without Pick Origin get one from their first On Ground pick"
+        "With locked K, 4+ shared On Ground picks across 3+ images can "
+        "initialize orientation without VPs. Matches without Pick Origin get "
+        "one from their first On Ground pick"
     )
     bl_options = {"REGISTER", "UNDO"}
 
@@ -2737,7 +2739,8 @@ class PM_OT_diagnose_sync(bpy.types.Operator):
     bl_description = (
         "Run the sync solver and list per-landmark RMSE plus Known 3D "
         "consistency checks without applying a pose. Auto-sets missing "
-        "origins from On Ground picks like Solve Sync"
+        "origins and, with locked K plus 4+ shared On Ground picks across 3+ "
+        "images, can initialize orientation like Solve Sync"
     )
     bl_options = {"REGISTER"}
 

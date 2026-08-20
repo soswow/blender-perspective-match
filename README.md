@@ -10,7 +10,7 @@ Native port of the manual workflow from Perspective Match Studio — no Electron
 - 1-, 2-, or 3-point perspective; draw or auto-detect (3-point) axis-colored VP lines
 - Solve orientation and FOV from orthogonal VPs; manual FOV / ROS `camera_info` YAML import (including OpenCV distortion coefficients)
 - Principal point from three VPs or manual offset; undistort from imported OpenCV D or estimated Fitzgibbon λ
-- Ground origin pick; multi-match sync via landmarks, Known 3D Empties, and AprilTag 25h9
+- Ground origin pick; multi-match sync via landmarks, Known 3D Empties, and AprilTag 25h9 (locked/imported K plus shared ground landmarks across 3+ images can replace VP lines)
 - Match state saved in the `.blend`
 
 ## Requirements
@@ -31,7 +31,7 @@ For live editing against this checkout, see [docs/development.md](docs/developme
 Sidebar: **3D View → Perspective Match**.
 
 1. **New Match Camera** → load a still (or **Bulk Create** a folder of stills)
-2. Draw (or detect) VP lines → camera solves when enough lines exist
+2. Draw (or detect) VP lines → camera solves when enough lines exist; alternatively, use locked/imported K and shared **On Ground** landmarks across 3+ stills
 3. **Pick Origin** on the ground plane
 4. Optionally sync several matches — see [docs/sync.md](docs/sync.md)
 

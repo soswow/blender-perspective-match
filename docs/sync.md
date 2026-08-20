@@ -4,7 +4,7 @@ When several matches show the same scene, register them into one Blender world.
 
 ## Overview
 
-1. Match each still on its own (VP lines; Origin optional). Origins do **not** need to match across stills.
+1. Match each still on its own (VP lines; Origin optional). Origins do **not** need to match across stills. If every still has locked/imported full K, you can instead omit VP lines and use the calibrated ground-only workflow below.
 2. Choose an **Anchor** match — that world is shared space. Each match has **Enable sync for current match** (on by default); turn it off to exclude that still from Solve Sync / Diagnose / Refine Lenses.
 3. Add landmarks for features visible in two or more stills (≥5 shared 2D picks), **or** link **Known 3D** Blender objects (≥3) and pick them in the other stills.
 4. Pick each landmark in every still where it is visible.
@@ -12,6 +12,17 @@ When several matches show the same scene, register them into one Blender world.
 6. **Solve Sync** writes a rigid (or similarity) transform onto non-anchor root Empties. If a sync-enabled match still has no Pick Origin but has an **On Ground** pick, Sync auto-sets Origin from the earliest such pick (creation order) before solving — status shows `Auto origin: Match←landmark`.
 
 Why not “any corresponding points”? Photogrammetry / SfM solves relative orientation and baseline *direction* from enough 2D↔2D matches — and so does this sync. Absolute baseline **length** stays free when dropping the second camera into an already-metric Blender world (classic stereo scale ambiguity). **Known 3D** Empties, On Ground picks, or a later ruler pin that one DOF; without them, a depth heuristic chooses a plausible scale.
+
+### Calibrated ground-only workflow (no VP lines)
+
+When the anchor has no usable VP solve, **Solve Sync** and **Diagnose** can initialize its ground frame directly from calibrated views:
+
+1. Give the anchor and at least two supporting matches (three images total) a complete locked K — Manual FOV, imported camera-info YAML, or 1-point mode. Imported `fx`, `fy`, `cx`, `cy`, distortion, and plate dimensions are all used.
+2. Mark at least four well-spread, non-collinear point landmarks **On Ground** and pick the same landmarks in each image. Five or six are recommended so a bad pick can be rejected.
+3. Use images taken from different positions. A pure camera rotation has no plane-normal cue, and two images alone have a genuine two-solution ground-plane ambiguity.
+4. Press **Solve Sync**. Sync infers the anchor Z/vertical and compatible orientations for the other unsolved matches, auto-picks each missing Origin from its first ground landmark, then runs the normal landmark solve.
+
+The ground plane determines Z but has no preferred compass direction, so anchor X/Y yaw is chosen deterministically from the previous camera orientation. All inferred matches share that choice. The usual scale ambiguity still applies; without Known 3D or another metric constraint, the initial camera height is conventional rather than measured.
 
 ## Landmarks
 

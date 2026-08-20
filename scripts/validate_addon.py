@@ -478,8 +478,62 @@ def main() -> None:
             result = scene.solve_and_apply_sync(bpy.context)
             assert result.success, result.message
             assert session_b.sync_is_applied
-            assert abs(session_b.sync_scale - 1.0) < 1.0e-6
-            assert abs(session_b.sync_translation[0] - translation_sim[0]) < 0.2
+            assert abs(session_b.sync_scale - 1.0) < 1.0e-6, (
+                session_b.sync_scale,
+                result.message,
+            )
+            # This broad scene smoke accepts the solver's robust-BA variation;
+            # exact synthetic recovery is covered in tests/test_sync.py.
+            assert abs(session_b.sync_translation[0] - translation_sim[0]) < 0.35, (
+                tuple(session_b.sync_translation),
+                result.message,
+            )
+
+            # Full K + shared ground picks can initialize orientation without VPs.
+            root_sync_c = scene.create_match_camera(bpy.context)
+            scene.bind_reference_image(bpy.context, str(image_b_path))
+            session_c = root_sync_c.pm_session
+            session_c.lock_focal = True
+            session_c.fx = session_c.fy = 800.0
+            session_c.cx, session_c.cy = 400.0, 300.0
+            session_c.image_width, session_c.image_height = 800, 600
+            session_c.rotation_w2c = tuple(
+                float(value) for value in calib_a.rotation_w2c.reshape(-1)
+            )
+            session_c.camera_center = (1.5, -3.5, 2.8)
+            calib_c = scene.calibration_from_settings(session_c)
+            for landmark in space.landmarks:
+                if not landmark.item_id.startswith("smoke-g"):
+                    continue
+                shared_point = landmarks_shared[landmark.name][0]
+                projected_c = sync.project_private_point(shared_point, calib_c)
+                assert projected_c is not None
+                observation_c = landmark.observations.add()
+                observation_c.match_root = root_sync_c
+                observation_c.x, observation_c.y = (
+                    float(projected_c[0]),
+                    float(projected_c[1]),
+                )
+                observation_c.is_set = True
+            identity_rotation = (
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+            )
+            for session in (session_a, session_b, session_c):
+                session.lock_focal = True
+                session.rotation_w2c = identity_rotation
+            ground_note = scene.ensure_ground_frame_from_landmarks(bpy.context)
+            assert ground_note.startswith("Ground frame inferred"), ground_note
+            inferred_a = np.asarray(session_a.rotation_w2c).reshape(3, 3)
+            assert float(np.dot(inferred_a[:, 2], calib_a.rotation_w2c[:, 2])) > 0.99
+            session_c.sync_enabled = False
 
             # Bulk Create: skip stills that already have a match; copy locked K.
             bulk_dir = temporary_path / "bulk_stills"
