@@ -1,6 +1,7 @@
 TODOs to be done:
 
 Done TODOs:
+- Detect AprilTags from both DICT_APRILTAG_25h9 and DICT_APRILTAG_36h10, keeping family-qualified landmark names.
 - When I bulk add images, it doesn't pick all the things from camera intrinsicis. MAybe specifically all the imported Ks
 - Make selected landmarks red color (keep bigger size as it is right now)
 - If I switch to PM, change zoom/pan and then press shortcut for same PM - it resets zoom/pan to what it was then I switch to it initially.

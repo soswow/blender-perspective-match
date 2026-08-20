@@ -15,13 +15,27 @@ class OpenCvCapabilities:
     """What this Blender session can do with the loaded OpenCV (if any)."""
 
     module: Any
-    apriltag_25h9: bool
+    apriltag_dictionaries: tuple[str, ...]
     line_segment_detector: bool
     error: str
 
     @property
     def available(self) -> bool:
         return self.module is not None
+
+    @property
+    def apriltags(self) -> bool:
+        """Whether at least one configured AprilTag family is available."""
+        return bool(self.apriltag_dictionaries)
+
+    @property
+    def apriltag_25h9(self) -> bool:
+        """Compatibility flag for the original detector family."""
+        return "DICT_APRILTAG_25h9" in self.apriltag_dictionaries
+
+    @property
+    def apriltag_36h10(self) -> bool:
+        return "DICT_APRILTAG_36h10" in self.apriltag_dictionaries
 
 
 _cached: OpenCvCapabilities | None = None
@@ -51,7 +65,7 @@ def load_warning() -> str:
     hidden: list[str] = []
     if not caps.line_segment_detector:
         hidden.append("Detect VP Lines")
-    if not caps.apriltag_25h9:
+    if not caps.apriltags:
         hidden.append("Find AprilTags")
     if not hidden:
         return ""
@@ -69,18 +83,23 @@ def _probe() -> OpenCvCapabilities:
     except Exception as error:
         return OpenCvCapabilities(
             module=None,
-            apriltag_25h9=False,
+            apriltag_dictionaries=(),
             line_segment_detector=False,
             error=str(error) or error.__class__.__name__,
         )
 
-    has_apriltag = False
+    available_apriltag_dictionaries: tuple[str, ...] = ()
     try:
-        has_apriltag = hasattr(cv2, "aruco") and hasattr(
-            cv2.aruco, "DICT_APRILTAG_25h9"
-        )
+        from .apriltags import APRILTAG_FAMILIES
+
+        if hasattr(cv2, "aruco"):
+            available_apriltag_dictionaries = tuple(
+                family.opencv_name
+                for family in APRILTAG_FAMILIES
+                if hasattr(cv2.aruco, family.opencv_name)
+            )
     except Exception:
-        has_apriltag = False
+        available_apriltag_dictionaries = ()
 
     has_lsd = False
     try:
@@ -89,8 +108,8 @@ def _probe() -> OpenCvCapabilities:
         has_lsd = False
 
     missing: list[str] = []
-    if not has_apriltag:
-        missing.append("aruco AprilTag 25h9")
+    if not available_apriltag_dictionaries:
+        missing.append("aruco AprilTag dictionaries")
     if not has_lsd:
         missing.append("Line Segment Detector")
     error = ""
@@ -99,7 +118,7 @@ def _probe() -> OpenCvCapabilities:
 
     return OpenCvCapabilities(
         module=cv2,
-        apriltag_25h9=has_apriltag,
+        apriltag_dictionaries=available_apriltag_dictionaries,
         line_segment_detector=has_lsd,
         error=error,
     )

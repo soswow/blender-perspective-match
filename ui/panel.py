@@ -512,7 +512,7 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             icon="IMPORT",
         )
         caps = opencv_support.cached_capabilities()
-        if caps is not None and caps.apriltag_25h9:
+        if caps is not None and caps.apriltags:
             list_column.operator(
                 "perspective_match.find_apriltag_landmarks",
                 text="",

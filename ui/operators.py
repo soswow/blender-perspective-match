@@ -2559,13 +2559,13 @@ class PM_OT_remove_landmark(bpy.types.Operator):
 
 
 class PM_OT_find_apriltag_landmarks(bpy.types.Operator):
-    """Detect AprilTag 25h9 markers and assign them to sync landmarks."""
+    """Detect supported AprilTag markers and assign them to sync landmarks."""
 
     bl_idname = "perspective_match.find_apriltag_landmarks"
     bl_label = "Find AprilTags"
     bl_description = (
-        "Scan the active match still for AprilTag 25h9 markers. "
-        "Assign each tag centre to a landmark named idNN-25h9 "
+        "Scan the active match still for AprilTag 25h9 and 36h10 markers. "
+        "Assign each tag centre to a family-qualified landmark "
         "(create the landmark when missing)"
     )
     bl_options = {"REGISTER", "UNDO"}
@@ -2573,7 +2573,7 @@ class PM_OT_find_apriltag_landmarks(bpy.types.Operator):
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
         caps = opencv_support.cached_capabilities()
-        if caps is None or not caps.apriltag_25h9:
+        if caps is None or not caps.apriltags:
             return False
         settings = properties.active_session(context)
         return (
@@ -2592,7 +2592,7 @@ class PM_OT_find_apriltag_landmarks(bpy.types.Operator):
 
         settings = properties.active_session(context)
         if result.detected == 0:
-            message = "No AprilTag 25h9 markers found in this still"
+            message = "No AprilTag 25h9 or 36h10 markers found in this still"
             if settings is not None:
                 settings.status = message
             self.report({"WARNING"}, message)

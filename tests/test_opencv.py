@@ -42,17 +42,22 @@ class OpenCvProbeTests(unittest.TestCase):
     def test_capabilities_are_booleans(self) -> None:
         caps = opencv_support.capabilities(refresh=True)
         self.assertIsInstance(caps.apriltag_25h9, bool)
+        self.assertIsInstance(caps.apriltag_36h10, bool)
+        self.assertEqual(
+            caps.apriltags,
+            caps.apriltag_25h9 or caps.apriltag_36h10,
+        )
         self.assertIsInstance(caps.line_segment_detector, bool)
         self.assertEqual(caps.available, caps.module is not None)
 
     def test_load_warning_matches_hidden_features(self) -> None:
         caps = opencv_support.capabilities(refresh=True)
         warning = opencv_support.load_warning()
-        if caps.apriltag_25h9 and caps.line_segment_detector:
+        if caps.apriltags and caps.line_segment_detector:
             self.assertEqual(warning, "")
             return
         self.assertTrue(warning.startswith("Perspective Match:"))
         if not caps.line_segment_detector:
             self.assertIn("Detect VP Lines", warning)
-        if not caps.apriltag_25h9:
+        if not caps.apriltags:
             self.assertIn("Find AprilTags", warning)

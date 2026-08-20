@@ -1,8 +1,8 @@
 """Detect AprilTag fiducials in a match still and map them to sync landmarks.
 
-Hardcoded family: AprilTag 25h9 (same as ``tools/print-apriltags``).
-Landmark names use ``idNN-25h9`` (NN = 00–99). OpenCV with aruco is optional
-(bundled wheel ``opencv-contrib-python-headless`` in ``./wheels/``).
+The configured families are scanned independently and become family-qualified
+landmarks such as ``id05-25h9`` and ``id05-36h10``. OpenCV with aruco is
+optional (bundled wheel ``opencv-contrib-python-headless`` in ``./wheels/``).
 """
 
 from __future__ import annotations
@@ -13,10 +13,27 @@ from uuid import uuid4
 
 import numpy as np
 
-# Must match tools/print-apriltags default dictionary.
-APRILTAG_DICTIONARY = "apriltag-25h9"
-APRILTAG_FAMILY_SUFFIX = "25h9"
-_OPENCV_DICT_NAME = "DICT_APRILTAG_25h9"
+
+@dataclass(frozen=True)
+class AprilTagFamily:
+    """One OpenCV AprilTag dictionary enabled for automatic detection."""
+
+    opencv_name: str
+    suffix: str
+    max_tag_id: int
+
+
+# Keep this tuple as the single place to opt another family into detection;
+# the OpenCV capability probe reads it as well.
+# 25h9 retains the historical 00–99 landmark-name allowance, even though the
+# OpenCV dictionary currently contains fewer markers, for compatibility with
+# existing .blend landmark names.
+APRILTAG_FAMILIES = (
+    AprilTagFamily("DICT_APRILTAG_25h9", "25h9", 99),
+    AprilTagFamily("DICT_APRILTAG_36h10", "36h10", 2319),
+)
+APRILTAG_DICTIONARY = "apriltag-25h9"  # Backward-compatible public alias.
+APRILTAG_FAMILY_SUFFIX = APRILTAG_FAMILIES[0].suffix
 
 
 @dataclass(frozen=True)
@@ -26,6 +43,7 @@ class DetectedTag:
     tag_id: int
     center_xy: tuple[float, float]
     corners_xy: tuple[tuple[float, float], ...] = ()
+    family_suffix: str = APRILTAG_FAMILY_SUFFIX
 
 
 @dataclass(frozen=True)
@@ -42,16 +60,34 @@ class AprilTagDependencyError(RuntimeError):
     """Raised when OpenCV / aruco is unavailable for detection."""
 
 
-def landmark_name_for_tag(tag_id: int) -> str:
-    """Canonical landmark name for a 25h9 tag id (zero-padded 00–99)."""
-    if tag_id < 0 or tag_id > 99:
-        raise ValueError(f"AprilTag id must be 0–99, got {tag_id}")
-    return f"id{tag_id:02d}-{APRILTAG_FAMILY_SUFFIX}"
+def _family_for_suffix(family_suffix: str) -> AprilTagFamily:
+    for family in APRILTAG_FAMILIES:
+        if family.suffix == family_suffix:
+            return family
+    raise ValueError(f"Unsupported AprilTag family: {family_suffix}")
 
 
-def find_landmark_for_tag(landmarks, tag_id: int):
-    """Return the first landmark whose name starts with ``idNN-25h9``."""
-    prefix = landmark_name_for_tag(tag_id)
+def landmark_name_for_tag(
+    tag_id: int,
+    family_suffix: str = APRILTAG_FAMILY_SUFFIX,
+) -> str:
+    """Return the family-qualified canonical landmark name for a tag id."""
+    family = _family_for_suffix(family_suffix)
+    if tag_id < 0 or tag_id > family.max_tag_id:
+        raise ValueError(
+            f"AprilTag {family.suffix} id must be 0–{family.max_tag_id}, "
+            f"got {tag_id}"
+        )
+    return f"id{tag_id:02d}-{family.suffix}"
+
+
+def find_landmark_for_tag(
+    landmarks,
+    tag_id: int,
+    family_suffix: str = APRILTAG_FAMILY_SUFFIX,
+):
+    """Return the first landmark matching the tag id and family."""
+    prefix = landmark_name_for_tag(tag_id, family_suffix)
     for landmark in landmarks:
         name = getattr(landmark, "name", "") or ""
         if name.startswith(prefix):
@@ -64,7 +100,7 @@ def _import_cv2():
     from .opencv import capabilities
 
     caps = capabilities()
-    if caps.module is None or not caps.apriltag_25h9:
+    if caps.module is None or not caps.apriltags:
         detail = caps.error or "OpenCV with aruco is not available"
         raise AprilTagDependencyError(
             "AprilTag detection needs the bundled OpenCV wheel. "
@@ -74,14 +110,14 @@ def _import_cv2():
     return caps.module
 
 
-def _aruco_dictionary(cv2_module):
-    """Return the hardcoded AprilTag 25h9 dictionary."""
-    if not hasattr(cv2_module.aruco, _OPENCV_DICT_NAME):
+def _aruco_dictionary(cv2_module, family: AprilTagFamily = APRILTAG_FAMILIES[0]):
+    """Return the requested configured AprilTag dictionary."""
+    if not hasattr(cv2_module.aruco, family.opencv_name):
         raise AprilTagDependencyError(
-            f"This OpenCV build has no {_OPENCV_DICT_NAME}"
+            f"This OpenCV build has no {family.opencv_name}"
         )
     return cv2_module.aruco.getPredefinedDictionary(
-        getattr(cv2_module.aruco, _OPENCV_DICT_NAME)
+        getattr(cv2_module.aruco, family.opencv_name)
     )
 
 
@@ -141,12 +177,13 @@ def _projective_quad_center(points_xy: np.ndarray) -> np.ndarray:
     return points[0] + distance * first_direction
 
 
-def detect_apriltags_25h9(gray: np.ndarray) -> list[DetectedTag]:
-    """Run ArUco AprilTag 25h9 detection; return tag id + center pixels."""
-    cv2 = _import_cv2()
-    if gray.ndim != 2:
-        raise ValueError("Detection expects a single-channel grayscale image")
-    dictionary = _aruco_dictionary(cv2)
+def _detect_apriltag_family(
+    cv2,
+    gray: np.ndarray,
+    family: AprilTagFamily,
+) -> list[DetectedTag]:
+    """Run detection for one configured family."""
+    dictionary = _aruco_dictionary(cv2, family)
     parameters = cv2.aruco.DetectorParameters()
     # Stock defaults drop fairly small tags on high-res stills (perimeter ≥ 3%
     # of max(W,H), canonical side ≥ 32 px). Halve both so mid-distance printed
@@ -161,8 +198,7 @@ def detect_apriltags_25h9(gray: np.ndarray) -> list[DetectedTag]:
     detections: list[DetectedTag] = []
     for corners, tag_id_array in zip(corners_list, ids):
         tag_id = int(np.asarray(tag_id_array).reshape(-1)[0])
-        # Skip ids outside the naming scheme (print sheets use 0–19 typically).
-        if tag_id < 0 or tag_id > 99:
+        if tag_id < 0 or tag_id > family.max_tag_id:
             continue
         # corners shape: (1, 4, 2), ordered around the marker perimeter.
         points = np.asarray(corners, dtype=np.float64).reshape(-1, 2)
@@ -174,11 +210,41 @@ def detect_apriltags_25h9(gray: np.ndarray) -> list[DetectedTag]:
                 corners_xy=tuple(
                     (float(point[0]), float(point[1])) for point in points
                 ),
+                family_suffix=family.suffix,
             )
         )
-    # Stable order for UI / status messages.
     detections.sort(key=lambda item: item.tag_id)
     return detections
+
+
+def detect_apriltags(gray: np.ndarray) -> list[DetectedTag]:
+    """Scan all configured AprilTag families; return family-qualified hits."""
+    cv2 = _import_cv2()
+    if gray.ndim != 2:
+        raise ValueError("Detection expects a single-channel grayscale image")
+
+    detections: list[DetectedTag] = []
+    for family in APRILTAG_FAMILIES:
+        # The capability probe permits partial support so a build with only one
+        # configured dictionary can still offer useful detection.
+        if not hasattr(cv2.aruco, family.opencv_name):
+            continue
+        detections.extend(_detect_apriltag_family(cv2, gray, family))
+    family_order = {
+        family.suffix: index for index, family in enumerate(APRILTAG_FAMILIES)
+    }
+    detections.sort(
+        key=lambda item: (family_order.get(item.family_suffix, 999), item.tag_id)
+    )
+    return detections
+
+
+def detect_apriltags_25h9(gray: np.ndarray) -> list[DetectedTag]:
+    """Compatibility helper that scans only the original 25h9 family."""
+    cv2 = _import_cv2()
+    if gray.ndim != 2:
+        raise ValueError("Detection expects a single-channel grayscale image")
+    return _detect_apriltag_family(cv2, gray, APRILTAG_FAMILIES[0])
 
 
 def _correct_centers_for_lens(
@@ -233,6 +299,7 @@ def _correct_centers_for_lens(
                 tag_id=detection.tag_id,
                 center_xy=(float(storage_center[0]), float(storage_center[1])),
                 corners_xy=detection.corners_xy,
+                family_suffix=detection.family_suffix,
             )
         )
     return corrected
@@ -242,7 +309,7 @@ def detect_apriltags_in_session(settings) -> list[DetectedTag]:
     """Detect AprilTags in the active match's reference still."""
     cv2 = _import_cv2()
     gray = _load_detection_gray(cv2, settings)
-    detections = detect_apriltags_25h9(gray)
+    detections = detect_apriltags(gray)
     return _correct_centers_for_lens(detections, settings)
 
 
@@ -282,7 +349,11 @@ def apply_apriltag_detections(
     skipped = 0
 
     for detection in detections:
-        landmark = find_landmark_for_tag(space.landmarks, detection.tag_id)
+        landmark = find_landmark_for_tag(
+            space.landmarks,
+            detection.tag_id,
+            detection.family_suffix,
+        )
         if landmark is not None:
             if getattr(landmark, "kind", "POINT") == "LINE":
                 # Tag centres are points; leave line landmarks alone.
@@ -295,7 +366,10 @@ def apply_apriltag_detections(
         landmark = space.landmarks.add()
         landmark.item_id = f"landmark-{uuid4().hex}"
         landmark.kind = "POINT"
-        landmark.name = landmark_name_for_tag(detection.tag_id)
+        landmark.name = landmark_name_for_tag(
+            detection.tag_id,
+            detection.family_suffix,
+        )
         _set_point_observation(landmark, root, detection.center_xy, confidence)
         created += 1
 
@@ -313,7 +387,7 @@ def apply_apriltag_detections(
 
 
 def find_and_assign_apriltags(context) -> AprilTagAssignResult:
-    """Detect 25h9 tags in the active still and map them onto landmarks."""
+    """Detect configured tag families and map them onto landmarks."""
     from .. import properties
 
     settings = properties.active_session(context)
