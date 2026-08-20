@@ -473,6 +473,30 @@ class LandmarkSyncTests(unittest.TestCase):
         recovered_forward = recovered.rotation @ local_rotation.T[:, 2]
         self.assertGreater(float(recovered_forward[2]), 0.05)
 
+    def test_registration_candidate_uses_graph_to_resolve_pair_scale(self) -> None:
+        """Whole-graph fit should choose scale within one pairwise pose branch."""
+        raw = sync.SimilarityTransform(
+            translation=np.array((0.0, 0.0, -4.0), dtype=np.float64)
+        )
+        scaled = sync.SimilarityTransform(
+            translation=np.array((0.0, 0.0, -1.0), dtype=np.float64)
+        )
+        refined = sync.SimilarityTransform(
+            translation=np.array((0.0, 0.0, -0.75), dtype=np.float64)
+        )
+        wrong_branch = sync.SimilarityTransform(
+            translation=np.array((2.0, 1.0, 1.5), dtype=np.float64)
+        )
+        selected = sync._select_registration_candidate(
+            [
+                (0.54, 56_759.0, raw),
+                (0.54, 181.0, scaled),
+                (3.10, 4.91, refined),
+                (22.0, 1.0, wrong_branch),
+            ]
+        )
+        self.assertIs(selected, refined)
+
     def test_batched_shared_projection_matches_scalar_projection(self) -> None:
         """The optimized projection path must preserve scalar solver geometry."""
         matches, _observations, true_sim, _center, _shared = _synthetic_scene(

@@ -4758,6 +4758,39 @@ def _registration_strong_pair_rmse(
     return float(np.sqrt(np.mean(np.square(errors))))
 
 
+def _select_registration_candidate(
+    candidates: list[tuple[float, float, SimilarityTransform]],
+    *,
+    pair_branch_slack_px: float = 5.0,
+    acceptance_px: float = 40.0,
+) -> SimilarityTransform | None:
+    """Choose graph scale/refinement without leaving the best pairwise branch.
+
+    Candidate tuples are ``(strong_pair_rmse, graph_rmse, similarity)``.
+    Pairwise reprojection identifies the relative-pose hemisphere but cannot
+    observe baseline scale. Whole-graph reprojection therefore breaks ties
+    among candidates that remain close to the best strong-pair solution.
+    """
+    if not candidates:
+        return None
+    strong_candidates = [item for item in candidates if np.isfinite(item[0])]
+    if strong_candidates:
+        best_pair_rmse = min(item[0] for item in strong_candidates)
+        if best_pair_rmse > acceptance_px:
+            return None
+        branch_limit = min(
+            acceptance_px,
+            best_pair_rmse + max(float(pair_branch_slack_px), 0.0),
+        )
+        same_branch = [
+            item for item in strong_candidates if item[0] <= branch_limit
+        ]
+        return min(same_branch, key=lambda item: item[1])[2]
+
+    selected = min(candidates, key=lambda item: item[1])
+    return selected[2] if selected[1] <= acceptance_px else None
+
+
 def _bridge_pose_candidates(
     match_id: str,
     registered: dict[str, SimilarityTransform],
@@ -5026,7 +5059,9 @@ def _register_from_relative_pose(
                     )
                 )
 
-            ranked_candidates = []
+            ranked_candidates: list[
+                tuple[float, float, SimilarityTransform]
+            ] = []
             for candidate in pose_candidates:
                 graph_rmse = _registration_candidate_rmse(
                     match_id,
@@ -5045,28 +5080,12 @@ def _register_from_relative_pose(
                     matches,
                     known_world_ids=known_world_ids,
                 )
-                primary_rmse = (
-                    strong_pair_rmse
-                    if np.isfinite(strong_pair_rmse)
-                    else graph_rmse
-                )
                 ranked_candidates.append(
-                    (primary_rmse, graph_rmse, candidate)
+                    (strong_pair_rmse, graph_rmse, candidate)
                 )
-            if ranked_candidates:
-                best_primary = min(item[0] for item in ranked_candidates)
-                # Translation scale is invisible to a two-view reprojection
-                # score, so equivalent raw/scaled seeds differ only by float
-                # noise. Preserve generation order in that tie: the raw
-                # relative-pose branch is the least influenced by sparse,
-                # contradictory overlaps elsewhere in the graph.
-                selected = next(
-                    item
-                    for item in ranked_candidates
-                    if item[0] <= best_primary + 0.25
-                )
-                if selected[0] <= 40.0:
-                    solved = selected[2]
+            selected = _select_registration_candidate(ranked_candidates)
+            if selected is not None:
+                solved = selected
 
             if solved is None and len(line_constraints) >= 3:
                 for seed in _mixed_pose_seeds(

@@ -21,6 +21,10 @@ If `[Unreleased]` has no matching subsection yet, add it. Leave dated `## [x.y.z
 
 To ship: `./scripts/release.sh 0.3.7` on a clean `main`. That cuts Unreleased, bumps `blender_manifest.toml`, tags `v0.3.7`, and pushes. GitHub Actions builds the four platform zips and creates the GitHub Release.
 
+## Regression tests
+
+When fixing a bug, add a focused automated regression test whenever the failure can be reproduced deterministically and testing it is practical. The test should fail before the fix and pass afterward. If a regression test is not practical, state why in the handoff.
+
 ## Docs
 
 If the sidebar workflow, sync rules, or install story changed, update `docs/user-guide.md`, `docs/sync.md`, and/or `README.md` in that same change. Do not leave the changelog as the only record.

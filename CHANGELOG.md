@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Sync can register upside-down or below-ground cameras through five or more landmarks shared with any already-solved view
+- Sync resolves a bridged camera's ambiguous baseline scale from the whole landmark graph instead of an arbitrary two-view seed
 
 ## [0.4.0] - 2026-08-19
 
