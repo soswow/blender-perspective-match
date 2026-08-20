@@ -21,7 +21,7 @@ from sheet_layout import (
     DEFAULT_MARGIN_MM,
     DEFAULT_PADDING_MM,
     DEFAULT_TAG_SIZE_MM,
-    DICTIONARY_ALIASES,
+    OFFICIAL_DICTIONARY_NAMES,
     SheetConfig,
     build_print_pages,
     parse_id_list,
@@ -35,7 +35,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Generate AprilTag / ArUco marker sheets for A4 or A3 printing. "
-            "Default family is apriltag-25h9 (good range, plenty of IDs for ≤20 tags). "
+            "Default family is DICT_APRILTAG_25h9 "
+            "(good range, plenty of IDs for ≤20 tags). "
             "Each tag has its own margin; padding is extra space between margin boxes."
         )
     )
@@ -65,9 +66,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--dictionary",
         default=DEFAULT_DICTIONARY,
         help=(
-            "Marker family alias or OpenCV DICT_* name "
-            f"(default: {DEFAULT_DICTIONARY}). "
-            f"Aliases: {', '.join(sorted(DICTIONARY_ALIASES))}."
+            "Exact, case-sensitive OpenCV predefined dictionary name "
+            f"(default: {DEFAULT_DICTIONARY}). Choices: "
+            f"{', '.join(OFFICIAL_DICTIONARY_NAMES)}."
         ),
     )
     parser.add_argument(
@@ -93,24 +94,37 @@ def build_parser() -> argparse.ArgumentParser:
     labels = parser.add_mutually_exclusive_group()
     labels.add_argument(
         "--labels",
-        dest="show_labels",
-        action="store_true",
-        help="Print an ID label under each tag (default).",
+        dest="label_mode",
+        action="store_const",
+        const="external",
+        help="Print a numeric label under each tag (default).",
     )
     labels.add_argument(
         "--no-labels",
-        dest="show_labels",
-        action="store_false",
-        help="Omit ID labels (packs tags tighter vertically).",
+        dest="label_mode",
+        action="store_const",
+        const="none",
+        help="Omit labels (packs tags tighter vertically).",
     )
-    parser.set_defaults(show_labels=True)
+    labels.add_argument(
+        "--embed-label",
+        dest="label_mode",
+        action="store_const",
+        const="embedded",
+        help=(
+            "Put a subtle numeric label in the tag's bottom-right black border; "
+            "ignores --label-height-mm."
+        ),
+    )
+    parser.set_defaults(label_mode="external")
     parser.add_argument(
         "--label-height-mm",
         type=float,
         default=DEFAULT_LABEL_HEIGHT_MM,
         help=(
-            f"Space under each tag for the ID label in mm "
-            f"(default: {DEFAULT_LABEL_HEIGHT_MM:g}; ignored with --no-labels)."
+            f"Space under each tag for the numeric label in mm "
+            f"(default: {DEFAULT_LABEL_HEIGHT_MM:g}; ignored with "
+            "--no-labels and --embed-label)."
         ),
     )
     cut_guides = parser.add_mutually_exclusive_group()
@@ -207,7 +221,8 @@ def main(argv: list[str] | None = None) -> int:
         tag_size_mm=args.tag_size_mm,
         margin_mm=args.margin_mm,
         padding_mm=args.padding_mm,
-        show_labels=args.show_labels,
+        show_labels=args.label_mode == "external",
+        embed_label=args.label_mode == "embedded",
         label_height_mm=args.label_height_mm,
         show_cut_guides=args.show_cut_guides,
         dpi=args.dpi,
@@ -234,7 +249,12 @@ def main(argv: list[str] | None = None) -> int:
         save_individual_markers(marker_ids, png_dir, config)
         print(f"Wrote {len(marker_ids)} PNGs to {png_dir}")
 
-    labels_note = "labels on" if config.show_labels else "no labels"
+    if config.embed_label:
+        labels_note = "embedded labels"
+    elif config.show_labels:
+        labels_note = "labels on"
+    else:
+        labels_note = "no labels"
     cuts_note = "cut guides on" if config.show_cut_guides else "no cut guides"
     print(
         f"Wrote {output_path} — {len(marker_ids)} tags "

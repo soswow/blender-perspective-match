@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Calibrated sync can infer the shared ground frame from four or more matching On Ground landmarks across three or more images, without requiring VP lines
+- AprilTag sheets can embed subtle, detection-safe numeric labels in each tag's bottom-right border
+
+### Changed
+- AprilTag sheet printing now accepts only official OpenCV dictionary names and reports out-of-range marker IDs clearly
+- Printed AprilTag labels contain only the marker number, without an `ID` prefix
 
 ### Fixed
 - Sync can register upside-down or below-ground cameras through five or more landmarks shared with any already-solved view

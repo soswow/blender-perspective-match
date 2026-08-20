@@ -1,7 +1,7 @@
 # Print AprilTags
 
 Small helper to generate **AprilTag** sheets you can print on **A4** or **A3**.
-Default family is **`apriltag-25h9`** — good detection range, and more than enough
+Default family is **`DICT_APRILTAG_25h9`** — good detection range, and more than enough
 IDs when you only need ~20 markers. Tags default to **90×90 mm** with an ID
 label under each one.
 
@@ -54,11 +54,11 @@ Also dump individual PNGs next to the PDF:
 | `--ids` | `0-19` |
 | `--paper` | `a4` |
 | `--tag-size-mm` | `90` |
-| `--dictionary` | `apriltag-25h9` |
+| `--dictionary` | `DICT_APRILTAG_25h9` |
 | `--margin-mm` | `8` (white around each tag on every side) |
 | `--padding-mm` | `0` (extra between margin boxes; alias `--gap-mm`) |
-| `--labels` / `--no-labels` | labels on |
-| `--label-height-mm` | `8` (ignored with `--no-labels`) |
+| `--labels` / `--no-labels` / `--embed-label` | labels below tags |
+| `--label-height-mm` | `8` (ignored with `--no-labels` and `--embed-label`) |
 | `--cut-guides` / `--no-cut-guides` | faint dotted cut lines on |
 | `--dpi` | `300` |
 
@@ -83,8 +83,44 @@ Cut without guides:
 .venv/bin/python print_apriltags.py --ids 0-5 --no-cut-guides --open
 ```
 
-Dictionary aliases: `apriltag-25h9`, `apriltag-36h11`, `apriltag-16h5`,
-`aruco-4x4-50`, `aruco-5x5-50` (or any OpenCV `DICT_*` name).
+Embed each numeric label in the tag's bottom-right black border instead of
+placing it below the tag:
+
+```sh
+.venv/bin/python print_apriltags.py --ids 0-19 --embed-label --open
+```
+
+Embedded text is sized from the marker's module grid, right-aligned so additional
+digits grow to the left, and printed dark gray so it remains black under normal
+binary detection while still being readable up close. `--label-height-mm` has no
+effect in this mode.
+
+## Dictionaries
+
+Pass an exact, case-sensitive OpenCV predefined dictionary name. Marker IDs start
+at zero; for example, `DICT_4X4_50` accepts IDs `0-49`, not ID `50`.
+
+| Dictionary names | Valid IDs |
+|---|---:|
+| `DICT_4X4_50`, `DICT_5X5_50`, `DICT_6X6_50`, `DICT_7X7_50` | `0-49` |
+| `DICT_4X4_100`, `DICT_5X5_100`, `DICT_6X6_100`, `DICT_7X7_100` | `0-99` |
+| `DICT_4X4_250`, `DICT_5X5_250`, `DICT_6X6_250`, `DICT_7X7_250` | `0-249` |
+| `DICT_4X4_1000`, `DICT_5X5_1000`, `DICT_6X6_1000`, `DICT_7X7_1000` | `0-999` |
+| `DICT_ARUCO_ORIGINAL` | `0-1023` |
+| `DICT_APRILTAG_16h5` | `0-29` |
+| `DICT_APRILTAG_25h9` | `0-34` |
+| `DICT_APRILTAG_36h10` | `0-2319` |
+| `DICT_APRILTAG_36h11` | `0-586` |
+| `DICT_ARUCO_MIP_36h12` | `0-249` |
+
+OpenCV maintains the canonical list in its
+[`PredefinedDictionaryType` documentation](https://docs.opencv.org/5.0/main_modules/aruco__dictionary_8hpp.html).
+
+Example:
+
+```sh
+.venv/bin/python print_apriltags.py --dictionary DICT_4X4_50 --ids 0-49
+```
 
 ## Print tips
 

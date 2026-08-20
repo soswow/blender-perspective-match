@@ -30,23 +30,41 @@ PAPER_SIZES_MM: dict[str, tuple[float, float]] = {
     "a3": (297.0, 420.0),
 }
 
-# OpenCV dictionary name → cv2.aruco constant name.
-DICTIONARY_ALIASES: dict[str, str] = {
-    "apriltag-36h11": "DICT_APRILTAG_36h11",
-    "apriltag-25h9": "DICT_APRILTAG_25h9",
-    "apriltag-16h5": "DICT_APRILTAG_16h5",
-    "aruco-4x4-50": "DICT_4X4_50",
-    "aruco-5x5-50": "DICT_5X5_50",
-}
+# Exact names from OpenCV's cv::aruco::PredefinedDictionaryType enum.
+OFFICIAL_DICTIONARY_NAMES: tuple[str, ...] = (
+    "DICT_4X4_50",
+    "DICT_4X4_100",
+    "DICT_4X4_250",
+    "DICT_4X4_1000",
+    "DICT_5X5_50",
+    "DICT_5X5_100",
+    "DICT_5X5_250",
+    "DICT_5X5_1000",
+    "DICT_6X6_50",
+    "DICT_6X6_100",
+    "DICT_6X6_250",
+    "DICT_6X6_1000",
+    "DICT_7X7_50",
+    "DICT_7X7_100",
+    "DICT_7X7_250",
+    "DICT_7X7_1000",
+    "DICT_ARUCO_ORIGINAL",
+    "DICT_APRILTAG_16h5",
+    "DICT_APRILTAG_25h9",
+    "DICT_APRILTAG_36h10",
+    "DICT_APRILTAG_36h11",
+    "DICT_ARUCO_MIP_36h12",
+)
 
 # Prefer fewer bits when only ~20 IDs are needed (better at distance).
-DEFAULT_DICTIONARY = "apriltag-25h9"
+DEFAULT_DICTIONARY = "DICT_APRILTAG_25h9"
 DEFAULT_TAG_SIZE_MM = 90.0
 DEFAULT_DPI = 300
 DEFAULT_MARGIN_MM = 8.0
 DEFAULT_PADDING_MM = 0.0
 DEFAULT_LABEL_HEIGHT_MM = 8.0
 CUT_GUIDE_COLOR = (170, 170, 170)
+EMBEDDED_LABEL_COLOR = (80, 80, 80)
 
 
 @dataclass(frozen=True)
@@ -60,6 +78,7 @@ class SheetConfig:
     # Extra space between neighbouring margin boxes (0 = margins abut).
     padding_mm: float = DEFAULT_PADDING_MM
     show_labels: bool = True
+    embed_label: bool = False
     label_height_mm: float = DEFAULT_LABEL_HEIGHT_MM
     show_cut_guides: bool = True
     dpi: int = DEFAULT_DPI
@@ -69,7 +88,7 @@ class SheetConfig:
     @property
     def effective_label_height_mm(self) -> float:
         """Label band height used for packing; zero when labels are off."""
-        if not self.show_labels:
+        if not self.show_labels or self.embed_label:
             return 0.0
         return max(0.0, self.label_height_mm)
 
@@ -121,18 +140,32 @@ class GridLayout:
 
 
 def resolve_dictionary(name: str):
-    """Return an OpenCV Aruco dictionary for a friendly alias or DICT_* name."""
-    key = name.strip().lower().replace("_", "-")
-    const_name = DICTIONARY_ALIASES.get(key, name.strip().upper())
-    if not const_name.startswith("DICT_"):
-        const_name = f"DICT_{const_name}"
-    if not hasattr(cv2.aruco, const_name):
-        known = ", ".join(sorted(DICTIONARY_ALIASES))
+    """Return a predefined dictionary from its exact official OpenCV name."""
+    if name not in OFFICIAL_DICTIONARY_NAMES:
+        known = ", ".join(OFFICIAL_DICTIONARY_NAMES)
         raise ValueError(
-            f"Unknown dictionary {name!r}. Use one of: {known} "
-            f"(or an OpenCV DICT_* name)."
+            f"Unknown dictionary {name!r}. Use an exact OpenCV name: {known}."
         )
-    return cv2.aruco.getPredefinedDictionary(getattr(cv2.aruco, const_name))
+    if not hasattr(cv2.aruco, name):
+        raise ValueError(
+            f"Dictionary {name} is not available in OpenCV {cv2.__version__}."
+        )
+    return cv2.aruco.getPredefinedDictionary(getattr(cv2.aruco, name))
+
+
+def validate_marker_ids(
+    marker_ids: Sequence[int], dictionary, dictionary_name: str
+) -> None:
+    """Reject IDs outside the selected predefined dictionary."""
+    if any(marker_id < 0 for marker_id in marker_ids):
+        raise ValueError("Marker IDs must be non-negative.")
+    marker_count = int(dictionary.bytesList.shape[0])
+    invalid = [marker_id for marker_id in marker_ids if marker_id >= marker_count]
+    if invalid:
+        raise ValueError(
+            f"Marker ID {invalid[0]} is outside {dictionary_name}; "
+            f"valid IDs are 0-{marker_count - 1}."
+        )
 
 
 def mm_to_px(millimetres: float, dpi: int) -> int:
@@ -190,17 +223,28 @@ def compute_grid(config: SheetConfig) -> GridLayout:
     )
 
 
-def generate_marker_image(dictionary, marker_id: int, size_px: int) -> Image.Image:
-    """Render one AprilTag/ArUco marker as a PIL RGB image."""
+def generate_marker_image(
+    dictionary,
+    marker_id: int,
+    size_px: int,
+    embed_label: bool = False,
+) -> Image.Image:
+    """Render one marker, optionally with its ID in the black bottom border."""
     marker_bgr = cv2.aruco.generateImageMarker(dictionary, marker_id, size_px)
     if marker_bgr.ndim == 2:
         rgb = cv2.cvtColor(marker_bgr, cv2.COLOR_GRAY2RGB)
     else:
         rgb = cv2.cvtColor(marker_bgr, cv2.COLOR_BGR2RGB)
-    return Image.fromarray(rgb)
+    marker = Image.fromarray(rgb)
+    if embed_label:
+        _draw_embedded_label(marker, str(marker_id), int(dictionary.markerSize))
+    return marker
 
 
-def _load_label_font(height_px: int) -> ImageFont.ImageFont:
+def _load_label_font(
+    height_px: int,
+    minimum_size: int = 10,
+) -> ImageFont.ImageFont:
     """Pick a readable bitmap/truetype font for the ID label."""
     candidates = (
         "/System/Library/Fonts/Supplemental/Arial.ttf",
@@ -208,7 +252,7 @@ def _load_label_font(height_px: int) -> ImageFont.ImageFont:
         "/Library/Fonts/Arial.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     )
-    size = max(10, int(height_px * 0.7))
+    size = max(minimum_size, int(height_px * 0.7))
     for path in candidates:
         if Path(path).exists():
             try:
@@ -216,6 +260,38 @@ def _load_label_font(height_px: int) -> ImageFont.ImageFont:
             except OSError:
                 continue
     return ImageFont.load_default()
+
+
+def _draw_embedded_label(
+    marker: Image.Image,
+    label: str,
+    payload_bits: int,
+) -> None:
+    """Right-align a subtle ID inside the marker's black bottom border row.
+
+    OpenCV's generated markers use a one-module border, so the module pitch is
+    the tag width divided by the payload width plus two border modules. The
+    dark-gray text remains on the black side of a normal binary threshold.
+    """
+    module_px = marker.width / (payload_bits + 2)
+    font = _load_label_font(
+        max(1, int(round(module_px))),
+        minimum_size=1,
+    )
+    draw = ImageDraw.Draw(marker)
+    text_bbox = draw.textbbox((0, 0), label, font=font)
+    text_w = text_bbox[2] - text_bbox[0]
+    text_h = text_bbox[3] - text_bbox[1]
+    inset = max(1, int(round(module_px * 0.12)))
+    text_x = marker.width - inset - text_w - text_bbox[0]
+    bottom_row_top = marker.height - module_px
+    text_y = bottom_row_top + (module_px - text_h) / 2.0 - text_bbox[1]
+    draw.text(
+        (int(round(text_x)), int(round(text_y))),
+        label,
+        fill=EMBEDDED_LABEL_COLOR,
+        font=font,
+    )
 
 
 def _chunked(values: Sequence[int], size: int) -> Iterable[list[int]]:
@@ -350,11 +426,13 @@ def render_sheet_page(
         tag_x = cell_x + margin_px
         tag_y = cell_y + margin_px
 
-        marker = generate_marker_image(dictionary, marker_id, tag_px)
+        marker = generate_marker_image(
+            dictionary, marker_id, tag_px, embed_label=config.embed_label
+        )
         page.paste(marker, (tag_x, tag_y))
 
         if font is not None:
-            label = f"ID {marker_id}"
+            label = str(marker_id)
             text_bbox = draw.textbbox((0, 0), label, font=font)
             text_w = text_bbox[2] - text_bbox[0]
             text_x = tag_x + max(0, (tag_px - text_w) // 2)
@@ -384,10 +462,9 @@ def build_print_pages(
     """Render all pages needed to print ``marker_ids``."""
     if not marker_ids:
         raise ValueError("Need at least one marker ID.")
-    if any(marker_id < 0 for marker_id in marker_ids):
-        raise ValueError("Marker IDs must be non-negative.")
 
     dictionary = resolve_dictionary(config.dictionary)
+    validate_marker_ids(marker_ids, dictionary, config.dictionary)
     grid = compute_grid(config)
     pages = [
         render_sheet_page(chunk, dictionary, config, grid)
@@ -419,13 +496,16 @@ def save_individual_markers(
 ) -> list[Path]:
     """Also dump one PNG per marker (useful for single-tag reprints)."""
     dictionary = resolve_dictionary(config.dictionary)
+    validate_marker_ids(marker_ids, dictionary, config.dictionary)
     tag_px = mm_to_px(config.tag_size_mm, config.dpi)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     paths: list[Path] = []
     for marker_id in marker_ids:
         path = output_dir / f"{config.dictionary}_{marker_id:03d}.png"
-        generate_marker_image(dictionary, marker_id, tag_px).save(path)
+        generate_marker_image(
+            dictionary, marker_id, tag_px, embed_label=config.embed_label
+        ).save(path)
         paths.append(path)
     return paths
 
