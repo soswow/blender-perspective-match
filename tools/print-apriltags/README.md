@@ -56,7 +56,7 @@ Also dump individual PNGs next to the PDF:
 | `--tag-size-mm` | `90` |
 | `--dictionary` | `DICT_APRILTAG_25h9` |
 | `--margin-mm` | `8` (white around each tag on every side) |
-| `--padding-mm` | `0` (extra between margin boxes; alias `--gap-mm`) |
+| `--padding-mm` | `0` (extra between margin boxes and around the group; alias `--gap-mm`) |
 | `--labels` / `--no-labels` / `--embed-label` | labels below tags |
 | `--label-height-mm` | `8` (ignored with `--no-labels` and `--embed-label`) |
 | `--cut-guides` / `--no-cut-guides` | faint dotted cut lines on |
@@ -65,12 +65,14 @@ Also dump individual PNGs next to the PDF:
 ### Margin vs padding
 
 ```text
-|← margin →| TAG |← margin →|← padding →|← margin →| TAG |← margin →|
+|← padding →|← margin →| TAG |← margin →|← padding →|← margin →| TAG |← margin →|← padding →|
 ```
 
 - **`--margin-mm 8 --padding-mm 0`** — each tag keeps 8 mm white around it; neighbouring
   margins abut (16 mm white between black squares; cut guides share an edge).
-- **`--padding-mm 5`** — adds 5 mm extra between those margin boxes.
+- **`--padding-mm 5`** — adds 5 mm extra between those margin boxes and at least
+  5 mm outside the top row, bottom row, left column, and right column. The whole
+  padded group remains centred on the page.
 
 ```sh
 .venv/bin/python print_apriltags.py --ids 0-19 --paper a3 \

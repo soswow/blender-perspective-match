@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - AprilTag sheet printing now accepts only official OpenCV dictionary names and reports out-of-range marker IDs clearly
 - Printed AprilTag labels contain only the marker number, without an `ID` prefix
+- AprilTag sheet padding now wraps all four outer edges of the packed tag group
 
 ### Fixed
 - Sync can register upside-down or below-ground cameras through five or more landmarks shared with any already-solved view

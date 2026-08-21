@@ -87,8 +87,9 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_PADDING_MM,
         dest="padding_mm",
         help=(
-            f"Extra space between neighbouring margin boxes in mm "
-            f"(default: {DEFAULT_PADDING_MM:g}; 0 = margins abut). Alias: --gap-mm."
+            "Extra space between neighbouring margin boxes and around all four "
+            f"edges of the packed group in mm (default: {DEFAULT_PADDING_MM:g}; "
+            "0 = margins abut). Alias: --gap-mm."
         ),
     )
     labels = parser.add_mutually_exclusive_group()

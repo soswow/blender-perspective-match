@@ -5,12 +5,13 @@ Business logic only — the CLI lives in ``print_apriltags.py``.
 Layout model
 ------------
 Each tag (+ optional ID label) sits inside its own **margin** on all sides.
-**Padding** is extra white *between* those margin boxes.
+**Padding** is extra white between those margin boxes and around the four outer
+edges of the packed group.
 
 With ``margin=8`` and ``padding=0``::
 
-    |←8→| TAG |←8→|←8→| TAG |←8→|
-          └─── margins abut; nothing else between ───┘
+    | padding |←8→| TAG |←8→|←8→| TAG |←8→| padding |
+                    margins abut when padding is zero
 
 Cut guides follow the outer edge of each margin box.
 """
@@ -75,7 +76,7 @@ class SheetConfig:
     tag_size_mm: float = DEFAULT_TAG_SIZE_MM
     # White border around each tag (+ label) on every side.
     margin_mm: float = DEFAULT_MARGIN_MM
-    # Extra space between neighbouring margin boxes (0 = margins abut).
+    # Extra space between margin boxes and around the packed group's edges.
     padding_mm: float = DEFAULT_PADDING_MM
     show_labels: bool = True
     embed_label: bool = False
@@ -191,20 +192,24 @@ def compute_grid(config: SheetConfig) -> GridLayout:
     cell_h = config.cell_height_mm
     padding = config.padding_mm
 
-    if cell_w > page_width_mm or cell_h > page_height_mm:
+    available_w = page_width_mm - 2.0 * padding
+    available_h = page_height_mm - 2.0 * padding
+    if cell_w > available_w or cell_h > available_h:
         label_note = " (+ label)" if config.show_labels else ""
         raise ValueError(
             f"Tag {config.tag_size_mm:g} mm{label_note} with "
-            f"{config.margin_mm:g} mm margin does not fit on "
+            f"{config.margin_mm:g} mm margin and {padding:g} mm padding "
+            "on each page edge does not fit on "
             f"{config.paper.upper()}."
         )
 
-    columns = int((page_width_mm + padding) // (cell_w + padding))
-    rows = int((page_height_mm + padding) // (cell_h + padding))
-    columns = max(1, columns)
-    rows = max(1, rows)
+    # One padding unit sits on each outside edge as well as between cells:
+    # n * cell + (n - 1) * padding + 2 * padding <= page.
+    columns = int((page_width_mm - padding) // (cell_w + padding))
+    rows = int((page_height_mm - padding) // (cell_h + padding))
 
-    # Centre the packed block on the page.
+    # Centre the cell block on the page. The fit calculation above guarantees
+    # that the leftover space on every edge is at least ``padding``.
     block_w = columns * cell_w + max(0, columns - 1) * padding
     block_h = rows * cell_h + max(0, rows - 1) * padding
     origin_x_mm = max(0.0, (page_width_mm - block_w) / 2.0)
