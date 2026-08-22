@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - AprilTag sheet padding now wraps all four outer edges of the packed tag group
 
 ### Fixed
+- Switching matches no longer errors when the Sync Anchor dropdown is out of date
 - SVG cut shapes match the rasterized grid spacing of existing printed PDF sheets
 - Seven-point sync accepts 180° camera yaw and scale-ambiguous short-baseline solutions instead of rejecting valid poses
 - Sync can register upside-down or below-ground cameras through five or more landmarks shared with any already-solved view

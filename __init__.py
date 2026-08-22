@@ -171,15 +171,16 @@ def _restore_active_match_after_load() -> None:
     try:
         from . import scene as scene_module
 
+        space = properties.workspace(context)
         root = properties.active_root(context)
         if root is None:
-            space = properties.workspace(context)
             # Pointer may be empty while enum still names a loaded root.
             name = getattr(space, "active_match", "NONE")
             if name and name != "NONE":
                 candidate = bpy.data.objects.get(name)
                 if properties.is_match_root(candidate):
                     root = candidate
+        properties.reconcile_workspace_refs(space)
         if root is not None:
             scene_module.set_active_match(context, root)
         else:

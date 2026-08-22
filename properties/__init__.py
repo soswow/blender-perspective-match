@@ -122,7 +122,12 @@ def is_match_root(obj: bpy.types.Object | None) -> bool:
 
 
 def iter_match_roots() -> list[bpy.types.Object]:
-    """Return all live match roots, pruned of stale flags."""
+    """Return all live match roots.
+
+    Skips empties whose camera is gone without mutating RNA. Poll, draw, and
+    EnumProperty items callbacks cannot write ID data; call
+    ``reconcile_workspace_refs`` from operators or load handlers to drop flags.
+    """
     roots = []
     for obj in bpy.data.objects:
         if not hasattr(obj, "pm_session"):
@@ -132,11 +137,25 @@ def iter_match_roots() -> list[bpy.types.Object]:
             continue
         camera = session.camera_object
         if camera is None or camera.name not in bpy.data.objects:
-            # Root survived but camera was deleted — drop the match flag.
-            session.is_match_root = False
             continue
         roots.append(obj)
     return sorted(roots, key=lambda item: item.name)
+
+
+def prune_stale_match_roots() -> None:
+    """Clear ``is_match_root`` on empties whose camera was deleted.
+
+    Write-safe only (operators, load_post, timers) — not poll/draw/items.
+    """
+    for obj in bpy.data.objects:
+        if not hasattr(obj, "pm_session"):
+            continue
+        session = obj.pm_session
+        if not session.is_match_root:
+            continue
+        camera = session.camera_object
+        if camera is None or camera.name not in bpy.data.objects:
+            session.is_match_root = False
 
 
 def match_sync_enabled(root: bpy.types.Object | None) -> bool:
@@ -189,15 +208,9 @@ def ensure_landmark_creation_indices(space: PMWorkspace | None = None) -> None:
 
 
 def active_root(context: bpy.types.Context | None = None) -> bpy.types.Object | None:
-    """Return the active match root after pruning invalid pointers."""
-    space = workspace(context)
-    root = space.active_root
-    if not is_match_root(root):
-        if space.active_root is not None:
-            space.active_root = None
-            sync_active_match_enum(space, "NONE")
-        return None
-    return root
+    """Return the active match root if it is a live match (read-only)."""
+    root = workspace(context).active_root
+    return root if is_match_root(root) else None
 
 
 def active_session(context: bpy.types.Context | None = None) -> PMSession | None:
@@ -309,18 +322,36 @@ def _update_anchor_match(self, context) -> None:
 
 
 def anchor_root(context: bpy.types.Context | None = None) -> bpy.types.Object | None:
-    """Return the sync anchor root after pruning invalid pointers."""
-    space = workspace(context)
+    """Return the sync anchor root if it is a live match (read-only).
+
+    PointerProperty is the source of truth. The Anchor dropdown can drift
+    (dynamic enums store an index) — do not repair it here; poll/draw freeze
+    Scene RNA. Call ``reconcile_workspace_refs`` from a write-safe context.
+    """
+    root = workspace(context).anchor_root
+    return root if is_match_root(root) else None
+
+
+def reconcile_workspace_refs(space: PMWorkspace) -> None:
+    """Drop stale match flags and align active/anchor dropdowns with pointers.
+
+    Must not run from poll, draw, or EnumProperty items callbacks.
+    """
+    prune_stale_match_roots()
+    root = space.active_root
+    if not is_match_root(root):
+        if space.active_root is not None:
+            space.active_root = None
+        sync_active_match_enum(space, "NONE")
+    else:
+        sync_active_match_enum(space, root.name)
     root = space.anchor_root
     if not is_match_root(root):
         if space.anchor_root is not None:
             space.anchor_root = None
-            sync_anchor_match_enum(space, "NONE")
-        return None
-    # Keep the dropdown label aligned after renames.
-    if space.anchor_match != root.name:
+        sync_anchor_match_enum(space, "NONE")
+    else:
         sync_anchor_match_enum(space, root.name)
-    return root
 
 
 class PMLineSegment(bpy.types.PropertyGroup):

@@ -210,6 +210,20 @@ def main() -> None:
             assert bpy.context.scene.camera == settings_a.camera_object
             assert bpy.context.scene.render.resolution_x == 800
 
+            # Dynamic Anchor enum can disagree with the pointer (saved index).
+            # Getters and operator poll must not write Scene RNA to repair it.
+            space = properties.workspace(bpy.context)
+            space.anchor_root = root_a
+            properties.sync_anchor_match_enum(space, root_b.name)
+            assert space.anchor_match == root_b.name
+            assert properties.anchor_root(bpy.context) == root_a
+            assert space.anchor_match == root_b.name
+            bpy.ops.perspective_match.solve_sync.poll()
+            bpy.ops.perspective_match.refine_lenses.poll()
+            bpy.ops.perspective_match.diagnose_sync.poll()
+            properties.reconcile_workspace_refs(space)
+            assert space.anchor_match == root_a.name
+
             scene.set_active_match(bpy.context, root_b)
             assert bpy.context.scene.camera == settings_b.camera_object
             assert bpy.context.scene.render.resolution_x == 640

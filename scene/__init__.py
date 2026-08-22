@@ -394,8 +394,9 @@ def set_active_match(context: bpy.types.Context, root: bpy.types.Object) -> None
     if previous is not None and properties.is_match_root(previous):
         capture_camera_view_framing(context, previous.pm_session)
     space.active_root = root
-    # Keep the dropdown in sync without re-entering its update callback.
-    properties.sync_active_match_enum(space, root.name)
+    # Align dropdowns (Anchor can drift: dynamic enums store an index).
+    # Must not do this from poll/draw — Scene RNA is frozen there.
+    properties.reconcile_workspace_refs(space)
     space.is_modal = False
     space.work_mode = "NONE"
     session = root.pm_session
