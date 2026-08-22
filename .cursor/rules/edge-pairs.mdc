@@ -1,0 +1,13 @@
+---
+description: Pairwise covering before remap/sync/bind changes
+globs: core/sync/**/*.py,core/ros_camera_info.py,scene/__init__.py,tests/test_edge_pairs.py,tests/pair_fixtures.py,tests/edge_pairs.md
+alwaysApply: false
+---
+
+# Pair covering
+
+Before changing K remap, bind/copy-K, or `solve_landmark_sync`: open `tests/edge_pairs.md`.
+
+- Axes come from the data flow (size, how K arrives, tilt, structure, leftover pose, graph), not from the last incident.
+- A pair is covered only if a test generates picks from a **true** camera and feeds the solver **stored** K/pose.
+- Empty **untested** rows: add a test in `tests/test_edge_pairs.py` (or mark N/A with why) in the same change. Do not wait for a real shoot.
