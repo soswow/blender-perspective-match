@@ -48,7 +48,7 @@ Model or place Empties in the anchor world → select them → Sync list **Landm
 
 Add with the mesh icon next to +. Drag the same physical edge in each still — endpoints do **not** need to be the same 3D points, only the same infinite edge. Optional: assign two Empties as **Known 3D** / **Known 3D B** so the edge is metric. Mark **Is Parallel To** another Line landmark when two edges share a 3D direction.
 
-Without Known 3D ends, a free line needs **three or more** stills — two views alone cannot constrain relative pose from lines. Ordinary point landmarks must be picked in **both** stills when Known 3D sit on one line. Set **Pick Confidence** before clicking.
+Without Known 3D ends, a free line needs **three or more** stills — two views alone cannot constrain relative pose from lines. Ordinary point landmarks must be picked in **both** stills when Known 3D sit on one line. Expand **Pick Confidence** (collapsed by default, under **Pick in Active Match**) to set the next-pick default or per-still confidence.
 
 **What “px” means:** For **point** landmarks, RMSE is how far the projected 3D Empty lands from your 2D pick. For **line** landmarks, it is how far each drawn **endpoint** sits from the projected infinite 3D line (perpendicular distance in pixels).
 
@@ -64,7 +64,7 @@ Without Known 3D ends, a free line needs **three or more** stills — two views 
 
 **Refine Lenses** searches each unlocked match’s focal length (re-orients from VP lines at each trial) with a per-line VP residual prior and hard VP guardrails, then a coupled polish, then Solve Sync. Runs in a background thread — watch the progress slider, press **Esc** or **Cancel** to stop. The % field is the ± search window around current fx (default 18). Skips **1-point** matches and matches without enough VP lines. Disable unrelated matches or landmarks before refining a subset.
 
-The eye icon on **Sync Matches** toggles landmark picks on the plate; **Landmark Empties** controls the 3D helpers after sync. With the **Perspective Match** sidebar tab open, click a pick on the plate to select that landmark in the list (red overlay). Inactive **On Ground** picks are magenta; Known 3D are cyan. **Pick in Active Match** can still place or move the active landmark; clicking a different pick selects it instead of overwriting.
+The eye icon on **Sync Matches** toggles landmark picks on the plate; **Landmark Empties** controls the 3D helpers after sync. With the **Perspective Match** sidebar tab open, click a pick on the plate to select that landmark in the list (red overlay). Inactive **On Ground** picks are magenta; Known 3D are cyan. **Pick in Active Match** can still place or move the active landmark; clicking a different pick selects it instead of overwriting. Per-match pick coordinates, confidence, and last-sync RMSE are under the collapsed **Pick Confidence** header.
 
 ## Debugging a bad or rejected sync
 

@@ -590,45 +590,52 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
                 text="",
                 icon="X",
             )
-            sync_body.prop(workspace, "landmark_pick_confidence")
+            _header, confidence_body = _section(
+                sync_body,
+                "PM_landmark_confidence",
+                "Pick Confidence",
+                default_closed=True,
+            )
+            if confidence_body is not None:
+                confidence_body.prop(workspace, "landmark_pick_confidence")
 
-            # Compact per-match pick status for the active landmark.
-            for root in properties.iter_match_roots():
-                observation = scene.observation_for_match(landmark, root)
-                label = scene.match_prefix(root)
-                row = sync_body.row(align=True)
-                if observation is not None and observation.is_set:
-                    if landmark.kind == "LINE":
-                        row.label(
-                            text=(
-                                f"{label}: "
-                                f"({observation.x:.0f},{observation.y:.0f})–"
-                                f"({observation.x2:.0f},{observation.y2:.0f})"
-                            ),
-                            icon="CHECKMARK",
+                # Compact per-match pick status for the active landmark.
+                for root in properties.iter_match_roots():
+                    observation = scene.observation_for_match(landmark, root)
+                    label = scene.match_prefix(root)
+                    row = confidence_body.row(align=True)
+                    if observation is not None and observation.is_set:
+                        if landmark.kind == "LINE":
+                            row.label(
+                                text=(
+                                    f"{label}: "
+                                    f"({observation.x:.0f},{observation.y:.0f})–"
+                                    f"({observation.x2:.0f},{observation.y2:.0f})"
+                                ),
+                                icon="CHECKMARK",
+                            )
+                        else:
+                            row.label(
+                                text=(
+                                    f"{label}: "
+                                    f"({observation.x:.0f}, {observation.y:.0f})"
+                                ),
+                                icon="CHECKMARK",
+                            )
+                        row.prop(observation, "confidence", text="")
+                    else:
+                        row.label(text=f"{label}: —", icon="DOT")
+                if landmark.has_position or landmark.rmse_px > 0.5:
+                    detail = f"Last sync RMSE {landmark.rmse_px:.2f} px"
+                    if landmark.has_position:
+                        detail += (
+                            f" · ({landmark.position[0]:.2f}, "
+                            f"{landmark.position[1]:.2f}, "
+                            f"{landmark.position[2]:.2f})"
                         )
                     else:
-                        row.label(
-                            text=(
-                                f"{label}: "
-                                f"({observation.x:.0f}, {observation.y:.0f})"
-                            ),
-                            icon="CHECKMARK",
-                        )
-                    row.prop(observation, "confidence", text="")
-                else:
-                    row.label(text=f"{label}: —", icon="DOT")
-            if landmark.has_position or landmark.rmse_px > 0.5:
-                detail = f"Last sync RMSE {landmark.rmse_px:.2f} px"
-                if landmark.has_position:
-                    detail += (
-                        f" · ({landmark.position[0]:.2f}, "
-                        f"{landmark.position[1]:.2f}, "
-                        f"{landmark.position[2]:.2f})"
-                    )
-                else:
-                    detail += " · diagnose/reject"
-                sync_body.label(text=detail, icon="EMPTY_AXIS")
+                        detail += " · diagnose/reject"
+                    confidence_body.label(text=detail, icon="EMPTY_AXIS")
 
         row = sync_body.row(align=True)
         row.operator("perspective_match.solve_sync", icon="FILE_REFRESH")

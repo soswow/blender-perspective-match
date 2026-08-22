@@ -1,6 +1,7 @@
 TODOs to be done:
 
 Done TODOs:
+- Make Section with all PMs and their confedence dropdowns below "Pick Confedence" (including that main dropdown). All below "Pick in Active Match" button to be collapsable. And collapsed by default.
 - Mark Ground landmarks with different color (maybe magenta-ish?)
 - Detect AprilTags from both DICT_APRILTAG_25h9 and DICT_APRILTAG_36h10, keeping family-qualified landmark names.
 - When I bulk add images, it doesn't pick all the things from camera intrinsicis. MAybe specifically all the imported Ks
