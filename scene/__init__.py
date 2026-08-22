@@ -1322,7 +1322,7 @@ def ensure_origins_from_ground_landmarks(
     """Auto Pick Origin on sync-enabled matches that still lack one.
 
     Uses the first On Ground landmark pick visible in that match. Returns short
-    notes like ``PM_shot_4_Origin←id01-25h9`` for the sync status line.
+    notes like ``PM_shot_4_Origin←id001-25h9`` for the sync status line.
     """
     space = properties.workspace(context)
     notes: list[str] = []

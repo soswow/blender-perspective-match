@@ -1,8 +1,10 @@
 """Detect AprilTag fiducials in a match still and map them to sync landmarks.
 
 The configured families are scanned independently and become family-qualified
-landmarks such as ``id05-25h9`` and ``id05-36h10``. OpenCV with aruco is
-optional (bundled wheel ``opencv-contrib-python-headless`` in ``./wheels/``).
+landmarks such as ``id005-25h9`` and ``id005-36h10``. Tag IDs are zero-padded
+to at least three digits (more when the dictionary ID is larger). OpenCV with
+aruco is optional (bundled wheel ``opencv-contrib-python-headless`` in
+``./wheels/``).
 """
 
 from __future__ import annotations
@@ -34,6 +36,8 @@ APRILTAG_FAMILIES = (
 )
 APRILTAG_DICTIONARY = "apriltag-25h9"  # Backward-compatible public alias.
 APRILTAG_FAMILY_SUFFIX = APRILTAG_FAMILIES[0].suffix
+# Landmark / label IDs are at least this wide; larger dictionary IDs grow past it.
+TAG_ID_MIN_WIDTH = 3
 
 
 @dataclass(frozen=True)
@@ -67,18 +71,51 @@ def _family_for_suffix(family_suffix: str) -> AprilTagFamily:
     raise ValueError(f"Unsupported AprilTag family: {family_suffix}")
 
 
-def landmark_name_for_tag(
+def format_tag_id(tag_id: int) -> str:
+    """Zero-pad a tag id to at least three digits (more if the id is larger)."""
+    return f"{tag_id:0{TAG_ID_MIN_WIDTH}d}"
+
+
+def _landmark_name_prefixes(
     tag_id: int,
     family_suffix: str = APRILTAG_FAMILY_SUFFIX,
-) -> str:
-    """Return the family-qualified canonical landmark name for a tag id."""
+) -> tuple[str, ...]:
+    """Canonical padded name first, then shorter historical paddings."""
     family = _family_for_suffix(family_suffix)
     if tag_id < 0 or tag_id > family.max_tag_id:
         raise ValueError(
             f"AprilTag {family.suffix} id must be 0–{family.max_tag_id}, "
             f"got {tag_id}"
         )
-    return f"id{tag_id:02d}-{family.suffix}"
+    max_width = max(TAG_ID_MIN_WIDTH, len(str(tag_id)))
+    return tuple(
+        f"id{tag_id:0{width}d}-{family.suffix}"
+        for width in range(max_width, 0, -1)
+    )
+
+
+def landmark_name_for_tag(
+    tag_id: int,
+    family_suffix: str = APRILTAG_FAMILY_SUFFIX,
+) -> str:
+    """Return the family-qualified canonical landmark name for a tag id."""
+    return _landmark_name_prefixes(tag_id, family_suffix)[0]
+
+
+def _with_canonical_tag_padding(
+    name: str,
+    tag_id: int,
+    family_suffix: str = APRILTAG_FAMILY_SUFFIX,
+) -> str:
+    """Rewrite a historical ``id05-…`` name to the current ``id005-…`` padding."""
+    prefixes = _landmark_name_prefixes(tag_id, family_suffix)
+    canonical = prefixes[0]
+    if name.startswith(canonical):
+        return name
+    for prefix in prefixes[1:]:
+        if name.startswith(prefix):
+            return canonical + name[len(prefix) :]
+    return name
 
 
 def find_landmark_for_tag(
@@ -86,12 +123,17 @@ def find_landmark_for_tag(
     tag_id: int,
     family_suffix: str = APRILTAG_FAMILY_SUFFIX,
 ):
-    """Return the first landmark matching the tag id and family."""
-    prefix = landmark_name_for_tag(tag_id, family_suffix)
-    for landmark in landmarks:
-        name = getattr(landmark, "name", "") or ""
-        if name.startswith(prefix):
-            return landmark
+    """Return the first landmark matching the tag id and family.
+
+    Prefers the current three-digit (or wider) name, then older two-digit
+    and unpadded names so existing .blend landmarks still update.
+    """
+    prefixes = _landmark_name_prefixes(tag_id, family_suffix)
+    for prefix in prefixes:
+        for landmark in landmarks:
+            name = getattr(landmark, "name", "") or ""
+            if name.startswith(prefix):
+                return landmark
     return None
 
 
@@ -359,6 +401,11 @@ def apply_apriltag_detections(
                 # Tag centres are points; leave line landmarks alone.
                 skipped += 1
                 continue
+            landmark.name = _with_canonical_tag_padding(
+                getattr(landmark, "name", "") or "",
+                detection.tag_id,
+                detection.family_suffix,
+            )
             _set_point_observation(landmark, root, detection.center_xy, confidence)
             updated += 1
             continue

@@ -38,10 +38,11 @@ from match_perspective import core
 
 class AprilTagNamingTests(unittest.TestCase):
     def test_landmark_name_zero_padded(self) -> None:
-        self.assertEqual(apriltag_detect.landmark_name_for_tag(0), "id00-25h9")
-        self.assertEqual(apriltag_detect.landmark_name_for_tag(5), "id05-25h9")
-        self.assertEqual(apriltag_detect.landmark_name_for_tag(19), "id19-25h9")
-        self.assertEqual(apriltag_detect.landmark_name_for_tag(99), "id99-25h9")
+        self.assertEqual(apriltag_detect.landmark_name_for_tag(0), "id000-25h9")
+        self.assertEqual(apriltag_detect.landmark_name_for_tag(5), "id005-25h9")
+        self.assertEqual(apriltag_detect.landmark_name_for_tag(19), "id019-25h9")
+        self.assertEqual(apriltag_detect.landmark_name_for_tag(99), "id099-25h9")
+        self.assertEqual(apriltag_detect.format_tag_id(2319), "2319")
 
     def test_landmark_name_rejects_out_of_range(self) -> None:
         with self.assertRaises(ValueError):
@@ -52,7 +53,7 @@ class AprilTagNamingTests(unittest.TestCase):
     def test_landmark_name_distinguishes_family_and_allows_large_36h10_id(self) -> None:
         self.assertEqual(
             apriltag_detect.landmark_name_for_tag(5, "36h10"),
-            "id05-36h10",
+            "id005-36h10",
         )
         self.assertEqual(
             apriltag_detect.landmark_name_for_tag(2319, "36h10"),
@@ -64,8 +65,8 @@ class AprilTagNamingTests(unittest.TestCase):
     def test_find_landmark_startswith(self) -> None:
         landmarks = [
             SimpleNamespace(name="Landmark 1"),
-            SimpleNamespace(name="id05-25h9"),
-            SimpleNamespace(name="id07-25h9-extra"),
+            SimpleNamespace(name="id005-25h9"),
+            SimpleNamespace(name="id007-25h9-extra"),
         ]
         found = apriltag_detect.find_landmark_for_tag(landmarks, 5)
         self.assertIs(found, landmarks[1])
@@ -73,10 +74,34 @@ class AprilTagNamingTests(unittest.TestCase):
         self.assertIs(found_extra, landmarks[2])
         self.assertIsNone(apriltag_detect.find_landmark_for_tag(landmarks, 3))
 
-    def test_find_landmark_does_not_cross_families(self) -> None:
+    def test_find_landmark_accepts_historical_two_digit_names(self) -> None:
         landmarks = [
             SimpleNamespace(name="id05-25h9"),
-            SimpleNamespace(name="id05-36h10"),
+            SimpleNamespace(name="id07-25h9-extra"),
+        ]
+        found = apriltag_detect.find_landmark_for_tag(landmarks, 5)
+        self.assertIs(found, landmarks[0])
+        found_extra = apriltag_detect.find_landmark_for_tag(landmarks, 7)
+        self.assertIs(found_extra, landmarks[1])
+
+    def test_canonical_padding_rewrites_historical_names(self) -> None:
+        self.assertEqual(
+            apriltag_detect._with_canonical_tag_padding("id05-25h9", 5),
+            "id005-25h9",
+        )
+        self.assertEqual(
+            apriltag_detect._with_canonical_tag_padding("id07-25h9-extra", 7),
+            "id007-25h9-extra",
+        )
+        self.assertEqual(
+            apriltag_detect._with_canonical_tag_padding("id005-25h9", 5),
+            "id005-25h9",
+        )
+
+    def test_find_landmark_does_not_cross_families(self) -> None:
+        landmarks = [
+            SimpleNamespace(name="id005-25h9"),
+            SimpleNamespace(name="id005-36h10"),
         ]
         found = apriltag_detect.find_landmark_for_tag(landmarks, 5, "36h10")
         self.assertIs(found, landmarks[1])

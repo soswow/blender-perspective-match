@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pick Confidence and per-match confidence dropdowns sit in a collapsed section under Pick in Active Match
 - On Ground landmark picks draw in magenta on the plate (selected stays red)
 - Manual PP Offset marker is light blue (was violet)
+- AprilTag landmark names zero-pad IDs to at least three digits (`id005-25h9`; four digits when the ID is ≥ 1000)
 - AprilTag sheet printing now accepts only official OpenCV dictionary names and reports out-of-range marker IDs clearly
 - Printed AprilTag labels contain only the marker number, without an `ID` prefix
 - AprilTag sheet padding now wraps all four outer edges of the packed tag group
