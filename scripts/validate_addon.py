@@ -491,6 +491,10 @@ def main() -> None:
 
             result = scene.solve_and_apply_sync(bpy.context)
             assert result.success, result.message
+            helper = bpy.data.objects.get("PM_LM_g0")
+            assert helper is not None, "Solve Sync should create landmark Empties"
+            assert helper.get(scene.LANDMARK_HELPER_ID_KEY) == "smoke-g0"
+            assert scene.landmark_index_for_helper(space, helper) == 0
             assert session_b.sync_is_applied
             assert abs(session_b.sync_scale - 1.0) < 1.0e-6, (
                 session_b.sync_scale,

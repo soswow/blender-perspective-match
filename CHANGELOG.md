@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Click a landmark pick on the plate to select it in the Sync list (Perspective Match sidebar tab open)
+- Selecting a solved landmark Empty (or line helper) in the viewport selects that landmark in the Sync list when the Perspective Match sidebar tab is open
 - Calibrated sync can infer the shared ground frame from four or more matching On Ground landmarks across three or more images, without requiring VP lines
 - AprilTag sheets can embed subtle, detection-safe numeric labels in each tag's bottom-right border
 - AprilTag sheets can export matching page-sized SVG cut outlines for vinyl cutters

@@ -159,6 +159,8 @@ def _reset_modal_state(_dummy=None) -> None:
         properties.ensure_landmark_creation_indices(workspace)
     # Re-bind overlay callback + rehydrate active match after .blend load.
     overlay.ensure_viewport_draw_handler()
+    # File load clears msgbus subscriptions; re-bind the landmark helper listener.
+    operators.register_landmark_selection_listener()
     if not bpy.app.timers.is_registered(_restore_active_match_after_load):
         bpy.app.timers.register(_restore_active_match_after_load, first_interval=0.15)
 
@@ -316,6 +318,7 @@ def register() -> None:
     overlay.register_viewport_draw_handler()
     icons.register()
     _register_keymaps()
+    operators.register_landmark_selection_listener()
     # ``import cv2`` is slow; do it after Preferences enable returns.
     if not bpy.app.timers.is_registered(_notify_optional_opencv):
         bpy.app.timers.register(_notify_optional_opencv, first_interval=0.01)
@@ -329,6 +332,10 @@ def unregister() -> None:
         bpy.app.timers.unregister(_notify_optional_opencv)
     try:
         icons.unregister()
+    except Exception:
+        traceback.print_exc()
+    try:
+        operators.unregister_landmark_selection_listener()
     except Exception:
         traceback.print_exc()
     try:

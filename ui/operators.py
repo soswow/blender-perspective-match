@@ -359,6 +359,53 @@ def _perspective_match_sidebar_active(context: bpy.types.Context) -> bool:
     return False
 
 
+_LANDMARK_SELECT_MSGBUS_OWNER = object()
+
+
+def _queue_sidebar_landmark_from_selection(*_args) -> None:
+    """msgbus notify: apply after the select operator finishes."""
+    if bpy.app.timers.is_registered(_apply_sidebar_landmark_from_selection):
+        return
+    bpy.app.timers.register(_apply_sidebar_landmark_from_selection, first_interval=0.0)
+
+
+def _apply_sidebar_landmark_from_selection() -> None:
+    """If the active object is a PM landmark helper, select it in the Sync list."""
+    context = bpy.context
+    if context is None:
+        return None
+    if not _perspective_match_sidebar_active(context):
+        return None
+    view_layer = getattr(context, "view_layer", None)
+    if view_layer is None:
+        return None
+    space = _workspace(context)
+    index = scene.landmark_index_for_helper(space, view_layer.objects.active)
+    if index < 0 or space.active_landmark_index == index:
+        return None
+    _set_active_landmark(context, index)
+    return None
+
+
+def register_landmark_selection_listener() -> None:
+    """Watch LayerObjects.active so viewport picks update the Sync list."""
+    unregister_landmark_selection_listener()
+    bpy.msgbus.subscribe_rna(
+        key=(bpy.types.LayerObjects, "active"),
+        owner=_LANDMARK_SELECT_MSGBUS_OWNER,
+        args=(),
+        notify=_queue_sidebar_landmark_from_selection,
+        options={"PERSISTENT"},
+    )
+
+
+def unregister_landmark_selection_listener() -> None:
+    """Drop the active-object subscription and any pending apply timer."""
+    bpy.msgbus.clear_by_owner(_LANDMARK_SELECT_MSGBUS_OWNER)
+    if bpy.app.timers.is_registered(_apply_sidebar_landmark_from_selection):
+        bpy.app.timers.unregister(_apply_sidebar_landmark_from_selection)
+
+
 def _overlay_landmark_hit_index(context: bpy.types.Context, mouse: Vector) -> int:
     """Collection index of the landmark pick under ``mouse``, or -1."""
     space = _workspace(context)

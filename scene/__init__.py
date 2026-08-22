@@ -1986,6 +1986,10 @@ def reset_root_sync_transform(root: bpy.types.Object) -> None:
     clear_similarity_on_session(root.pm_session)
 
 
+# ID property on PM_LM_* helpers so sidebar selection survives rename collisions.
+LANDMARK_HELPER_ID_KEY = "pm_landmark_id"
+
+
 def ensure_landmark_collection(context: bpy.types.Context) -> bpy.types.Collection:
     """Return (creating if needed) the collection that holds landmark Empties."""
     name = "PM_Sync_Landmarks"
@@ -1994,6 +1998,28 @@ def ensure_landmark_collection(context: bpy.types.Context) -> bpy.types.Collecti
         collection = bpy.data.collections.new(name)
         context.scene.collection.children.link(collection)
     return collection
+
+
+def _bind_landmark_helper(obj: bpy.types.Object, landmark) -> None:
+    """Stamp the landmark id on a point Empty or line mesh helper."""
+    obj[LANDMARK_HELPER_ID_KEY] = landmark.item_id
+
+
+def landmark_index_for_helper(space, obj: bpy.types.Object | None) -> int:
+    """Collection index of the landmark this helper represents, or -1."""
+    if obj is None or not obj.name.startswith("PM_LM_"):
+        return -1
+    item_id = obj.get(LANDMARK_HELPER_ID_KEY, "")
+    if item_id:
+        for index, landmark in enumerate(space.landmarks):
+            if landmark.item_id == item_id:
+                return index
+    # Helpers from older files may lack the id stamp; match the generated name.
+    for index, landmark in enumerate(space.landmarks):
+        base_name = safe_identifier(landmark.name) or landmark.item_id[:8]
+        if obj.name == f"PM_LM_{base_name}":
+            return index
+    return -1
 
 
 def sync_landmark_empties(context: bpy.types.Context) -> None:
@@ -2062,6 +2088,7 @@ def sync_landmark_empties(context: bpy.types.Context) -> None:
             obj.hide_viewport = False
             obj.hide_render = True
             obj.display_type = "WIRE"
+            _bind_landmark_helper(obj, landmark)
             continue
 
         empty = bpy.data.objects.get(object_name)
@@ -2079,6 +2106,7 @@ def sync_landmark_empties(context: bpy.types.Context) -> None:
         empty.location = Vector(landmark.position)
         empty.hide_viewport = False
         empty.hide_render = True
+        _bind_landmark_helper(empty, landmark)
 
     # Remove stale landmark helpers that belong to this collection.
     for obj in list(collection.objects):
