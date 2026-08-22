@@ -35,7 +35,7 @@ def is_dev_install() -> bool:
 
 
 def _register_keymaps() -> None:
-    """Ctrl+Alt+NumPad 1–9 and Ctrl+Alt+Arrows (poll-gated to sidebar tab)."""
+    """Ctrl+Alt+NumPad 1–9 / arrows, and plate click-to-select landmarks."""
     _unregister_keymaps()
     window_manager = bpy.context.window_manager
     if window_manager is None:
@@ -69,6 +69,14 @@ def _register_keymaps() -> None:
         )
         item.properties.direction = direction
         _addon_keymaps.append((keymap, item))
+    # Head of the map so we see LMB before view3d.select; miss returns PASS_THROUGH.
+    item = keymap.keymap_items.new(
+        "perspective_match.select_overlay_landmark",
+        "LEFTMOUSE",
+        "PRESS",
+        head=True,
+    )
+    _addon_keymaps.append((keymap, item))
 
 
 def _unregister_keymaps() -> None:

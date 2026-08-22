@@ -32,6 +32,7 @@ Each landmark keeps a stable `item_id` plus a `creation_index` (add order). UI h
 
 - **A–Z** toggle: alphabetical by name vs original add order (display only).
 - **Font** toggle: show landmark names next to picks on the plate.
+- Click a pick on the plate to select it in the list (while the **Perspective Match** sidebar tab is open). The selected pick draws in red.
 - **Duplicate**: copies type / On Ground / Use in Sync, clears Known 3D links, parallel links, picks, and solved positions.
 - **Use in Sync**: exclude a landmark from Solve Sync / Diagnose without deleting picks. With **Landmark Empties** on, that also removes its helper from `PM_Sync_Landmarks`.
 
@@ -63,7 +64,7 @@ Without Known 3D ends, a free line needs **three or more** stills — two views 
 
 **Refine Lenses** searches each unlocked match’s focal length (re-orients from VP lines at each trial) with a per-line VP residual prior and hard VP guardrails, then a coupled polish, then Solve Sync. Runs in a background thread — watch the progress slider, press **Esc** or **Cancel** to stop. The % field is the ± search window around current fx (default 18). Skips **1-point** matches and matches without enough VP lines. Disable unrelated matches or landmarks before refining a subset.
 
-The eye icon on **Sync Matches** toggles landmark picks on the plate; **Landmark Empties** controls the 3D helpers after sync.
+The eye icon on **Sync Matches** toggles landmark picks on the plate; **Landmark Empties** controls the 3D helpers after sync. With the **Perspective Match** sidebar tab open, click a pick on the plate to select that landmark in the list (red overlay). **Pick in Active Match** can still place or move the active landmark; clicking a different pick selects it instead of overwriting.
 
 ## Debugging a bad or rejected sync
 

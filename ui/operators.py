@@ -20,7 +20,7 @@ from ..detect import line_snap
 from ..detect import opencv as opencv_support
 from ..detect import vp_lines as vp_line_detect
 from ..scene import distortion
-from . import overlay
+from . import overlay, overlay_hit
 
 
 def _session(context: bpy.types.Context):
@@ -357,6 +357,54 @@ def _perspective_match_sidebar_active(context: bpy.types.Context) -> bool:
             if region.width > 1 and region.active_panel_category == "Perspective Match":
                 return True
     return False
+
+
+def _overlay_landmark_hit_index(context: bpy.types.Context, mouse: Vector) -> int:
+    """Collection index of the landmark pick under ``mouse``, or -1."""
+    space = _workspace(context)
+    if not space.show_landmark_overlay:
+        return -1
+    root = properties.active_root(context)
+    if root is None:
+        return -1
+    items: list[
+        tuple[int, str, tuple[float, float], tuple[float, float] | None]
+    ] = []
+    for index, landmark in enumerate(space.landmarks):
+        observation = scene.observation_for_match(landmark, root)
+        if observation is None or not observation.is_set:
+            continue
+        if landmark.kind == "LINE":
+            point_a = scene.image_to_region(context, observation.x, observation.y)
+            point_b = scene.image_to_region(
+                context, observation.x2, observation.y2
+            )
+            if point_a is None or point_b is None:
+                continue
+            items.append(
+                (index, "LINE", (point_a.x, point_a.y), (point_b.x, point_b.y))
+            )
+            continue
+        point = scene.image_to_region(context, observation.x, observation.y)
+        if point is None:
+            continue
+        items.append((index, "POINT", (point.x, point.y), None))
+    scale = overlay.ui_scale()
+    return overlay_hit.nearest_landmark_hit(
+        (float(mouse.x), float(mouse.y)),
+        items,
+        point_radius=12.0 * scale,
+        line_radius=11.0 * scale,
+    )
+
+
+def _set_active_landmark(context: bpy.types.Context, index: int) -> None:
+    """Select a landmark in the sidebar list and refresh the overlay."""
+    space = _workspace(context)
+    if index < 0 or index >= len(space.landmarks):
+        return
+    space.active_landmark_index = index
+    properties.tag_viewport_redraw(context)
 
 
 def _match_slot_from_event(event) -> int | None:
@@ -1596,10 +1644,15 @@ class PM_OT_interact(bpy.types.Operator):
         if scene.is_camera_view(context):
             mouse = Vector((event.mouse_x - region.x, event.mouse_y - region.y))
             if self.mode == "LANDMARK":
-                landmark = scene.active_landmark(context)
-                if landmark is not None and landmark.kind == "LINE":
-                    if self._hit_landmark_line(context, mouse) != 0:
-                        cursor = "HAND"
+                hit_index = _overlay_landmark_hit_index(context, mouse)
+                space = _workspace(context)
+                if hit_index >= 0 and hit_index != space.active_landmark_index:
+                    cursor = "HAND_POINT"
+                else:
+                    landmark = scene.active_landmark(context)
+                    if landmark is not None and landmark.kind == "LINE":
+                        if self._hit_landmark_line(context, mouse) != 0:
+                            cursor = "HAND"
         self._apply_hover_cursor(context, cursor)
 
     def _status_prompt(self) -> str:
@@ -1610,9 +1663,11 @@ class PM_OT_interact(bpy.types.Operator):
             name = landmark.name if landmark is not None else "(none)"
             if landmark is not None and landmark.kind == "LINE":
                 return (
-                    f"Drag line '{name}' · pull endpoints to edit · Esc exits"
+                    f"Drag line '{name}' · click another pick to select · Esc exits"
                 )
-            return f"Click landmark '{name}' in this match · Esc exits"
+            return (
+                f"Click landmark '{name}' · click another pick to select · Esc exits"
+            )
         if self.mode == "PP":
             return "Drag principal point (violet) · Esc exits"
         return "Click the world origin on the ground plane"
@@ -2032,6 +2087,19 @@ class PM_OT_interact(bpy.types.Operator):
                         self.report({"ERROR"}, str(error))
                     return {"RUNNING_MODAL"}
                 if self.mode == "LANDMARK":
+                    mouse = Vector(
+                        (event.mouse_x - region.x, event.mouse_y - region.y)
+                    )
+                    hit_index = _overlay_landmark_hit_index(context, mouse)
+                    space = _workspace(context)
+                    if (
+                        hit_index >= 0
+                        and hit_index != space.active_landmark_index
+                    ):
+                        # Clicking another pick selects it instead of moving the active one.
+                        _set_active_landmark(context, hit_index)
+                        settings.status = self._status_prompt()
+                        return {"RUNNING_MODAL"}
                     landmark = scene.active_landmark(context)
                     if landmark is not None and landmark.kind == "LINE":
                         self._begin_landmark_line_drag(
@@ -2380,6 +2448,53 @@ class PM_OT_reload(bpy.types.Operator):
             self.report({"WARNING"}, "Perspective Match reload already queued")
             return {"CANCELLED"}
         self.report({"INFO"}, "Perspective Match reload queued")
+        return {"FINISHED"}
+
+
+class PM_OT_select_overlay_landmark(bpy.types.Operator):
+    """Select a landmark by clicking its pick on the plate (sidebar tab open)."""
+
+    bl_idname = "perspective_match.select_overlay_landmark"
+    bl_label = "Select Overlay Landmark"
+    bl_description = (
+        "Select a landmark by clicking its pick on the reference plate. "
+        "Active while the Perspective Match sidebar tab is open"
+    )
+    bl_options = {"REGISTER"}
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        # Live Draw / Pick tools own LMB; the modal handles select there.
+        if _active_interact is not None:
+            return False
+        if not _perspective_match_sidebar_active(context):
+            return False
+        settings = _session(context)
+        space = _workspace(context)
+        return (
+            settings is not None
+            and settings.image is not None
+            and space.show_landmark_overlay
+            and len(space.landmarks) > 0
+        )
+
+    def invoke(self, context: bpy.types.Context, event) -> set[str]:
+        # Leave modified clicks to Blender (Shift/Ctrl select, etc.).
+        if event.shift or event.ctrl or event.alt or event.oskey:
+            return {"PASS_THROUGH"}
+        area, region, space_data = _view3d_under_event(context, event)
+        if area is None or region is None or space_data is None:
+            return {"PASS_THROUGH"}
+        with context.temp_override(
+            area=area, region=region, space_data=space_data
+        ):
+            if not scene.is_camera_view(context):
+                return {"PASS_THROUGH"}
+            mouse = Vector((event.mouse_x - region.x, event.mouse_y - region.y))
+            index = _overlay_landmark_hit_index(context, mouse)
+            if index < 0:
+                return {"PASS_THROUGH"}
+            _set_active_landmark(context, index)
         return {"FINISHED"}
 
 
@@ -3057,6 +3172,7 @@ CLASSES = (
     PM_OT_find_apriltag_landmarks,
     PM_OT_duplicate_landmark,
     PM_OT_clear_landmark_observation,
+    PM_OT_select_overlay_landmark,
     PM_OT_solve_sync,
     PM_OT_diagnose_sync,
     PM_OT_refine_lenses,

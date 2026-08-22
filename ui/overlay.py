@@ -60,7 +60,7 @@ _MODE_CHROME = {
     },
     "LANDMARK": {
         "title": "Landmark",
-        "hint": "click / drag on the plate · Esc exits",
+        "hint": "click a pick to select · click / drag to place · Esc exits",
         "color": (0.15, 0.85, 0.85, 0.92),
     },
 }
