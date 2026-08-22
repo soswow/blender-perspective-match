@@ -64,6 +64,7 @@ DEFAULT_DPI = 300
 DEFAULT_MARGIN_MM = 8.0
 DEFAULT_PADDING_MM = 0.0
 DEFAULT_LABEL_HEIGHT_MM = 8.0
+SVG_CUT_RADIUS_MM = 2.0
 CUT_GUIDE_COLOR = (170, 170, 170)
 EMBEDDED_LABEL_COLOR = (80, 80, 80)
 
@@ -172,6 +173,11 @@ def validate_marker_ids(
 def mm_to_px(millimetres: float, dpi: int) -> int:
     """Convert millimetres to pixels at the given print DPI."""
     return max(1, int(round(millimetres / 25.4 * dpi)))
+
+
+def px_to_mm(pixels: int, dpi: int) -> float:
+    """Convert a raster coordinate back to its physical millimetre position."""
+    return pixels / dpi * 25.4
 
 
 def paper_size_mm(paper: str, landscape: bool) -> tuple[float, float]:
@@ -407,27 +413,17 @@ def render_sheet_page(
     page_w = mm_to_px(grid.page_width_mm, config.dpi)
     page_h = mm_to_px(grid.page_height_mm, config.dpi)
     margin_px = mm_to_px(config.margin_mm, config.dpi)
-    padding_px = mm_to_px(config.padding_mm, config.dpi)
     tag_px = mm_to_px(config.tag_size_mm, config.dpi)
     label_px = mm_to_px(config.effective_label_height_mm, config.dpi)
-    cell_w_px = mm_to_px(grid.cell_width_mm, config.dpi)
-    cell_h_px = mm_to_px(grid.cell_height_mm, config.dpi)
-    origin_x_px = mm_to_px(grid.origin_x_mm, config.dpi)
-    origin_y_px = mm_to_px(grid.origin_y_mm, config.dpi)
-    pitch_x_px = cell_w_px + padding_px
-    pitch_y_px = cell_h_px + padding_px
 
     page = Image.new("RGB", (page_w, page_h), "white")
     page.info["dpi"] = (config.dpi, config.dpi)
     draw = ImageDraw.Draw(page)
     font = _load_label_font(label_px) if config.show_labels and label_px > 0 else None
-    cut_boxes: list[tuple[int, int, int, int]] = []
+    cut_boxes = cut_boxes_px(len(marker_ids), config, grid)
 
     for index, marker_id in enumerate(marker_ids):
-        column = index % grid.columns
-        row = index // grid.columns
-        cell_x = origin_x_px + column * pitch_x_px
-        cell_y = origin_y_px + row * pitch_y_px
+        cell_x, cell_y, _, _ = cut_boxes[index]
         tag_x = cell_x + margin_px
         tag_y = cell_y + margin_px
 
@@ -446,15 +442,8 @@ def render_sheet_page(
             )
             draw.text((text_x, text_y), label, fill="black", font=font)
 
-        if config.show_cut_guides:
-            # Exact outer edge of the margin box (no -1), so padding-0 neighbours share a coord.
-            left = cell_x
-            top = cell_y
-            right = cell_x + cell_w_px
-            bottom = cell_y + cell_h_px
-            cut_boxes.append((left, top, right, bottom))
-
-    if cut_boxes:
+    if config.show_cut_guides:
+        cut_boxes = cut_boxes_px(len(marker_ids), config, grid)
         _draw_cut_guides(draw, cut_boxes, share_edges=(config.padding_mm <= 0))
 
     return page
@@ -492,6 +481,134 @@ def save_pdf(pages: Sequence[Image.Image], output_path: Path, dpi: int = DEFAULT
         save_all=True,
         append_images=list(rest),
     )
+
+
+def cut_boxes_mm(
+    marker_count: int,
+    config: SheetConfig,
+    grid: GridLayout,
+) -> list[tuple[float, float, float, float]]:
+    """Return cut-guide boxes as ``(x, y, width, height)`` in millimetres."""
+    boxes: list[tuple[float, float, float, float]] = []
+    for index in range(marker_count):
+        column = index % grid.columns
+        row = index // grid.columns
+        boxes.append(
+            (
+                grid.origin_x_mm + column * config.pitch_x_mm,
+                grid.origin_y_mm + row * config.pitch_y_mm,
+                grid.cell_width_mm,
+                grid.cell_height_mm,
+            )
+        )
+    return boxes
+
+
+def cut_boxes_px(
+    marker_count: int,
+    config: SheetConfig,
+    grid: GridLayout,
+) -> list[tuple[int, int, int, int]]:
+    """Return boxes using the printable PDF's rasterized, accumulated pitch."""
+    cell_width_px = mm_to_px(grid.cell_width_mm, config.dpi)
+    cell_height_px = mm_to_px(grid.cell_height_mm, config.dpi)
+    padding_px = mm_to_px(config.padding_mm, config.dpi)
+    origin_x_px = mm_to_px(grid.origin_x_mm, config.dpi)
+    origin_y_px = mm_to_px(grid.origin_y_mm, config.dpi)
+    pitch_x_px = cell_width_px + padding_px
+    pitch_y_px = cell_height_px + padding_px
+    boxes = []
+    for index in range(marker_count):
+        column = index % grid.columns
+        row = index // grid.columns
+        left = origin_x_px + column * pitch_x_px
+        top = origin_y_px + row * pitch_y_px
+        boxes.append(
+            (
+                left,
+                top,
+                left + cell_width_px,
+                top + cell_height_px,
+            )
+        )
+    return boxes
+
+
+def _format_svg_mm(value: float) -> str:
+    """Format millimetre coordinates compactly without losing cutter precision."""
+    return f"{value:.6f}".rstrip("0").rstrip(".")
+
+
+def _cut_svg_text(
+    marker_count: int,
+    config: SheetConfig,
+    grid: GridLayout,
+) -> str:
+    """Build one page-sized SVG containing only rounded cut outlines."""
+    width = _format_svg_mm(grid.page_width_mm)
+    height = _format_svg_mm(grid.page_height_mm)
+    radius = min(
+        SVG_CUT_RADIUS_MM,
+        grid.cell_width_mm / 2.0,
+        grid.cell_height_mm / 2.0,
+    )
+    radius_text = _format_svg_mm(radius)
+    rects = []
+    # Use the PDF's rasterized coordinates, including its accumulated rounded
+    # pitch, so these shapes also fit sheets printed by earlier tool versions.
+    for left, top, right, bottom in cut_boxes_px(marker_count, config, grid):
+        x = px_to_mm(left, config.dpi)
+        y = px_to_mm(top, config.dpi)
+        box_width = px_to_mm(right - left, config.dpi)
+        box_height = px_to_mm(bottom - top, config.dpi)
+        rects.append(
+            "  <rect "
+            f'x="{_format_svg_mm(x)}" y="{_format_svg_mm(y)}" '
+            f'width="{_format_svg_mm(box_width)}" '
+            f'height="{_format_svg_mm(box_height)}" '
+            f'rx="{radius_text}" ry="{radius_text}" />'
+        )
+    rect_text = "\n".join(rects)
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<svg xmlns="http://www.w3.org/2000/svg" '
+        f'width="{width}mm" height="{height}mm" viewBox="0 0 {width} {height}">\n'
+        ' <g id="cut-shapes" fill="#000000" stroke="none">\n'
+        f"{rect_text}\n"
+        " </g>\n"
+        "</svg>\n"
+    )
+
+
+def save_cut_svgs(
+    marker_ids: Sequence[int],
+    pdf_output_path: Path,
+    config: SheetConfig,
+    grid: GridLayout,
+) -> list[Path]:
+    """Write page-sized vinyl-cutter SVGs beside the printable PDF."""
+    if not marker_ids:
+        raise ValueError("Need at least one marker ID for cut SVG output.")
+
+    chunks = list(_chunked(list(marker_ids), grid.tags_per_page))
+    pdf_output_path = Path(pdf_output_path)
+    if len(chunks) == 1:
+        paths = [pdf_output_path.with_name(f"{pdf_output_path.stem}-cut.svg")]
+    else:
+        paths = [
+            pdf_output_path.with_name(
+                f"{pdf_output_path.stem}-cut-page-{page_number:03d}.svg"
+            )
+            for page_number in range(1, len(chunks) + 1)
+        ]
+
+    for chunk, path in zip(chunks, paths, strict=True):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            _cut_svg_text(len(chunk), config, grid),
+            encoding="utf-8",
+        )
+    return paths
 
 
 def save_individual_markers(

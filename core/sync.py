@@ -3684,18 +3684,54 @@ def _solve_relative_from_pairs(
         return None
     if lock_rotation and lock_translation:
         return SimilarityTransform()
-    if lock_rotation:
-        seeds = _axis_aligned_pose_seeds(anchor, other, [1.0])
-    else:
-        seeds = [
-            SimilarityTransform(),
-            SimilarityTransform(
-                scale=1.0,
-                rotation=np.eye(3),
-                translation=anchor.camera_center - other.camera_center,
-            ),
-        ]
-    # Locked rotation: only 90° axis-aligned seeds; skip essential / yaw.
+    seeds: list[SimilarityTransform] = []
+
+    def add_rotation_seeds(rotation: np.ndarray) -> None:
+        """Seed both baseline signs from the epipolar nullspace for one R."""
+        directions_a = []
+        directions_b = []
+        pair_scales = []
+        for anchor_obs, other_obs in pairs:
+            _origin_a, direction_a = camera_ray_private(
+                anchor_obs.u, anchor_obs.v, anchor
+            )
+            _origin_b, direction_b = camera_ray_private(
+                other_obs.u, other_obs.v, other
+            )
+            directions_a.append(direction_a)
+            directions_b.append(rotation @ direction_b)
+            pair_scales.append(_pair_scale(anchor_obs, other_obs))
+        normals = np.cross(np.stack(directions_a), np.stack(directions_b))
+        normals *= np.asarray(pair_scales, dtype=np.float64)[:, None]
+        _u_matrix, _singular, vt_matrix = np.linalg.svd(
+            normals, full_matrices=False
+        )
+        baseline_direction = vt_matrix[-1]
+        norm = float(np.linalg.norm(baseline_direction))
+        if norm < 1.0e-10:
+            return
+        baseline_direction /= norm
+        # Two-view translation has no absolute scale. Start far enough from
+        # the zero-baseline minimum that ray-distance LM can refine R and t.
+        baseline = max(float(np.linalg.norm(anchor.camera_center)), 5.0)
+        for sign in (1.0, -1.0):
+            center_b = (
+                anchor.camera_center + sign * baseline * baseline_direction
+            )
+            seeds.append(
+                SimilarityTransform(
+                    scale=1.0,
+                    rotation=rotation.copy(),
+                    translation=center_b - rotation @ other.camera_center,
+                )
+            )
+
+    # Match-local VP/world axes may differ by any proper 90° permutation.
+    # These 24 seeds also cover the opposite camera hemisphere and 180° yaw.
+    for rotation in _axis_aligned_rotations():
+        add_rotation_seeds(rotation)
+
+    # Locked rotation: keep the axis-aligned rotations above; skip essential.
     if not lock_rotation:
         if len(pairs) >= 8:
             rays_a = np.stack(
@@ -3726,39 +3762,6 @@ def _solve_relative_from_pairs(
                             translation=translation,
                         )
                     )
-        for yaw in (-0.6, -0.3, 0.3, 0.6, 0.9, -0.9):
-            cosine = float(np.cos(yaw))
-            sine = float(np.sin(yaw))
-            rotation_yaw = np.array(
-                ((cosine, -sine, 0.0), (sine, cosine, 0.0), (0.0, 0.0, 1.0)),
-                dtype=np.float64,
-            )
-            seeds.append(
-                SimilarityTransform(
-                    scale=1.0,
-                    rotation=rotation_yaw,
-                    translation=anchor.camera_center
-                    - rotation_yaw @ other.camera_center,
-                )
-            )
-        # Five-to-seven calibrated pairs cannot use the linear eight-point
-        # seed above. Cover the opposite camera hemisphere explicitly so LM
-        # can reach cameras below a plane and looking upward.
-        flip_x = np.diag((1.0, -1.0, -1.0)).astype(np.float64)
-        for yaw in np.linspace(-np.pi, np.pi, 16, endpoint=False):
-            cosine = float(np.cos(yaw))
-            sine = float(np.sin(yaw))
-            rotation_yaw = np.array(
-                ((cosine, -sine, 0.0), (sine, cosine, 0.0), (0.0, 0.0, 1.0)),
-                dtype=np.float64,
-            )
-            seeds.append(
-                SimilarityTransform(
-                    scale=1.0,
-                    rotation=rotation_yaw @ flip_x,
-                    translation=np.zeros(3, dtype=np.float64),
-                )
-            )
 
     best: SimilarityTransform | None = None
     best_key: tuple[float, float, float] | None = None
@@ -3770,7 +3773,10 @@ def _solve_relative_from_pairs(
         )
         center_b = refined.transform_point(other.camera_center)
         baseline = float(np.linalg.norm(center_b - anchor.camera_center))
-        if baseline < 0.2:
+        # Absolute baseline length is unobservable from 2D↔2D pairs. Reject
+        # only numerical collapse; a Blender-unit threshold can discard an
+        # otherwise exact solution merely because LM chose a smaller scale.
+        if baseline < 1.0e-8:
             continue
         cost = 0.0
         cheirality = 0
@@ -3798,7 +3804,7 @@ def _solve_relative_from_pairs(
                 continue
             depth_a = float(np.dot(point - origin_a, direction_a))
             depth_b = float(np.dot(point - origin_b, direction_b))
-            if depth_a <= 0.2 or depth_b <= 0.2:
+            if depth_a <= 1.0e-6 * baseline or depth_b <= 1.0e-6 * baseline:
                 continue
             cheirality += 1
             projected_a = project_private_point(point, anchor)
@@ -3820,7 +3826,7 @@ def _solve_relative_from_pairs(
         mean_reproj = float(np.mean(reprojection_errors))
         if mean_reproj > 15.0:
             continue
-        key = (-float(cheirality), mean_reproj, cost)
+        key = (-float(cheirality), mean_reproj, cost / (baseline * baseline))
         if best_key is None or key < best_key:
             best_key = key
             best = refined

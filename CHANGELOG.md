@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Calibrated sync can infer the shared ground frame from four or more matching On Ground landmarks across three or more images, without requiring VP lines
 - AprilTag sheets can embed subtle, detection-safe numeric labels in each tag's bottom-right border
+- AprilTag sheets can export matching page-sized SVG cut outlines for vinyl cutters
 - Find AprilTags now detects both 25h9 and 36h10 families with distinct family-qualified landmark names
 
 ### Changed
@@ -18,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - AprilTag sheet padding now wraps all four outer edges of the packed tag group
 
 ### Fixed
+- SVG cut shapes match the rasterized grid spacing of existing printed PDF sheets
+- Seven-point sync accepts 180° camera yaw and scale-ambiguous short-baseline solutions instead of rejecting valid poses
 - Sync can register upside-down or below-ground cameras through five or more landmarks shared with any already-solved view
 - Sync resolves a bridged camera's ambiguous baseline scale from the whole landmark graph instead of an arbitrary two-view seed
 

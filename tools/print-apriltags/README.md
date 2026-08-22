@@ -47,6 +47,26 @@ Also dump individual PNGs next to the PDF:
 .venv/bin/python print_apriltags.py --ids 0-19 --also-png
 ```
 
+Also generate vinyl-cutter SVG outlines:
+
+```sh
+.venv/bin/python print_apriltags.py --ids 0-19 --padding-mm 5 --cut-lines-svg
+```
+
+Each SVG has the same physical page size and orientation as its corresponding
+PDF page. It contains only solid black, stroke-free cut shapes: one rounded
+rectangle per tag at the PDF cut-guide position, with a 2 mm corner radius. A single-page
+sheet writes `<pdf-name>-cut.svg`; multi-page sheets write numbered
+`<pdf-name>-cut-page-001.svg` files. SVG output is independent of
+`--cut-guides` / `--no-cut-guides`.
+
+Cut-shape coordinates use the PDF's rasterized grid spacing, so generated SVGs
+also align with PDFs printed by versions of this tool from before SVG export was
+added.
+
+Use positive `--padding-mm` for vinyl cutting so adjacent rounded outlines do
+not share an edge.
+
 ## Defaults
 
 | Option | Default |
@@ -60,6 +80,7 @@ Also dump individual PNGs next to the PDF:
 | `--labels` / `--no-labels` / `--embed-label` | labels below tags |
 | `--label-height-mm` | `8` (ignored with `--no-labels` and `--embed-label`) |
 | `--cut-guides` / `--no-cut-guides` | faint dotted cut lines on |
+| `--cut-lines-svg` | off (write matching vinyl-cutter SVG outline pages) |
 | `--dpi` | `300` |
 
 ### Margin vs padding

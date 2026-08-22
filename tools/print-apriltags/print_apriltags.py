@@ -25,6 +25,7 @@ from sheet_layout import (
     SheetConfig,
     build_print_pages,
     parse_id_list,
+    save_cut_svgs,
     save_individual_markers,
     save_pdf,
 )
@@ -160,6 +161,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Also write one PNG per marker next to the PDF.",
     )
     parser.add_argument(
+        "--cut-lines-svg",
+        action="store_true",
+        help=(
+            "Also write page-sized vinyl-cutter SVG file(s) containing rounded "
+            "cut outlines next to the PDF."
+        ),
+    )
+    parser.add_argument(
         "--open",
         action="store_true",
         help="Open the PDF after writing (Preview / default viewer).",
@@ -249,6 +258,13 @@ def main(argv: list[str] | None = None) -> int:
         png_dir = output_path.with_suffix("").parent / f"{output_path.stem}-png"
         save_individual_markers(marker_ids, png_dir, config)
         print(f"Wrote {len(marker_ids)} PNGs to {png_dir}")
+
+    if args.cut_lines_svg:
+        svg_paths = save_cut_svgs(marker_ids, output_path, config, grid)
+        if len(svg_paths) == 1:
+            print(f"Wrote cut SVG to {svg_paths[0]}")
+        else:
+            print(f"Wrote {len(svg_paths)} cut SVGs next to {output_path}")
 
     if config.embed_label:
         labels_note = "embedded labels"

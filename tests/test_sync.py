@@ -552,6 +552,73 @@ class LandmarkSyncTests(unittest.TestCase):
         recovered_dir = recovered_offset / np.linalg.norm(recovered_offset)
         self.assertTrue(np.allclose(recovered_dir, true_dir, atol=0.08))
 
+    def test_seven_pairs_recover_180_degree_yaw_at_free_baseline_scale(self) -> None:
+        """A valid seven-point pose must survive arbitrary baseline scaling."""
+        intrinsics = core.CameraIntrinsics(
+            fx=2865.96435546875,
+            fy=2865.96435546875,
+            cx=1496.944580078125,
+            cy=2021.071044921875,
+            image_width=3000,
+            image_height=4000,
+        )
+        anchor = core.Calibration(
+            intrinsics,
+            np.array(
+                (
+                    (0.8189265132, -0.5736991763, 0.0151208136),
+                    (-0.1400556564, -0.2253344953, -0.9641622305),
+                    (0.5565462708, 0.7874602675, -0.2648822069),
+                ),
+                dtype=np.float64,
+            ),
+            np.array((-1.1623859406, -1.6919496059, 1.7000000477)),
+        )
+        other = core.Calibration(
+            intrinsics,
+            np.array(
+                (
+                    (-0.7696733475, 0.3569790721, 0.5293098092),
+                    (0.0371971242, 0.8527356982, -0.5210165381),
+                    (-0.6373533607, -0.3813237250, -0.6696065068),
+                ),
+                dtype=np.float64,
+            ),
+            np.array((0.7041849494, 0.0871355608, 1.7000000477)),
+        )
+        image_pairs = (
+            ((1317.6358643, 2895.2255859), (848.9439087, 3226.3789062)),
+            ((795.4300537, 1549.1529541), (934.4205322, 2043.3775635)),
+            ((1906.5633545, 1321.6416016), (1874.6555176, 2783.4299316)),
+            ((1371.7391357, 1901.9372559), (1198.5540771, 3067.3647461)),
+            ((937.6423950, 2508.5764160), (706.5392456, 2635.0869141)),
+            ((2092.9230957, 1596.9106445), (1866.3979492, 2992.4057617)),
+            ((1756.7243652, 2410.5490723), (1288.6295166, 3252.9245605)),
+        )
+        pairs = [
+            (
+                sync.SyncObservation("anchor", f"p{index}", *anchor_uv),
+                sync.SyncObservation("other", f"p{index}", *other_uv),
+            )
+            for index, (anchor_uv, other_uv) in enumerate(image_pairs)
+        ]
+
+        recovered = sync._solve_relative_from_pairs(pairs, anchor, other)
+
+        self.assertIsNotNone(recovered)
+        assert recovered is not None
+        errors = sync._reprojection_errors_for_similarity(
+            recovered, pairs, anchor, other, [], []
+        )
+        self.assertLess(float(np.sqrt(np.mean(np.square(errors)))), 1.0)
+        self.assertTrue(
+            np.allclose(
+                recovered.rotation,
+                np.diag((-1.0, -1.0, 1.0)),
+                atol=0.08,
+            )
+        )
+
     def test_ground_fixes_absolute_baseline_scale(self) -> None:
         """Optional On Ground landmarks pin baseline length into the anchor world."""
         matches, observations, true_sim, center_private, shared_center = _synthetic_scene(
