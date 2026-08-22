@@ -2720,6 +2720,14 @@ def diagnose_sync(context: bpy.types.Context):
         ]
         if helpful:
             parts.append("Leave-one-out: " + ", ".join(helpful))
+    if result.inconsistent_picks:
+        bits = [
+            f"{name} on '{match_id}' ({error:.0f}px)"
+            for match_id, name, error in result.inconsistent_picks[:3]
+        ]
+        parts.append(
+            "Mismatched pick: " + ", ".join(bits) + " — uncheck Use in Sync or re-pick"
+        )
     if result.downweighted_landmark_ids:
         name_by_id = {
             landmark.item_id: (landmark.name or landmark.item_id)

@@ -417,3 +417,120 @@ class SolveSyncTests(unittest.TestCase):
         self.assertLess(result.per_match_rmse_px.get("side", 99.0), 5.0)
         self.assertAlmostEqual(leftover.intrinsics.fx, 800.0, delta=1.0)
 
+
+    def test_mismatched_ground_pick_is_named_when_still_skipped(self) -> None:
+        """A wrong On Ground correspondence on one still is named in the skip."""
+        intrinsics = core.CameraIntrinsics(
+            fx=800.0,
+            fy=800.0,
+            cx=400.0,
+            cy=300.0,
+            image_width=800,
+            image_height=600,
+        )
+        ground_points = (
+            np.array((-1.5, -1.2, 0.0)),
+            np.array((1.6, -1.0, 0.0)),
+            np.array((1.8, 1.4, 0.0)),
+            np.array((-1.3, 1.6, 0.0)),
+            np.array((0.1, -0.2, 0.0)),
+            np.array((0.8, 0.6, 0.0)),
+            np.array((-0.4, 0.3, 0.0)),
+        )
+        elevated_points = (
+            np.array((-0.6, -0.5, 0.8)),
+            np.array((0.5, -0.4, 0.8)),
+            np.array((0.4, 0.5, 0.8)),
+            np.array((-0.5, 0.4, 0.8)),
+        )
+        bad_point = np.array((1.2, 1.3, 0.0), dtype=np.float64)
+
+        def _camera(center: np.ndarray, target: np.ndarray) -> core.Calibration:
+            return core.Calibration(
+                intrinsics,
+                _look_at_rotation(center, target),
+                center,
+            )
+
+        anchor = _camera(
+            np.array((-3.0, -4.0, 2.2)), np.array((0.2, 0.1, 0.0))
+        )
+        wing = _camera(
+            np.array((3.4, -3.1, 2.3)), np.array((0.1, 0.2, 0.0))
+        )
+        top = _camera(
+            np.array((0.2, 0.3, 3.2)), np.array((0.2, 0.3, 0.0))
+        )
+        face_true = _camera(
+            np.array((-0.2, 4.0, 1.4)), np.array((0.1, 0.2, 0.4))
+        )
+        leftover = _camera(
+            np.array((-2.0, -3.0, 1.7)), np.array((0.5, 0.5, 0.0))
+        )
+        cameras = {
+            "anchor": anchor,
+            "wing": wing,
+            "top": top,
+            "face": face_true,
+        }
+        matches = [
+            sync.SyncMatchInput("anchor", anchor),
+            sync.SyncMatchInput("wing", wing),
+            sync.SyncMatchInput("top", top),
+            sync.SyncMatchInput("face", leftover),
+        ]
+        observations: list[sync.SyncObservation] = []
+        for index, point in enumerate(ground_points):
+            for match_id, calibration in cameras.items():
+                observations.append(
+                    sync.SyncObservation(
+                        match_id,
+                        f"g{index}",
+                        *_project(point, calibration),
+                        True,
+                        landmark_name=f"g{index}",
+                    )
+                )
+        for index, point in enumerate(elevated_points):
+            for match_id, calibration in cameras.items():
+                observations.append(
+                    sync.SyncObservation(
+                        match_id,
+                        f"e{index}",
+                        *_project(point, calibration),
+                        False,
+                        landmark_name=f"e{index}",
+                    )
+                )
+        for match_id, calibration in (("wing", wing), ("top", top), ("face", face_true)):
+            u, v = _project(bad_point, calibration)
+            if match_id == "face":
+                u += 400.0
+            observations.append(
+                sync.SyncObservation(
+                    match_id,
+                    "bad",
+                    u,
+                    v,
+                    True,
+                    landmark_name="id21-25h9",
+                )
+            )
+
+        result = sync.solve_landmark_sync(
+            matches,
+            observations,
+            anchor_id="anchor",
+        )
+        self.assertTrue(result.success, result.message)
+        self.assertIn("wing", result.similarities)
+        self.assertIn("top", result.similarities)
+        self.assertNotIn("face", result.similarities)
+        self.assertIn("skipped 'face'", result.message)
+        self.assertIn("id21-25h9", result.message)
+        self.assertIn("mismatched pick", result.message)
+        self.assertTrue(
+            any(item[1] == "id21-25h9" for item in result.inconsistent_picks),
+            result.inconsistent_picks,
+        )
+

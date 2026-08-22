@@ -35,6 +35,7 @@ from .pose import (
     _reprojection_errors_for_similarity,
     _square_pixel_intrinsics_if_stretched,
 )
+from .projection import project_private_point
 from .types import (
     SimilarityTransform,
     SyncLineObservation,
@@ -183,6 +184,116 @@ def _try_register_against_cloud(
     return solved
 
 
+def _pick_reprojection_px(
+    similarity: SimilarityTransform,
+    observation: SyncObservation,
+    calibration,
+    point: np.ndarray,
+) -> float:
+    """Pixel error of one 2D pick vs a shared-world 3D point."""
+    projected = project_private_point(similarity.inverse_point(point), calibration)
+    if projected is None:
+        return 1.0e3
+    return float(np.hypot(projected[0] - observation.u, projected[1] - observation.v))
+
+
+def _pick_errors_for_match(
+    match_id: str,
+    similarity: SimilarityTransform,
+    cloud: dict[str, np.ndarray],
+    observations: list[SyncObservation],
+    matches: dict[str, SyncMatchInput],
+) -> list[tuple[str, str, float]]:
+    """Per-landmark reprojection of ``match_id`` against ``cloud``."""
+    calibration = matches[match_id].calibration
+    rows: list[tuple[str, str, float]] = []
+    for observation in observations:
+        if observation.match_id != match_id:
+            continue
+        point = cloud.get(observation.landmark_id)
+        if point is None:
+            continue
+        error = _pick_reprojection_px(similarity, observation, calibration, point)
+        name = observation.landmark_name or observation.landmark_id
+        rows.append((observation.landmark_id, name, error))
+    rows.sort(key=lambda item: item[2], reverse=True)
+    return rows
+
+
+def _dominant_mismatch_picks(
+    errors: list[tuple[str, str, float]],
+) -> list[tuple[str, str, float]]:
+    """Picks that blow a still's RMSE while the others still fit."""
+    if len(errors) < 4:
+        return []
+    median = float(np.median([item[2] for item in errors]))
+    floor = max(3.0 * max(median, 1.0), ACCEPT_RMSE_PX)
+    flagged = [item for item in errors if item[2] > floor]
+    return flagged[:3]
+
+
+def _record_mismatch_picks(state: _SolveState, match_id: str) -> None:
+    """Remember a peel-time pick that dominates this still's RMSE."""
+    similarity = state.similarities.get(match_id)
+    if similarity is None:
+        return
+    errors = _pick_errors_for_match(
+        match_id,
+        similarity,
+        state.landmarks,
+        state.usable_observations,
+        state.match_map,
+    )
+    flagged = _dominant_mismatch_picks(errors)
+    if flagged:
+        state.inconsistent_picks[match_id] = flagged
+
+
+def _mismatch_reason(picks: list[tuple[str, str, float]]) -> str:
+    """Short status clause for a skipped still with a wrong correspondence."""
+    bits = [f"{name} {error:.0f}px" for _landmark_id, name, error in picks]
+    noun = "pick" if len(picks) == 1 else "picks"
+    return f"{', '.join(bits)} in that still — likely a mismatched {noun}"
+
+
+def _resect_mismatch_picks(
+    match_id: str,
+    cloud: dict[str, np.ndarray],
+    retry_kwargs: dict,
+) -> list[tuple[str, str, float]]:
+    """If dropping one pick lets resect lock, that pick is the mismatch."""
+    observations = retry_kwargs["observations_by_landmark"]
+    matches = retry_kwargs["matches"]
+    seen = [
+        observation
+        for items in observations.values()
+        for observation in items
+        if observation.match_id == match_id and observation.landmark_id in cloud
+    ]
+    if len(seen) < 5:
+        return []
+    found: list[tuple[str, str, float]] = []
+    for observation in seen[:12]:
+        reduced = {
+            landmark_id: point
+            for landmark_id, point in cloud.items()
+            if landmark_id != observation.landmark_id
+        }
+        solved = _try_register_against_cloud(match_id, reduced, **retry_kwargs)
+        if solved is None:
+            continue
+        point = cloud[observation.landmark_id]
+        error = _pick_reprojection_px(
+            solved, observation, matches[match_id].calibration, point
+        )
+        if error <= ACCEPT_RMSE_PX:
+            continue
+        name = observation.landmark_name or observation.landmark_id
+        found.append((observation.landmark_id, name, error))
+    found.sort(key=lambda item: item[2], reverse=True)
+    return found[:3]
+
+
 @dataclass
 class _SolveState:
     """Mutable graph for the named stages in ``solve_landmark_sync``."""
@@ -216,6 +327,9 @@ class _SolveState:
     downweighted_ids: list[str] = field(default_factory=list)
     did_bundle_adjust: bool = False
     pre_ba_match_rmse: dict[str, float] = field(default_factory=dict)
+    inconsistent_picks: dict[str, list[tuple[str, str, float]]] = field(
+        default_factory=dict
+    )
 
     def drop_matches(self, match_ids: list[str]) -> None:
         """Remove cameras from the joint graph and remember them as skipped."""
@@ -323,6 +437,7 @@ def _peel_cameras_above_rmse(state: _SolveState) -> SyncSolveResult | None:
         )
         if not ranked or ranked[0][0] <= ACCEPT_RMSE_PX:
             return None
+        _record_mismatch_picks(state, ranked[0][1])
         state.drop_matches([ranked[0][1]])
         if not state.free_match_ids:
             return SyncSolveResult(
@@ -374,12 +489,24 @@ def _resect_skipped_matches(state: _SolveState) -> None:
                 match_id, ground_cloud, **retry_kwargs
             )
         if solved is None:
+            if match_id not in state.inconsistent_picks:
+                mismatches = _resect_mismatch_picks(
+                    match_id, cloud, retry_kwargs
+                )
+                if not mismatches:
+                    mismatches = _resect_mismatch_picks(
+                        match_id, ground_cloud, retry_kwargs
+                    )
+                if mismatches:
+                    state.inconsistent_picks[match_id] = mismatches
             continue
         state.similarities[match_id] = solved
         recovered.append(match_id)
     if not recovered:
         return
     recovered_set = set(recovered)
+    for match_id in recovered:
+        state.inconsistent_picks.pop(match_id, None)
     state.skipped_unregistered = [
         match_id
         for match_id in state.skipped_unregistered
@@ -852,6 +979,7 @@ def solve_landmark_sync(
         if rmse > ACCEPT_RMSE_PX
     ][:1]
     if weak_after:
+        _record_mismatch_picks(state, weak_after[0])
         state.drop_matches(weak_after)
         if not state.free_match_ids:
             return SyncSolveResult(
@@ -1151,9 +1279,20 @@ def solve_landmark_sync(
     if disconnected:
         message += f" · skipped {len(disconnected)} disconnected"
     if skipped_unregistered:
-        pending_list = ", ".join(f"'{name}'" for name in sorted(skipped_unregistered))
-        message += f" · skipped {pending_list}"
-        if failure_detail:
+        skip_bits = []
+        for match_id in sorted(skipped_unregistered):
+            picks = state.inconsistent_picks.get(match_id)
+            if picks:
+                skip_bits.append(f"'{match_id}' ({_mismatch_reason(picks)})")
+            else:
+                skip_bits.append(f"'{match_id}'")
+        message += " · skipped " + ", ".join(skip_bits)
+        unnamed = [
+            match_id
+            for match_id in skipped_unregistered
+            if match_id not in state.inconsistent_picks
+        ]
+        if unnamed and failure_detail:
             message += f" ({failure_detail})"
     # Soft warn: accepted but likely inaccurate picks or intrinsics.
     if mean_rmse > 8.0:
@@ -1193,4 +1332,10 @@ def solve_landmark_sync(
         line_segments=line_segments,
         downweighted_landmark_ids=downweighted_ids,
         bundle_adjusted=bool(did_bundle_adjust),
+        inconsistent_picks=[
+            (match_id, name, error)
+            for match_id, picks in state.inconsistent_picks.items()
+            if match_id in skipped_unregistered
+            for _landmark_id, name, error in picks
+        ],
     )

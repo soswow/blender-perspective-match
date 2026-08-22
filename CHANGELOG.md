@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - AprilTag sheets can embed subtle, detection-safe numeric labels in each tag's bottom-right border
 - AprilTag sheets can export matching page-sized SVG cut outlines for vinyl cutters
 - Find AprilTags now detects both 25h9 and 36h10 families with distinct family-qualified landmark names
+- Diagnose / Solve Sync name a mismatched landmark pick when that still is skipped because one correspondence disagrees with the other views
 
 ### Changed
 - Pick Confidence and per-match confidence dropdowns sit in a collapsed section under Pick in Active Match

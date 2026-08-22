@@ -173,3 +173,5 @@ class SyncSolveResult:
     bundle_adjusted: bool = False
     # Leave-one-out Diagnose: (name, with_rmse, without_rmse) for worst picks.
     leave_one_out: list[tuple[str, float, float]] = field(default_factory=list)
+    # Skipped still whose other picks fit: (match_id, landmark_name, error_px).
+    inconsistent_picks: list[tuple[str, str, float]] = field(default_factory=list)
