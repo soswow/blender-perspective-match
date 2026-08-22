@@ -60,7 +60,7 @@ While the tool is active, left-clicks on the visible plate belong to Perspective
 
 The camera refines whenever enough required lines exist. **Auto from VPs** allows orthogonal VP pairs to solve FOV. Enable **Manual FOV**, set the horizontal angle, and apply it to lock focal length while continuing to solve orientation. **Import YAML** loads a ROS `camera_info` file: locks Manual FOV from `fx`, sets the principal point from `cx`/`cy`, and scales K if the YAML resolution differs from the loaded still. OpenCV `plumb_bob` / `rational_polynomial` coefficients (`k1, k2, p1, p2, k3[, k4, k5, k6]`) undistort the plate when present. Optional `fitzgibbon_lambda` is used only when those coefficients are zero. Fisheye / `equidistant` models are skipped. Distortion coefficients are not estimated from VP lines.
 
-**Manual PP Offset** (Camera section): drag the principal point on the plate, or click the pencil icon to type **Offset X / Offset Y** in pixels from image center. A **violet** crosshair marks it whenever it is off-center. **Reset Camera** recenters PP.
+**Manual PP Offset** (Camera section): drag the principal point on the plate, or click the pencil icon to type **Offset X / Offset Y** in pixels from image center. A **light-blue** crosshair marks it whenever it is off-center. **Reset Camera** recenters PP.
 
 ## Set origin
 

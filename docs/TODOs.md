@@ -1,6 +1,7 @@
 TODOs to be done:
 
 Done TODOs:
+- Mark Ground landmarks with different color (maybe magenta-ish?)
 - Detect AprilTags from both DICT_APRILTAG_25h9 and DICT_APRILTAG_36h10, keeping family-qualified landmark names.
 - When I bulk add images, it doesn't pick all the things from camera intrinsicis. MAybe specifically all the imported Ks
 - Make selected landmarks red color (keep bigger size as it is right now)

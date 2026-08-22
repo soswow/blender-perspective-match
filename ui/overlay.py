@@ -20,6 +20,13 @@ AXIS_COLORS = {
     "z": (0.26, 0.80, 0.30, 1.0),
 }
 
+# Plate landmark picks: selected > Known 3D > On Ground > default.
+_LANDMARK_COLOR_SELECTED = (0.96, 0.22, 0.22, 1.0)
+_LANDMARK_COLOR_KNOWN = (0.25, 0.7, 0.95, 1.0)
+_LANDMARK_COLOR_GROUND = (0.92, 0.22, 0.78, 1.0)
+_LANDMARK_COLOR_DEFAULT = (0.95, 0.65, 0.15, 1.0)
+_PP_COLOR = (0.55, 0.85, 1.0, 1.0)
+
 # Ideal-space VPs farther than this many image diagonals are treated as parallel.
 _MAX_VP_DIAGONALS = 8.0
 # When a VP is too far / at infinity, still draw a capped guide this many diagonals long.
@@ -55,8 +62,8 @@ _MODE_CHROME = {
     },
     "PP": {
         "title": "Principal Point",
-        "hint": "drag the violet crosshair · Esc exits",
-        "color": (0.72, 0.35, 1.0, 0.92),
+        "hint": "drag the light-blue crosshair · Esc exits",
+        "color": (0.55, 0.85, 1.0, 0.92),
     },
     "LANDMARK": {
         "title": "Landmark",
@@ -894,7 +901,7 @@ def _draw_placement(context: bpy.types.Context, fill_shader, settings) -> None:
             7.0,
         )
 
-    # Violet PP marker when off-center, or while Manual PP Offset tool is active.
+    # Light-blue PP marker when off-center, or while Manual PP Offset tool is active.
     workspace = properties.workspace(context)
     show_pp = scene.principal_point_is_off_center(settings) or (
         workspace.is_modal and workspace.work_mode == "PP"
@@ -904,7 +911,7 @@ def _draw_placement(context: bpy.types.Context, fill_shader, settings) -> None:
         _draw_crosshair(
             fill_shader,
             principal,
-            _with_alpha((0.72, 0.35, 1.0, 1.0), settings.overlay_opacity),
+            _with_alpha(_PP_COLOR, settings.overlay_opacity),
             9.0 if workspace.work_mode == "PP" else 7.0,
         )
 
@@ -926,11 +933,13 @@ def _draw_landmarks(context: bpy.types.Context, fill_shader, settings) -> None:
         is_active = index == active_index
         if is_active:
             # Selected list row: red, still drawn larger than inactive picks.
-            base = (0.96, 0.22, 0.22, 1.0)
+            base = _LANDMARK_COLOR_SELECTED
         elif landmark.known_object is not None:
-            base = (0.25, 0.7, 0.95, 1.0)
+            base = _LANDMARK_COLOR_KNOWN
+        elif landmark.on_ground:
+            base = _LANDMARK_COLOR_GROUND
         else:
-            base = (0.95, 0.65, 0.15, 1.0)
+            base = _LANDMARK_COLOR_DEFAULT
         # Dim picks that are excluded from the sync solve.
         draw_opacity = opacity * (0.35 if not landmark.use_in_sync else 1.0)
         color = _with_alpha(base, draw_opacity)

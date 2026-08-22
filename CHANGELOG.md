@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Find AprilTags now detects both 25h9 and 36h10 families with distinct family-qualified landmark names
 
 ### Changed
+- On Ground landmark picks draw in magenta on the plate (selected stays red)
+- Manual PP Offset marker is light blue (was violet)
 - AprilTag sheet printing now accepts only official OpenCV dictionary names and reports out-of-range marker IDs clearly
 - Printed AprilTag labels contain only the marker number, without an `ID` prefix
 - AprilTag sheet padding now wraps all four outer edges of the packed tag group

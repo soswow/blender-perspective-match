@@ -1669,7 +1669,7 @@ class PM_OT_interact(bpy.types.Operator):
                 f"Click landmark '{name}' · click another pick to select · Esc exits"
             )
         if self.mode == "PP":
-            return "Drag principal point (violet) · Esc exits"
+            return "Drag principal point (light blue) · Esc exits"
         return "Click the world origin on the ground plane"
 
     def _finish(self, context: bpy.types.Context, *, cancelled: bool = False) -> set[str]:
