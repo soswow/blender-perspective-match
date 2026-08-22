@@ -59,7 +59,7 @@ Do not special-case a `.blend` filename in solver code or UI copy.
 | `ba.py` | Joint BA, residuals, leave-one-out Diagnose |
 | `solve.py` | `solve_landmark_sync` stages |
 
-**Solve stages** (in order): pairwise register → peel cameras above `ACCEPT_RMSE_PX` → joint BA → peel again → resect skipped stills against frozen 3D (On Ground / near-Z=0 if off-plane picks disagree) → report. Recovered cameras must not fail the joint RMSE. Copying locked K onto a different aspect uses one scale for fx and fy; Solve Sync sets fy=fx when they already differ by more than `STRETCHED_PIXEL_RATIO`.
+**Solve stages** (in order): pairwise register → peel cameras above `ACCEPT_RMSE_PX` → joint BA → peel again → resect skipped stills against frozen 3D (On Ground / near-Z=0 if off-plane picks disagree) → report. Recovered cameras must not fail the joint RMSE. Copying locked K onto a different aspect uses one scale for fx and fy unless the sizes are an exact portrait/landscape swap (same pixels, axes swapped). Solve Sync sets fy=fx when they already differ by more than `STRETCHED_PIXEL_RATIO`.
 
 **When you change sync:** update this map if stages or files moved; put a new threshold in `constants.py` instead of a raw `40.0`; keep function docstrings to a short contract (what / what not), not algorithm history. Tests: `tests/test_sync_pose.py`, `test_sync_ground.py`, `test_sync_ba.py`, `test_sync_lines.py`, `test_sync_solve.py` (helpers in `tests/sync_fixtures.py`).
 
@@ -67,7 +67,7 @@ Do not special-case a `.blend` filename in solver code or UI copy.
 
 Headless helpers under `tools/` (and `scripts/validate_addon.py`) for investigating a `.blend` without clicking the sidebar. If you build a new dump, probe, or reproduction script while solving a problem, **check it in** and add a bullet here so the next agent can find it.
 
-- `tools/debug-sync/` — sync graph, stored vs *recovered* optical-axis tilt vs world Z, homography vs mixed RMSE, `solve_landmark_sync` on a saved scene. See `tools/debug-sync/README.md`.
+- `tools/debug-sync/` — sync graph, stored vs *recovered* optical-axis tilt vs world Z, homography vs mixed RMSE, `solve_landmark_sync` on a saved scene; `probe_resected.py` splits ground vs off-plane RMSE on a recovered still. See `tools/debug-sync/README.md`.
 - `tools/explore-vp-intrinsics/` — VP-line residual vs FOV / principal-point / λ (does not touch landmarks).
 - `scripts/validate_addon.py` — Blender smoke test (register, match CRUD, VP solve, origin, import).
 

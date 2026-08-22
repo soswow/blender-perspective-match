@@ -8,7 +8,7 @@ alwaysApply: false
 
 - No scene-specific strings (no object/file names in solver or UI copy).
 - Thresholds live in `core/sync/constants.py` (`ACCEPT_RMSE_PX`, `STRETCHED_PIXEL_RATIO`, `GROUND_PLANE_Z_FRACTION`). Do not add a second peel/accept cutoff.
-- Copying locked K onto another still: fx and fy share one scale (square pixels). Solve Sync may set fy=fx when they already differ by more than `STRETCHED_PIXEL_RATIO`.
+- Copying locked K onto another still: exact portrait/landscape swap (e.g. 3000×4000 ↔ 4000×3000) swaps fx/fy and cx/cy. Any other size change: fx and fy share one scale (square pixels). Solve Sync may set fy=fx when they already differ by more than `STRETCHED_PIXEL_RATIO`.
 - Solve order: register → peel above `ACCEPT_RMSE_PX` → BA → peel → resect skipped (full cloud, then ground tags). A recovered camera must not fail the joint RMSE.
 - If you add/move a stage or module, update the map in `AGENTS.md` in the same change.
 - Docstrings: short contracts on entry/stage functions only, not changelogs.

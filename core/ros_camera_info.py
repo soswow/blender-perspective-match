@@ -178,24 +178,62 @@ def parse_ros_camera_info_yaml(text: str) -> RosCameraInfo:
     )
 
 
+def remap_intrinsics_to_size(
+    fx: float,
+    fy: float,
+    cx: float,
+    cy: float,
+    source_width: int,
+    source_height: int,
+    target_width: int,
+    target_height: int,
+) -> tuple[float, float, float, float, str]:
+    """Map pinhole K from one plate size to another.
+
+    Same size: unchanged (kind ``""``).
+    Exact axis swap, e.g. 3000×4000 ↔ 4000×3000: swap fx/fy and cx/cy
+    (kind ``"rotated"``) — same camera and pixel pitch, phone rotated 90°.
+    Any other size change: scale fx and fy by width so pixels stay square;
+    cx follows width, cy follows height (kind ``"scaled"``).
+    """
+    if target_width <= 0 or target_height <= 0:
+        raise ValueError("Target image size must be positive")
+    source_width = max(int(source_width), 1)
+    source_height = max(int(source_height), 1)
+    if source_width == target_width and source_height == target_height:
+        return float(fx), float(fy), float(cx), float(cy), ""
+    if (
+        source_width == target_height
+        and source_height == target_width
+        and source_width != source_height
+    ):
+        return float(fy), float(fx), float(cy), float(cx), "rotated"
+    scale_x = float(target_width) / float(source_width)
+    scale_y = float(target_height) / float(source_height)
+    return (
+        float(fx) * scale_x,
+        float(fy) * scale_x,
+        float(cx) * scale_x,
+        float(cy) * scale_y,
+        "scaled",
+    )
+
+
 def scale_intrinsics_to_image(
     info: RosCameraInfo,
     image_width: int,
     image_height: int,
-) -> tuple[float, float, float, float, bool]:
-    """Return fx, fy, cx, cy for the target plate; True when scaled."""
-    if image_width <= 0 or image_height <= 0:
-        raise ValueError("Target image size must be positive")
-    if info.image_width == image_width and info.image_height == image_height:
-        return info.fx, info.fy, info.cx, info.cy, False
-    scale_x = float(image_width) / float(info.image_width)
-    scale_y = float(image_height) / float(info.image_height)
-    return (
-        info.fx * scale_x,
-        info.fy * scale_y,
-        info.cx * scale_x,
-        info.cy * scale_y,
-        True,
+) -> tuple[float, float, float, float, str]:
+    """Return fx, fy, cx, cy for the target plate, and ``""`` / ``scaled`` / ``rotated``."""
+    return remap_intrinsics_to_size(
+        info.fx,
+        info.fy,
+        info.cx,
+        info.cy,
+        info.image_width,
+        info.image_height,
+        image_width,
+        image_height,
     )
 
 

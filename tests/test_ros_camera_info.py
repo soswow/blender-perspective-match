@@ -78,6 +78,7 @@ class RosCameraInfoTests(unittest.TestCase):
         self.assertAlmostEqual(fy, info.fy * 0.5)
         self.assertAlmostEqual(cx, info.cx * 0.5)
         self.assertAlmostEqual(cy, info.cy * 0.5)
+        self.assertEqual(scaled, "scaled")
 
     def test_interpret_plumb_bob(self) -> None:
         info = ros_camera_info.parse_ros_camera_info_yaml(_SAMPLE)
@@ -122,8 +123,43 @@ class RosCameraInfoTests(unittest.TestCase):
         fx, fy, cx, cy, scaled = ros_camera_info.scale_intrinsics_to_image(
             info, 2160, 3840
         )
-        self.assertFalse(scaled)
+        self.assertEqual(scaled, "")
         self.assertEqual((fx, fy, cx, cy), (info.fx, info.fy, info.cx, info.cy))
+
+    def test_portrait_yaml_on_landscape_swaps_axes(self) -> None:
+        """Same pixel count, rotated 90°: keep fx/fy, do not scale by 4/3."""
+        info = ros_camera_info.parse_ros_camera_info_yaml(_SAMPLE)
+        self.assertEqual((info.image_width, info.image_height), (2160, 3840))
+        fx, fy, cx, cy, kind = ros_camera_info.scale_intrinsics_to_image(
+            info, 3840, 2160
+        )
+        self.assertEqual(kind, "rotated")
+        self.assertAlmostEqual(fx, info.fy)
+        self.assertAlmostEqual(fy, info.fx)
+        self.assertAlmostEqual(cx, info.cy)
+        self.assertAlmostEqual(cy, info.cx)
+        self.assertNotAlmostEqual(fx, info.fx * (3840 / 2160))
+
+    def test_pixel_charuco_yaml_landscape_keeps_focal(self) -> None:
+        path = Path(
+            "/Users/sasha/hobby/camera-calibration/output/"
+            "pixel-1x-no-crop-charuco-full.yaml"
+        )
+        if not path.is_file():
+            self.skipTest("pixel charuco YAML not on this machine")
+        info = ros_camera_info.parse_ros_camera_info_yaml(
+            path.read_text(encoding="utf-8")
+        )
+        self.assertEqual((info.image_width, info.image_height), (3000, 4000))
+        fx, fy, cx, cy, kind = ros_camera_info.scale_intrinsics_to_image(
+            info, 4000, 3000
+        )
+        self.assertEqual(kind, "rotated")
+        self.assertAlmostEqual(fx, info.fy)
+        self.assertAlmostEqual(fy, info.fx)
+        self.assertAlmostEqual(cx, info.cy)
+        self.assertAlmostEqual(cy, info.cx)
+        self.assertAlmostEqual(fx, 2867.7920482469162, places=4)
 
 
 if __name__ == "__main__":

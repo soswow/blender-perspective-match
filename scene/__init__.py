@@ -148,12 +148,25 @@ def _scale_intrinsics_pixels(
 ) -> tuple[float, float, float, float]:
     """Scale pinhole K from one plate size to another.
 
-    fx and fy share the width scale so a locked K copied onto a still with a
-    different aspect keeps square pixels. cx and cy still follow each axis.
+    Portrait ↔ landscape of the same pixel count swaps axes (same camera,
+    rotated 90°). Any other size change scales fx and fy by width so pixels
+    stay square; cx follows width, cy follows height.
     """
-    scale_x = float(target_width) / float(max(int(source_width), 1))
-    scale_y = float(target_height) / float(max(int(source_height), 1))
-    return fx * scale_x, fy * scale_x, cx * scale_x, cy * scale_y
+    from ..core import ros_camera_info
+
+    mapped_fx, mapped_fy, mapped_cx, mapped_cy, _kind = (
+        ros_camera_info.remap_intrinsics_to_size(
+            fx,
+            fy,
+            cx,
+            cy,
+            source_width,
+            source_height,
+            target_width,
+            target_height,
+        )
+    )
+    return mapped_fx, mapped_fy, mapped_cx, mapped_cy
 
 
 def _calibration_from_manual_k(
@@ -1098,7 +1111,7 @@ def apply_ros_camera_info_yaml(context: bpy.types.Context, filepath: str) -> str
 
     text = Path(filepath).read_text(encoding="utf-8")
     info = ros_camera_info.parse_ros_camera_info_yaml(text)
-    fx, fy, cx, cy, scaled = ros_camera_info.scale_intrinsics_to_image(
+    fx, fy, cx, cy, remap_kind = ros_camera_info.scale_intrinsics_to_image(
         info,
         int(settings.image_width),
         int(settings.image_height),
@@ -1176,7 +1189,11 @@ def apply_ros_camera_info_yaml(context: bpy.types.Context, filepath: str) -> str
         parts.append(f"λ {settings.division_lambda:.5f}")
     if imported.skip_reason:
         parts.append(imported.skip_reason)
-    if scaled:
+    if remap_kind == "rotated":
+        parts.append(
+            f"rotated from {info.image_width}×{info.image_height}"
+        )
+    elif remap_kind == "scaled":
         parts.append(
             f"scaled from {info.image_width}×{info.image_height}"
         )
@@ -2797,8 +2814,13 @@ def solve_and_apply_sync(context: bpy.types.Context):
         )
         item = next((match for match in matches if match.match_id == match_id), None)
         if item is not None:
+            new_fx = float(item.calibration.intrinsics.fx)
             new_fy = float(item.calibration.intrinsics.fy)
-            if abs(float(root.pm_session.fy) - new_fy) > 0.5:
+            if (
+                abs(float(root.pm_session.fx) - new_fx) > 0.5
+                or abs(float(root.pm_session.fy) - new_fy) > 0.5
+            ):
+                root.pm_session.fx = new_fx
                 root.pm_session.fy = new_fy
                 apply_camera(
                     context.scene,

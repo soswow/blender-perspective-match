@@ -18,6 +18,13 @@ BLENDER_BIN="${BLENDER_BIN:-/Applications/Blender 5.1.app/Contents/MacOS/blender
 
 Prints the same report to stdout. `--out` is optional.
 
+Recovered-still overlay (ground vs off-plane RMSE after `solve_landmark_sync`):
+
+```sh
+"$BLENDER_BIN" --factory-startup -b --python tools/debug-sync/probe_resected.py -- \
+    --blend "/path/to/scene.blend" [--match PM_some_Origin]
+```
+
 ## What to look at
 
 - **Stored nadir_deg** — current Blender camera vs world ±Z. Only meaningful if that match already locked; unsynced cameras often still sit on a leftover default pose.

@@ -415,4 +415,5 @@ class SolveSyncTests(unittest.TestCase):
         axis_shared = axis_shared / np.linalg.norm(axis_shared)
         self.assertGreater(abs(float(axis_shared[2])), 0.95)
         self.assertLess(result.per_match_rmse_px.get("side", 99.0), 5.0)
+        self.assertAlmostEqual(leftover.intrinsics.fx, 800.0, delta=1.0)
 
