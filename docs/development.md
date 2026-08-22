@@ -85,7 +85,8 @@ That bumps `blender_manifest.toml`, moves `## [Unreleased]` into a dated section
 match_perspective/
   blender_manifest.toml   # Blender extension metadata
   __init__.py             # Registration / reload entry
-  core/                   # Geometry, sync, lens refine, ROS camera_info
+  core/                   # geometry.py; sync/ package; lens_refine; ROS camera_info
+                          # Sync map: AGENTS.md (keep it current when stages move)
   detect/                 # AprilTags, auto VP lines, edge snap (OpenCV optional)
   properties/             # RNA PropertyGroups
   scene/                  # Camera/background integration + distortion plates

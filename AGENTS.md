@@ -29,6 +29,40 @@ When fixing a bug, add a focused automated regression test whenever the failure 
 
 If the sidebar workflow, sync rules, or install story changed, update `docs/user-guide.md`, `docs/sync.md`, and/or `README.md` in that same change. Do not leave the changelog as the only record.
 
+## Where code lives
+
+Keep this map accurate when you add a module, move a stage, or change a named constant.
+
+| Area | Path |
+| --- | --- |
+| VP / single-camera geometry | `core/geometry.py` |
+| Landmark-graph sync | `core/sync/` (package; import as `match_perspective.core.sync`) |
+| Focal search | `core/lens_refine.py` |
+| Blender cameras, stills, Solve Sync apply | `scene/__init__.py` |
+| Operators / panel / overlay | `ui/` |
+| RNA | `properties/__init__.py` |
+
+Do not special-case a `.blend` filename in solver code or UI copy.
+
+### Sync package (`core/sync/`)
+
+`from match_perspective.core import sync` still works. Submodules:
+
+| Module | Role |
+| --- | --- |
+| `constants.py` | `ACCEPT_RMSE_PX`, `STRETCHED_PIXEL_RATIO`, `GROUND_PLANE_Z_FRACTION` |
+| `types.py` | `SimilarityTransform`, observations, `SyncSolveResult` |
+| `projection.py` | Project, rays, triangulate, image-line geometry |
+| `pose.py` | Essential / PnP / IPPE / pairwise register |
+| `ground.py` | Calibrated On Ground plane init (`estimate_anchor_ground_plane`) |
+| `lines.py` | Free / Known 3D lines, Is-Parallel-To |
+| `ba.py` | Joint BA, residuals, leave-one-out Diagnose |
+| `solve.py` | `solve_landmark_sync` stages |
+
+**Solve stages** (in order): pairwise register → peel cameras above `ACCEPT_RMSE_PX` → joint BA → peel again → resect skipped stills against frozen 3D (On Ground / near-Z=0 if off-plane picks disagree) → report. Recovered cameras must not fail the joint RMSE. Copying locked K onto a different aspect uses one scale for fx and fy; Solve Sync sets fy=fx when they already differ by more than `STRETCHED_PIXEL_RATIO`.
+
+**When you change sync:** update this map if stages or files moved; put a new threshold in `constants.py` instead of a raw `40.0`; keep function docstrings to a short contract (what / what not), not algorithm history. Tests: `tests/test_sync_pose.py`, `test_sync_ground.py`, `test_sync_ba.py`, `test_sync_lines.py`, `test_sync_solve.py` (helpers in `tests/sync_fixtures.py`).
+
 ## Debugging tools
 
 Headless helpers under `tools/` (and `scripts/validate_addon.py`) for investigating a `.blend` without clicking the sidebar. If you build a new dump, probe, or reproduction script while solving a problem, **check it in** and add a bullet here so the next agent can find it.

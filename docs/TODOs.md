@@ -1,8 +1,9 @@
 TODOs to be done:
-- Some py files are 5K+ lines of code. Should they be broken up? Will this help with maintainability? And agent's effectiveness?
-- I want general thinking to be done on the topic of what can be done to improve future development using AI agents.
 
 Done TODOs:
+- Split core/sync.py into a package, named solve stages, named RMSE/K constants, agent map in AGENTS.md, cursor sync rule, tests split by seam.
+- Some py files are 5K+ lines of code. Should they be broken up? Will this help with maintainability? And agent's effectiveness?
+- I want general thinking to be done on the topic of what can be done to improve future development using AI agents.
 - All AprilTag IDs should be 3 digit (or more if needed) long at minimum with 0 padding.
 - Make Section with all PMs and their confedence dropdowns below "Pick Confedence" (including that main dropdown). All below "Pick in Active Match" button to be collapsable. And collapsed by default.
 - Collect agent debugging tools in-repo and point AGENTS.md at them (check in new probes when solving a problem).
