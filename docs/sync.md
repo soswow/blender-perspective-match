@@ -69,6 +69,7 @@ The eye icon on **Sync Matches** toggles landmark picks on the plate; **Landmark
 ## Debugging a bad or rejected sync
 
 - **Rejected (~40+ px)** — no pose fits your picks. Status / **Diagnose** lists the worst landmarks — re-pick those features in *both* stills.
+- **Plenty of picks, still rejected** — On Ground is load-bearing. Only landmarks that actually lie on the ground plane should be On Ground. A still that cannot lock is skipped so the others can still sync. After the remaining cameras lock, that still is retried as PnP against their triangulated 3D (floor tags alone if off-plane picks disagree). Diagnose / Solve Sync name the skipped match. A photo looking straight down at the ground is registered from those On Ground picks (plane homography); generic 2D↔2D pose is a poor fit there even when the tags are correct. If a portrait locked K was copied onto a landscape still, Sync sets fy=fx when they differ by more than 20%.
 - **Accepted but camera looks wrong** with RMSE still a few–tens of px — wrong local minimum or soft constraints. Prefer **Diagnose**, fix the worst landmarks, **Clear**, then **Solve Sync** again. Matches without Origin but with On Ground picks get an auto Origin on Sync; if tilt persists, add an elevated (off-ground) landmark or a 4th ground pick.
 - **One landmark huge, others fine** — that pick is mismatched. Uncheck **Use in Sync** and re-run Diagnose.
 - **Many landmarks all high** — FOV or VP solve is likely off on one match; try **Refine Lenses**, or re-refine that camera manually.

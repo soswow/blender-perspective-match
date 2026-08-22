@@ -146,10 +146,14 @@ def _scale_intrinsics_pixels(
     target_width: int,
     target_height: int,
 ) -> tuple[float, float, float, float]:
-    """Scale pinhole K from one plate size to another (same as ROS import)."""
+    """Scale pinhole K from one plate size to another.
+
+    fx and fy share the width scale so a locked K copied onto a still with a
+    different aspect keeps square pixels. cx and cy still follow each axis.
+    """
     scale_x = float(target_width) / float(max(int(source_width), 1))
     scale_y = float(target_height) / float(max(int(source_height), 1))
-    return fx * scale_x, fy * scale_y, cx * scale_x, cy * scale_y
+    return fx * scale_x, fy * scale_x, cx * scale_x, cy * scale_y
 
 
 def _calibration_from_manual_k(
@@ -2763,6 +2767,17 @@ def solve_and_apply_sync(context: bpy.types.Context):
         root.pm_session.sync_rmse_px = float(
             result.per_match_rmse_px.get(match_id, 0.0)
         )
+        item = next((match for match in matches if match.match_id == match_id), None)
+        if item is not None:
+            new_fy = float(item.calibration.intrinsics.fy)
+            if abs(float(root.pm_session.fy) - new_fy) > 0.5:
+                root.pm_session.fy = new_fy
+                apply_camera(
+                    context.scene,
+                    root.pm_session,
+                    calibration_from_settings(root.pm_session),
+                    update_scene_camera=False,
+                )
 
     landmark_by_id = {landmark.item_id: landmark for landmark in space.landmarks}
     for landmark_id, position in result.landmarks.items():

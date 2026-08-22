@@ -29,6 +29,14 @@ When fixing a bug, add a focused automated regression test whenever the failure 
 
 If the sidebar workflow, sync rules, or install story changed, update `docs/user-guide.md`, `docs/sync.md`, and/or `README.md` in that same change. Do not leave the changelog as the only record.
 
+## Debugging tools
+
+Headless helpers under `tools/` (and `scripts/validate_addon.py`) for investigating a `.blend` without clicking the sidebar. If you build a new dump, probe, or reproduction script while solving a problem, **check it in** and add a bullet here so the next agent can find it.
+
+- `tools/debug-sync/` — sync graph, stored vs *recovered* optical-axis tilt vs world Z, homography vs mixed RMSE, `solve_landmark_sync` on a saved scene. See `tools/debug-sync/README.md`.
+- `tools/explore-vp-intrinsics/` — VP-line residual vs FOV / principal-point / λ (does not touch landmarks).
+- `scripts/validate_addon.py` — Blender smoke test (register, match CRUD, VP solve, origin, import).
+
 ## Do not
 
 - Commit or push unless the user explicitly asks to (e.g. “commit this”, “create a commit”)

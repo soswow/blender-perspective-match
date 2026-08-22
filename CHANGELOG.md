@@ -23,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - AprilTag sheet padding now wraps all four outer edges of the packed tag group
 
 ### Fixed
+- Solve Sync still registers the cameras that fit when one still cannot, instead of failing the whole solve
+- A photo looking straight down at the ground can sync from On Ground landmarks; if off-ground picks still disagree, that still is placed from the floor after the others lock
+- Landmarks wrongly marked On Ground no longer block a pose that already fits the 2D picks
+- Copying a locked camera onto a still with a different aspect (portrait vs landscape) no longer stretches the lens; Solve Sync also repairs matches that already have that stretch
 - Switching matches no longer errors when the Sync Anchor dropdown is out of date
 - SVG cut shapes match the rasterized grid spacing of existing printed PDF sheets
 - Seven-point sync accepts 180° camera yaw and scale-ambiguous short-baseline solutions instead of rejecting valid poses

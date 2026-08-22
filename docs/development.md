@@ -96,7 +96,7 @@ match_perspective/
   scripts/                # build / link-dev / fetch-wheels / release / tests
   .github/workflows/      # Tag-only zip build + GitHub Release
   tests/                  # Pure geometry / sync / detect regressions
-  tools/                  # Standalone helpers (AprilTag sheets, FOV plotter)
+  tools/                  # Standalone helpers (AprilTag sheets, FOV plotter, sync dump)
   docs/                   # User guide, sync, development, TODOs
   CHANGELOG.md            # Keep a Changelog; Unreleased → version at release
   AGENTS.md               # Changelog / docs conventions for agents

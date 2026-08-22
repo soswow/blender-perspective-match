@@ -8,7 +8,8 @@ Enough 2D↔2D landmark correspondences recover relative orientation and
 baseline *direction* (same idea as SfM). Absolute baseline length vs the
 already-metric anchor world is pinned by optional On Ground picks,
 known Blender-object 3D positions, or a depth heuristic. Intrinsics stay
-frozen here; ``lens_refine`` can adjust focals in an outer loop.
+frozen except fy=fx when they were stretched by a portrait/landscape K copy;
+``lens_refine`` can still adjust focals in an outer loop.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from functools import lru_cache
 from itertools import combinations, islice
+import math
 
 import numpy as np
 
@@ -1594,6 +1596,61 @@ def _point_landmark_rmse_snapshot(
     }
 
 
+def _per_match_rmse_snapshot(
+    free_match_ids: list[str],
+    landmark_ids: list[str],
+    similarities: dict[str, SimilarityTransform],
+    landmarks: dict[str, np.ndarray],
+    anchor_id: str,
+    matches: dict[str, SyncMatchInput],
+    observations: list[SyncObservation],
+) -> dict[str, float]:
+    """Unweighted per-match RMSE for the current registration."""
+    residual_landmark_ids = [
+        landmark_id for landmark_id in landmark_ids if landmark_id in landmarks
+    ]
+    residual_observations = [
+        observation
+        for observation in observations
+        if observation.landmark_id in landmarks
+    ]
+    if not residual_landmark_ids or not residual_observations:
+        return {}
+    residuals = _residual_vector(
+        _pack_params(
+            free_match_ids,
+            residual_landmark_ids,
+            {match_id: similarities[match_id] for match_id in free_match_ids},
+            {
+                landmark_id: landmarks[landmark_id]
+                for landmark_id in residual_landmark_ids
+            },
+        ),
+        free_match_ids,
+        residual_landmark_ids,
+        anchor_id,
+        matches,
+        residual_observations,
+        weighted=False,
+    )
+    per_match_sse: dict[str, list[float]] = {
+        match_id: [] for match_id in list(similarities)
+    }
+    residual_index = 0
+    for observation in residual_observations:
+        error_u = float(residuals[residual_index])
+        error_v = float(residuals[residual_index + 1])
+        residual_index += 2
+        per_match_sse.setdefault(observation.match_id, []).append(
+            error_u * error_u + error_v * error_v
+        )
+    return {
+        match_id: float(np.sqrt(np.mean(values)))
+        for match_id, values in per_match_sse.items()
+        if values
+    }
+
+
 def leave_one_out_landmark_report(
     matches: list[SyncMatchInput],
     observations: list[SyncObservation],
@@ -3021,6 +3078,286 @@ def _unpack_similarity_pose(
     )
 
 
+def _square_pixel_intrinsics_if_stretched(calibration: core.Calibration) -> bool:
+    """Set fy=fx when they differ enough that K was likely aspect-stretched.
+
+    Copying a portrait locked K onto a landscape still used to scale fx and fy
+    by independent width/height ratios. That K is not a Euclidean pinhole and
+    plane-homography pose cannot lock.
+    """
+    fx = float(calibration.intrinsics.fx)
+    fy = float(calibration.intrinsics.fy)
+    if abs(fx - fy) <= 0.2 * max(abs(fx), abs(fy), 1.0):
+        return False
+    calibration.intrinsics.fy = fx
+    return True
+
+
+def _coplanar_inlier_indices(
+    points: np.ndarray,
+    *,
+    relative_thickness: float = 0.05,
+) -> np.ndarray | None:
+    """Indices of a non-collinear coplanar subset, or None."""
+    stacked = np.asarray(points, dtype=np.float64).reshape(-1, 3)
+    count = len(stacked)
+    if count < 4:
+        return None
+    centered = stacked - stacked.mean(axis=0)
+    _u_matrix, singular, _vt_matrix = np.linalg.svd(centered, full_matrices=False)
+    if singular.size < 2:
+        return None
+    span = float(singular[0])
+    if span < 1.0e-8 or float(singular[1]) < 0.02 * span:
+        return None
+    if singular.size >= 3 and float(singular[2]) <= relative_thickness * span:
+        return np.arange(count)
+    thickness = relative_thickness * span
+    best_mask: np.ndarray | None = None
+    best_count = 3
+    for index_a, index_b, index_c in combinations(range(count), 3):
+        origin = stacked[index_a]
+        normal = np.cross(
+            stacked[index_b] - origin,
+            stacked[index_c] - origin,
+        )
+        norm = float(np.linalg.norm(normal))
+        if norm < 1.0e-10:
+            continue
+        distances = np.abs((stacked - origin) @ (normal / norm))
+        mask = distances <= thickness
+        inlier_count = int(np.count_nonzero(mask))
+        if inlier_count > best_count:
+            best_count = inlier_count
+            best_mask = mask
+    if best_mask is None or best_count < 4:
+        return None
+    return np.flatnonzero(best_mask)
+
+
+def _rotation_mapping_vector_to_z(vector: np.ndarray) -> np.ndarray:
+    """Rotation that maps ``vector`` onto +Z (IPPE ``rotateVec2ZAxis``)."""
+    axis = np.asarray(vector, dtype=np.float64).reshape(3)
+    axis = axis / max(float(np.linalg.norm(axis)), 1.0e-12)
+    ax_coord, ay_coord, cosine = float(axis[0]), float(axis[1]), float(axis[2])
+    if abs(1.0 + cosine) < 1.0e-15:
+        return np.diag((1.0, 1.0, -1.0)).astype(np.float64)
+    scale = 1.0 / (1.0 + cosine)
+    return np.array(
+        (
+            (-ax_coord * ax_coord * scale + 1.0, -ax_coord * ay_coord * scale, -ax_coord),
+            (-ax_coord * ay_coord * scale, -ay_coord * ay_coord * scale + 1.0, -ay_coord),
+            (ax_coord, ay_coord, 1.0 - (ax_coord * ax_coord + ay_coord * ay_coord) * scale),
+        ),
+        dtype=np.float64,
+    )
+
+
+def _ippe_rotations_from_homography(homography: np.ndarray) -> list[np.ndarray]:
+    """Two plane-to-camera rotations from H (Collins IPPE; OpenCV calib3d/ippe.cpp)."""
+    scale = float(homography[2, 2])
+    if abs(scale) < 1.0e-12:
+        return []
+    matrix = homography / scale
+    jacobian_00 = matrix[0, 0] - matrix[2, 0] * matrix[0, 2]
+    jacobian_01 = matrix[0, 1] - matrix[2, 1] * matrix[0, 2]
+    jacobian_10 = matrix[1, 0] - matrix[2, 0] * matrix[1, 2]
+    jacobian_11 = matrix[1, 1] - matrix[2, 1] * matrix[1, 2]
+    p_coord = float(matrix[0, 2])
+    q_coord = float(matrix[1, 2])
+    rotate_v = _rotation_mapping_vector_to_z(
+        np.array((p_coord, q_coord, 1.0), dtype=np.float64)
+    ).T
+    b00 = rotate_v[0, 0] - p_coord * rotate_v[2, 0]
+    b01 = rotate_v[0, 1] - p_coord * rotate_v[2, 1]
+    b10 = rotate_v[1, 0] - q_coord * rotate_v[2, 0]
+    b11 = rotate_v[1, 1] - q_coord * rotate_v[2, 1]
+    determinant = b00 * b11 - b01 * b10
+    if abs(float(determinant)) < 1.0e-12:
+        return []
+    inverse = 1.0 / determinant
+    binv00, binv01 = inverse * b11, -inverse * b01
+    binv10, binv11 = -inverse * b10, inverse * b00
+    a00 = binv00 * jacobian_00 + binv01 * jacobian_10
+    a01 = binv00 * jacobian_01 + binv01 * jacobian_11
+    a10 = binv10 * jacobian_00 + binv11 * jacobian_10
+    a11 = binv10 * jacobian_01 + binv11 * jacobian_11
+    ata00 = a00 * a00 + a01 * a01
+    ata01 = a00 * a10 + a01 * a11
+    ata11 = a10 * a10 + a11 * a11
+    gamma_sq = 0.5 * (
+        ata00 + ata11 + math.sqrt(max((ata00 - ata11) ** 2 + 4.0 * ata01 * ata01, 0.0))
+    )
+    if gamma_sq < 1.0e-16:
+        return []
+    gamma = math.sqrt(gamma_sq)
+    r00, r01 = a00 / gamma, a01 / gamma
+    r10, r11 = a10 / gamma, a11 / gamma
+    b0 = math.sqrt(max(1.0 - r00 * r00 - r10 * r10, 0.0))
+    b1 = math.sqrt(max(1.0 - r01 * r01 - r11 * r11, 0.0))
+    if (-r00 * r01 - r10 * r11) < 0.0:
+        b1 = -b1
+    det_r = r00 * r11 - r01 * r10
+    rtilde_a = np.array(
+        (
+            (r00, r01, b1 * r10 - b0 * r11),
+            (r10, r11, b0 * r01 - b1 * r00),
+            (b0, b1, det_r),
+        ),
+        dtype=np.float64,
+    )
+    rtilde_b = np.array(
+        (
+            (r00, r01, b0 * r11 - b1 * r10),
+            (r10, r11, b1 * r00 - b0 * r01),
+            (-b0, -b1, det_r),
+        ),
+        dtype=np.float64,
+    )
+    return [rotate_v @ rtilde_a, rotate_v @ rtilde_b]
+
+
+def _ippe_translation(
+    rotation: np.ndarray,
+    plane_xy: np.ndarray,
+    normalized_xy: np.ndarray,
+) -> np.ndarray:
+    """Least-squares camera translation for a known rotation and Z=0 points."""
+    rows: list[tuple[float, float, float]] = []
+    rhs: list[float] = []
+    for (x_object, y_object), (x_image, y_image) in zip(plane_xy, normalized_xy):
+        rotated = rotation @ np.array((x_object, y_object, 0.0), dtype=np.float64)
+        rows.append((1.0, 0.0, -float(x_image)))
+        rhs.append(float(x_image) * float(rotated[2]) - float(rotated[0]))
+        rows.append((0.0, 1.0, -float(y_image)))
+        rhs.append(float(y_image) * float(rotated[2]) - float(rotated[1]))
+    translation, _, _, _ = np.linalg.lstsq(
+        np.asarray(rows, dtype=np.float64),
+        np.asarray(rhs, dtype=np.float64),
+        rcond=None,
+    )
+    return translation
+
+
+def _decompose_plane_homography(
+    homography: np.ndarray,
+    plane_xy: np.ndarray,
+    normalized_xy: np.ndarray,
+) -> list[tuple[np.ndarray, np.ndarray]]:
+    """Plane-to-camera poses from H: [X, Y, 1] on Z=0 → λ [x, y, 1]."""
+    poses: list[tuple[np.ndarray, np.ndarray]] = []
+    for rotation in _ippe_rotations_from_homography(homography):
+        translation = _ippe_translation(rotation, plane_xy, normalized_xy)
+        if np.all(np.isfinite(translation)):
+            poses.append((rotation, translation))
+    # Gram-Schmidt on H's first two columns (Zhang) plus LS translation.
+    # IPPE's Jacobian path can miss when the plane origin is far from the PP
+    # in a high-focal still; this recovers the same H as a pinhole pose.
+    for sign in (1.0, -1.0):
+        matrix = sign * np.asarray(homography, dtype=np.float64).reshape(3, 3)
+        column_a = matrix[:, 0]
+        column_b = matrix[:, 1]
+        norm_a = float(np.linalg.norm(column_a))
+        if norm_a < 1.0e-12:
+            continue
+        axis_a = column_a / norm_a
+        column_b = column_b - axis_a * float(np.dot(axis_a, column_b))
+        norm_b = float(np.linalg.norm(column_b))
+        if norm_b < 1.0e-12:
+            continue
+        axis_b = column_b / norm_b
+        axis_c = np.cross(axis_a, axis_b)
+        rotation = np.column_stack((axis_a, axis_b, axis_c))
+        if np.linalg.det(rotation) < 0.0:
+            axis_c = -axis_c
+            rotation = np.column_stack((axis_a, axis_b, axis_c))
+        translation = _ippe_translation(rotation, plane_xy, normalized_xy)
+        if np.all(np.isfinite(translation)):
+            poses.append((rotation, translation))
+    return poses
+
+
+def _planar_homography_similarities(
+    points_shared: np.ndarray,
+    points_image: np.ndarray,
+    calibration: core.Calibration,
+    *,
+    weights: np.ndarray | None = None,
+) -> list[SimilarityTransform]:
+    """Closed-form pose from coplanar 3D↔2D, then a short rigid PnP polish.
+
+    Generic PnP LM from yaw seeds misses cameras that look along the plane
+    normal (image ≈ ground). A plane homography is well-posed there.
+    """
+    shared = np.asarray(points_shared, dtype=np.float64).reshape(-1, 3)
+    image = np.asarray(points_image, dtype=np.float64).reshape(-1, 2)
+    if len(shared) != len(image) or len(shared) < 4:
+        return []
+    inliers = _coplanar_inlier_indices(shared)
+    if inliers is None:
+        return []
+    plane_points = shared[inliers]
+    plane_image = image[inliers]
+    centroid = plane_points.mean(axis=0)
+    centered = plane_points - centroid
+    _u_matrix, _singular, vt_matrix = np.linalg.svd(centered, full_matrices=False)
+    normal = vt_matrix[-1]
+    if float(normal[2]) < 0.0:
+        normal = -normal
+    tangent_a, tangent_b = _plane_tangent_basis(normal)
+    plane_xy = np.column_stack((centered @ tangent_a, centered @ tangent_b))
+    normalized: list[np.ndarray] = []
+    keep: list[int] = []
+    for index, (u_coord, v_coord) in enumerate(plane_image):
+        ray = _normalized_camera_ray(float(u_coord), float(v_coord), calibration)
+        depth = float(ray[2])
+        if abs(depth) < 1.0e-12:
+            continue
+        normalized.append(np.array((ray[0] / depth, ray[1] / depth), dtype=np.float64))
+        keep.append(index)
+    if len(keep) < 4:
+        return []
+    homography = _fit_homography_dlt(plane_xy[keep], np.stack(normalized))
+    if homography is None:
+        return []
+    plane_from_shared = np.column_stack((tangent_a, tangent_b, normal)).T
+    similarities: list[SimilarityTransform] = []
+    seen: list[np.ndarray] = []
+    for rotation_plane, translation_plane in _decompose_plane_homography(
+        homography,
+        plane_xy[keep],
+        np.stack(normalized),
+    ):
+        rotation_w2c = rotation_plane @ plane_from_shared
+        translation_shared = translation_plane - rotation_w2c @ centroid
+        camera_points = (shared - (-rotation_w2c.T @ translation_shared)) @ rotation_w2c.T
+        if float(np.median(camera_points[:, 2])) <= 1.0e-6:
+            continue
+        center_shared = -rotation_w2c.T @ translation_shared
+        seed = _similarity_from_camera_pose(calibration, rotation_w2c, center_shared)
+        duplicate = False
+        for previous in seen:
+            if float(np.linalg.norm(seed.translation - previous)) < 1.0e-6:
+                duplicate = True
+                break
+        if duplicate:
+            continue
+        seen.append(seed.translation.copy())
+        similarities.append(seed)
+        polished = _pnp_similarity(
+            "planar",
+            shared,
+            image,
+            calibration,
+            initial=seed,
+            weights=weights,
+            lock_scale=True,
+        )
+        if polished is not None:
+            similarities.append(polished)
+    return similarities
+
+
 def _pnp_similarity(
     match_id: str,
     points_shared: np.ndarray,
@@ -3238,6 +3575,46 @@ def _metric_landmarks(
     ).items():
         landmarks.setdefault(landmark_id, point)
     return landmarks
+
+
+def _ground_metric_agrees(
+    metric_point: np.ndarray,
+    triangulated: np.ndarray,
+) -> bool:
+    """True when an On Ground raycast matches multi-view triangulation.
+
+    Off-plane points marked On Ground raycast to a different XY on Z=0 than
+    the triangulated 3D point. Those must not pin BA.
+    """
+    metric = np.asarray(metric_point, dtype=np.float64).reshape(3)
+    triangulated_point = np.asarray(triangulated, dtype=np.float64).reshape(3)
+    delta = float(np.linalg.norm(metric - triangulated_point))
+    scale = max(
+        float(np.linalg.norm(metric)),
+        float(np.linalg.norm(triangulated_point)),
+        1.0e-3,
+    )
+    z_delta = abs(float(triangulated_point[2] - metric[2]))
+    return delta <= 0.15 * scale and z_delta <= 0.15 * scale
+
+
+def _consistent_metric_landmarks(
+    metric: dict[str, np.ndarray],
+    triangulated: dict[str, np.ndarray],
+    known_world_ids: set[str],
+) -> dict[str, np.ndarray]:
+    """Keep Known 3D always; keep On Ground only when triangulation agrees."""
+    consistent: dict[str, np.ndarray] = {}
+    for landmark_id, point in metric.items():
+        if landmark_id in known_world_ids:
+            consistent[landmark_id] = point
+            continue
+        triangulated_point = triangulated.get(landmark_id)
+        if triangulated_point is None or _ground_metric_agrees(
+            point, triangulated_point
+        ):
+            consistent[landmark_id] = point
+    return consistent
 
 
 def _metric_pnp_correspondences(
@@ -4240,6 +4617,7 @@ def _relative_pose_from_correspondences(
 
     anchor = matches[anchor_id].calibration
     other = matches[other_id].calibration
+    _square_pixel_intrinsics_if_stretched(other)
     metric = _metric_landmarks(
         observations_by_landmark, anchor_id, anchor, known_world
     )
@@ -4375,6 +4753,32 @@ def _relative_pose_from_correspondences(
         "lock_rotation": lock_rotation,
         "lock_translation": lock_translation,
     }
+
+    if has_metric_pnp and not (lock_rotation and lock_translation):
+        for seed in _planar_homography_similarities(
+            np.stack(points_shared),
+            np.stack(points_image),
+            other,
+            weights=np.asarray(known_weights, dtype=np.float64),
+        ):
+            locked = _apply_pose_locks(
+                seed,
+                lock_rotation=lock_rotation,
+                lock_translation=lock_translation,
+            )
+            candidates.append(locked)
+            if free_pairs or known_line_constraints:
+                candidates.append(
+                    _refine_rigid_mixed(
+                        locked,
+                        free_pairs,
+                        points_shared,
+                        points_image,
+                        anchor,
+                        other,
+                        **mixed_kwargs,
+                    )
+                )
 
     relative: SimilarityTransform | None = None
     if can_pairs_only:
@@ -4563,6 +4967,25 @@ def _relative_pose_from_correspondences(
         if rmse < best_rmse:
             best_rmse = rmse
             best = candidate
+
+    # On Ground / Known 3D can poison a mixed score when those 3D points are
+    # wrong. Keep a pure 2D↔2D pose if it still locks.
+    if (best is None or best_rmse > 40.0) and relative is not None and free_pairs_ok:
+        pairs_pose = _apply_depth_heuristic_scale(relative, free_pairs, anchor, other)
+        pair_errors = _reprojection_errors_for_similarity(
+            pairs_pose,
+            free_pairs,
+            anchor,
+            other,
+            [],
+            [],
+            weighted=True,
+        )
+        if pair_errors:
+            pairs_rmse = float(np.sqrt(np.mean(np.square(pair_errors))))
+            if pairs_rmse <= 40.0:
+                best = pairs_pose
+                best_rmse = pairs_rmse
 
     if best is None or best_rmse > 40.0:
         detail = (
@@ -5175,14 +5598,115 @@ def _register_from_relative_pose(
 
     if pending:
         pending_list = ", ".join(f"'{name}'" for name in sorted(pending))
-        if failure_details:
-            return None, failure_details[0]
-        return (
-            None,
-            f"Could not register {pending_list} — need ≥5 well-spread 2D "
-            "landmarks shared with the anchor, or ≥3 Known 3D / On Ground picks",
+        detail = (
+            failure_details[0]
+            if failure_details
+            else (
+                f"Could not register {pending_list} — need ≥5 well-spread 2D "
+                "landmarks shared with the anchor, or ≥3 Known 3D / On Ground picks"
+            )
         )
+        if len(similarities) <= 1:
+            return None, detail
+        return similarities, detail
     return similarities, ""
+
+
+def _observations_for_landmark_ids(
+    observations_by_landmark: dict[str, list[SyncObservation]],
+    keep_ids: set[str],
+) -> dict[str, list[SyncObservation]]:
+    """Copy the observation lists for a landmark subset."""
+    return {
+        landmark_id: list(items)
+        for landmark_id, items in observations_by_landmark.items()
+        if landmark_id in keep_ids
+    }
+
+
+def _ground_like_landmark_ids(
+    cloud: dict[str, np.ndarray],
+    observations_by_landmark: dict[str, list[SyncObservation]],
+) -> set[str]:
+    """Landmarks tagged On Ground, or whose triangulated Z is near the plane."""
+    keep: set[str] = set()
+    for landmark_id, point in cloud.items():
+        items = observations_by_landmark.get(landmark_id, [])
+        if any(item.on_ground for item in items):
+            keep.add(landmark_id)
+            continue
+        scale = max(float(np.linalg.norm(point)), 1.0e-3)
+        if abs(float(point[2])) <= 0.15 * scale:
+            keep.add(landmark_id)
+    return keep
+
+
+def _similarity_rmse_against_cloud(
+    similarity: SimilarityTransform,
+    match_id: str,
+    cloud: dict[str, np.ndarray],
+    observations_by_landmark: dict[str, list[SyncObservation]],
+    matches: dict[str, SyncMatchInput],
+    anchor_id: str,
+) -> float | None:
+    """RMSE of a candidate Empty pose vs shared-world 3D ↔ this still's 2D."""
+    points_shared, points_image, _ids, weights = _metric_pnp_correspondences(
+        match_id, cloud, observations_by_landmark
+    )
+    if len(points_shared) < 4:
+        return None
+    errors = _reprojection_errors_for_similarity(
+        similarity,
+        [],
+        matches[anchor_id].calibration,
+        matches[match_id].calibration,
+        points_shared,
+        points_image,
+        point_weights=weights,
+    )
+    if not errors:
+        return None
+    return float(np.sqrt(np.mean(np.square(errors))))
+
+
+def _try_register_against_cloud(
+    match_id: str,
+    cloud: dict[str, np.ndarray],
+    observations_by_landmark: dict[str, list[SyncObservation]],
+    matches: dict[str, SyncMatchInput],
+    anchor_id: str,
+    known_lines: dict[str, tuple[np.ndarray, np.ndarray]] | None,
+    line_observations_by_landmark: dict[str, list[SyncLineObservation]] | None,
+    parallel_pairs: list[tuple[str, str]] | None,
+    *,
+    lock_rotation: bool,
+    lock_translation: bool,
+    rmse_limit: float = 40.0,
+) -> SimilarityTransform | None:
+    """PnP a skipped still against a frozen 3D cloud (no free 2D↔2D pairs)."""
+    if len(cloud) < 4:
+        return None
+    subset = _observations_for_landmark_ids(observations_by_landmark, set(cloud))
+    solved, _detail = _relative_pose_from_correspondences(
+        anchor_id,
+        match_id,
+        subset,
+        matches,
+        cloud,
+        known_lines=known_lines,
+        line_observations_by_landmark=line_observations_by_landmark,
+        parallel_pairs=parallel_pairs,
+        lock_rotation=lock_rotation,
+        lock_translation=lock_translation,
+    )
+    if solved is None:
+        return None
+    rmse = _similarity_rmse_against_cloud(
+        solved, match_id, cloud, subset, matches, anchor_id
+    )
+    if rmse is None or rmse > rmse_limit:
+        return None
+    return solved
 
 
 
@@ -5205,8 +5729,9 @@ def solve_landmark_sync(
     *direction*. Absolute baseline scale vs the anchor world is pinned by
     Known 3D Blender objects, On Ground picks, Known 3D lines, or a depth
     heuristic. Free 2D↔2D line landmarks help once ≥3 stills share an edge.
-    Intrinsics stay frozen. After pairwise registration, a joint BA pass
-    couples every free Empty pose with shared landmark positions.
+    fy is copied from fx when they differ by more than 20% (stretched K).
+    After pairwise registration, a joint BA pass couples every free Empty pose
+    with shared landmark positions.
     """
     known_world = {
         landmark_id: np.asarray(point, dtype=np.float64).reshape(3)
@@ -5220,6 +5745,8 @@ def solve_landmark_sync(
         for landmark_id, pair in (known_lines or {}).items()
     }
     match_map = {item.match_id: item for item in matches}
+    for item in matches:
+        _square_pixel_intrinsics_if_stretched(item.calibration)
     identity_result = {item.match_id: SimilarityTransform() for item in matches}
     if anchor_id not in match_map:
         return SyncSolveResult(
@@ -5252,6 +5779,14 @@ def solve_landmark_sync(
         line_observations_by_landmark.setdefault(
             observation.landmark_id, []
         ).append(observation)
+    observations_by_landmark_all = {
+        landmark_id: list(items)
+        for landmark_id, items in observations_by_landmark.items()
+    }
+    line_observations_by_landmark_all = {
+        landmark_id: list(items)
+        for landmark_id, items in line_observations_by_landmark.items()
+    }
 
     multi_ids = {
         landmark_id
@@ -5386,58 +5921,150 @@ def solve_landmark_sync(
             success=False,
         )
 
-    for match_id in match_map:
-        similarities.setdefault(match_id, SimilarityTransform())
+    skipped_unregistered = [
+        match_id for match_id in free_match_ids if match_id not in similarities
+    ]
+    if skipped_unregistered:
+        skip = set(skipped_unregistered)
+        free_match_ids = [
+            match_id for match_id in free_match_ids if match_id not in skip
+        ]
+        usable_observations = [
+            observation
+            for observation in usable_observations
+            if observation.match_id not in skip
+        ]
+        observations_by_landmark = {}
+        for observation in usable_observations:
+            observations_by_landmark.setdefault(observation.landmark_id, []).append(
+                observation,
+            )
+        landmark_ids = sorted(observations_by_landmark.keys())
+        line_observations_by_landmark = {
+            landmark_id: [
+                item for item in items if item.match_id not in skip
+            ]
+            for landmark_id, items in line_observations_by_landmark.items()
+        }
     similarities[anchor_id] = SimilarityTransform()
 
-    landmarks = _triangulate_landmarks(
-        landmark_ids,
-        observations_by_landmark,
-        similarities,
-        match_map,
-    )
-    # Prefer fixed metric positions over triangulated estimates.
-    landmarks.update(
-        _metric_landmarks(
+    def _drop_matches(match_ids: list[str]) -> None:
+        nonlocal free_match_ids, usable_observations, observations_by_landmark
+        nonlocal landmark_ids, line_observations_by_landmark, skipped_unregistered
+        if not match_ids:
+            return
+        skip = set(match_ids)
+        skipped_unregistered.extend(
+            match_id for match_id in match_ids if match_id not in skipped_unregistered
+        )
+        free_match_ids = [item for item in free_match_ids if item not in skip]
+        for match_id in skip:
+            similarities.pop(match_id, None)
+        usable_observations = [
+            observation
+            for observation in usable_observations
+            if observation.match_id not in skip
+        ]
+        observations_by_landmark = {}
+        for observation in usable_observations:
+            observations_by_landmark.setdefault(observation.landmark_id, []).append(
+                observation,
+            )
+        landmark_ids = sorted(observations_by_landmark.keys())
+        line_observations_by_landmark = {
+            landmark_id: [
+                item for item in items if item.match_id not in skip
+            ]
+            for landmark_id, items in line_observations_by_landmark.items()
+        }
+
+    def _rebuild_landmarks() -> tuple[
+        dict[str, np.ndarray],
+        dict[str, np.ndarray],
+        dict[str, tuple[np.ndarray, np.ndarray]],
+    ]:
+        rebuilt = _triangulate_landmarks(
+            landmark_ids,
+            observations_by_landmark,
+            similarities,
+            match_map,
+        )
+        metric_points = _metric_landmarks(
             observations_by_landmark,
             anchor_id,
             match_map[anchor_id].calibration,
             known_world,
         )
-    )
-    # Keep known points even if they lack multi-view triangulation.
-    for landmark_id, point in known_world.items():
-        landmarks[landmark_id] = point
-    # Line landmarks: midpoint + finite segment for viewport mesh viz.
-    line_segments: dict[str, tuple[np.ndarray, np.ndarray]] = {}
-    for landmark_id, (point_a, point_b) in known_lines.items():
-        landmarks[landmark_id] = 0.5 * (point_a + point_b)
-        line_segments[landmark_id] = (point_a.copy(), point_b.copy())
-    for landmark_id, items in line_observations_by_landmark.items():
-        if landmark_id in line_segments:
-            continue
-        reconstructed = _reconstruct_line_from_observations(
-            items, similarities, match_map
+        consistent = _consistent_metric_landmarks(
+            metric_points, rebuilt, set(known_world)
         )
-        if reconstructed is None:
-            continue
-        point, direction = reconstructed
-        segment = _finite_segment_from_line_observations(
-            point, direction, items, similarities, match_map
+        rebuilt.update(consistent)
+        for landmark_id, point in known_world.items():
+            rebuilt[landmark_id] = point
+        segments: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+        for landmark_id, (point_a, point_b) in known_lines.items():
+            rebuilt[landmark_id] = 0.5 * (point_a + point_b)
+            segments[landmark_id] = (point_a.copy(), point_b.copy())
+        for landmark_id, items in line_observations_by_landmark.items():
+            if landmark_id in segments:
+                continue
+            reconstructed = _reconstruct_line_from_observations(
+                items, similarities, match_map
+            )
+            if reconstructed is None:
+                continue
+            point, direction = reconstructed
+            segment = _finite_segment_from_line_observations(
+                point, direction, items, similarities, match_map
+            )
+            rebuilt[landmark_id] = 0.5 * (segment[0] + segment[1])
+            segments[landmark_id] = segment
+        _enforce_parallel_line_segments(
+            segments,
+            rebuilt,
+            parallel_pairs,
+            line_observations_by_landmark,
+            similarities,
+            match_map,
+            known_lines,
         )
-        landmarks[landmark_id] = 0.5 * (segment[0] + segment[1])
-        line_segments[landmark_id] = segment
+        return rebuilt, consistent, segments
 
-    # Parallel families: lock free-line mesh directions (pose stays as solved).
-    _enforce_parallel_line_segments(
-        line_segments,
-        landmarks,
-        parallel_pairs,
-        line_observations_by_landmark,
-        similarities,
-        match_map,
-        known_lines,
-    )
+    landmarks, consistent_metric, line_segments = _rebuild_landmarks()
+    while free_match_ids:
+        pre_ba_match_rmse = _per_match_rmse_snapshot(
+            free_match_ids,
+            landmark_ids,
+            similarities,
+            landmarks,
+            anchor_id,
+            match_map,
+            usable_observations,
+        )
+        ranked = sorted(
+            (
+                (pre_ba_match_rmse.get(match_id, 0.0), match_id)
+                for match_id in free_match_ids
+            ),
+            reverse=True,
+        )
+        if not ranked or ranked[0][0] <= 40.0:
+            break
+        _drop_matches([ranked[0][1]])
+        if not free_match_ids:
+            return SyncSolveResult(
+                similarities=identity_result,
+                landmarks={},
+                mean_reprojection_px=ranked[0][0],
+                per_match_rmse_px=pre_ba_match_rmse,
+                per_landmark_rmse_px={},
+                message=(
+                    failure_detail
+                    or "Could not keep a camera under 40 px after registration"
+                ),
+                success=False,
+            )
+        landmarks, consistent_metric, line_segments = _rebuild_landmarks()
 
     # Soft-downweight severe point outliers, then jointly refine poses + 3D.
     seed_rmse = _point_landmark_rmse_snapshot(
@@ -5453,11 +6080,7 @@ def solve_landmark_sync(
         usable_observations,
         seed_rmse,
     )
-    fixed_landmark_ids = set(known_world) | {
-        landmark_id
-        for landmark_id, items in observations_by_landmark.items()
-        if any(item.on_ground and item.match_id == anchor_id for item in items)
-    }
+    fixed_landmark_ids = set(known_world) | set(consistent_metric)
     free_landmark_ids = [
         landmark_id
         for landmark_id in landmark_ids
@@ -5486,8 +6109,23 @@ def solve_landmark_sync(
         line_segments,
         known_lines,
         line_observations_by_landmark,
-        connected,
+        set(similarities),
     )
+    pre_ba_similarities = {
+        match_id: SimilarityTransform(
+            scale=item.scale,
+            rotation=np.array(item.rotation, copy=True),
+            translation=np.array(item.translation, copy=True),
+        )
+        for match_id, item in similarities.items()
+    }
+    pre_ba_landmarks = {
+        landmark_id: point.copy() for landmark_id, point in landmarks.items()
+    }
+    pre_ba_segments = {
+        landmark_id: (point_a.copy(), point_b.copy())
+        for landmark_id, (point_a, point_b) in line_segments.items()
+    }
     similarities, landmarks, line_segments, did_bundle_adjust = (
         _bundle_adjust_registration(
             free_match_ids,
@@ -5550,6 +6188,122 @@ def solve_landmark_sync(
             known_lines,
         )
 
+    post_ba_match_rmse = _per_match_rmse_snapshot(
+        free_match_ids,
+        landmark_ids,
+        similarities,
+        landmarks,
+        anchor_id,
+        match_map,
+        usable_observations,
+    )
+
+    def _mean_rmse(values: dict[str, float]) -> float:
+        if not values:
+            return 0.0
+        squares = [value * value for value in values.values()]
+        return float(np.sqrt(np.mean(squares)))
+
+    if did_bundle_adjust and _mean_rmse(post_ba_match_rmse) > max(
+        8.0, _mean_rmse(pre_ba_match_rmse) + 2.0
+    ):
+        similarities = pre_ba_similarities
+        landmarks = pre_ba_landmarks
+        line_segments = pre_ba_segments
+        did_bundle_adjust = False
+        post_ba_match_rmse = pre_ba_match_rmse
+
+    weak_after = [
+        match_id
+        for match_id, rmse in sorted(
+            ((match_id, post_ba_match_rmse.get(match_id, 0.0)) for match_id in free_match_ids),
+            key=lambda item: item[1],
+            reverse=True,
+        )
+        if rmse > 40.0
+    ][:1]
+    if weak_after:
+        _drop_matches(weak_after)
+        if not free_match_ids:
+            return SyncSolveResult(
+                similarities=identity_result,
+                landmarks={},
+                mean_reprojection_px=_mean_rmse(post_ba_match_rmse),
+                per_match_rmse_px=post_ba_match_rmse,
+                per_landmark_rmse_px={},
+                message=(
+                    "Sync rejected — every non-anchor camera stayed above 40 px. "
+                    "Uncheck On Ground on off-plane landmarks, or re-pick "
+                    "the worst landmarks"
+                ),
+                success=False,
+            )
+        landmarks, consistent_metric, line_segments = _rebuild_landmarks()
+
+    recovered: list[str] = []
+    if skipped_unregistered and landmarks:
+        cloud = dict(known_world)
+        cloud.update(landmarks)
+        ground_ids = _ground_like_landmark_ids(
+            cloud, observations_by_landmark_all
+        )
+        ground_cloud = {
+            landmark_id: cloud[landmark_id] for landmark_id in ground_ids
+        }
+        retry_kwargs = {
+            "observations_by_landmark": observations_by_landmark_all,
+            "matches": match_map,
+            "anchor_id": anchor_id,
+            "known_lines": known_lines,
+            "line_observations_by_landmark": line_observations_by_landmark_all,
+            "parallel_pairs": parallel_pairs,
+            "lock_rotation": lock_rotation,
+            "lock_translation": lock_translation,
+        }
+        for match_id in list(skipped_unregistered):
+            solved = _try_register_against_cloud(match_id, cloud, **retry_kwargs)
+            if solved is None:
+                # Off-plane picks can disagree with the joint cloud (a downward
+                # still vs side views of a lid). Floor tags alone still place it.
+                solved = _try_register_against_cloud(
+                    match_id, ground_cloud, **retry_kwargs
+                )
+            if solved is None:
+                continue
+            similarities[match_id] = solved
+            recovered.append(match_id)
+        if recovered:
+            recovered_set = set(recovered)
+            skipped_unregistered = [
+                match_id
+                for match_id in skipped_unregistered
+                if match_id not in recovered_set
+            ]
+            free_match_ids.extend(
+                match_id for match_id in recovered if match_id not in free_match_ids
+            )
+            skip = set(skipped_unregistered)
+            usable_observations = [
+                observation
+                for observation in valid_observations
+                if observation.match_id in similarities
+                and observation.match_id not in skip
+                and observation.landmark_id in landmarks
+            ]
+            observations_by_landmark = {}
+            for observation in usable_observations:
+                observations_by_landmark.setdefault(
+                    observation.landmark_id, []
+                ).append(observation)
+            line_observations_by_landmark = {
+                landmark_id: [
+                    item
+                    for item in items
+                    if item.match_id in similarities and item.match_id not in skip
+                ]
+                for landmark_id, items in line_observations_by_landmark_all.items()
+            }
+
     residual_landmark_ids = [
         landmark_id for landmark_id in landmark_ids if landmark_id in landmarks
     ]
@@ -5586,28 +6340,47 @@ def solve_landmark_sync(
         residual_observations,
         weighted=True,
     )
-    per_match_sse: dict[str, list[float]] = {match_id: [] for match_id in connected}
+    per_match_sse: dict[str, list[float]] = {
+        match_id: [] for match_id in similarities
+    }
     per_landmark_sse: dict[str, list[float]] = {
         landmark_id: [] for landmark_id in residual_landmark_ids
     }
+    recovered_set = set(recovered)
     residual_index = 0
+    joint_point_sse: list[float] = []
+    joint_weighted_sse: list[float] = []
     for observation in residual_observations:
         error_u = float(residuals[residual_index])
         error_v = float(residuals[residual_index + 1])
+        weighted_u = (
+            float(weighted_residuals[residual_index])
+            if weighted_residuals.size
+            else error_u
+        )
+        weighted_v = (
+            float(weighted_residuals[residual_index + 1])
+            if weighted_residuals.size
+            else error_v
+        )
         residual_index += 2
         squared = error_u * error_u + error_v * error_v
         per_match_sse[observation.match_id].append(squared)
         per_landmark_sse[observation.landmark_id].append(squared)
+        # A still recovered after peel can miss off-plane features; keep that
+        # in per-match Diagnose, not in the joint accept/reject RMSE.
+        if observation.match_id not in recovered_set:
+            joint_point_sse.append(squared)
+            joint_weighted_sse.append(weighted_u * weighted_u)
+            joint_weighted_sse.append(weighted_v * weighted_v)
 
     # Pose quality = point residuals only. Line px (esp. after Parallel lock)
     # is diagnostic and must not reject a good camera solve.
-    point_sse = [value for values in per_match_sse.values() for value in values]
+    point_sse = joint_point_sse
     per_match_point_sse = {
         match_id: list(values) for match_id, values in per_match_sse.items()
     }
-    weighted_point_sse = (
-        list(np.square(weighted_residuals)) if weighted_residuals.size else []
-    )
+    weighted_point_sse = joint_weighted_sse
 
     parallel_landmark_ids: set[str] = set()
     for landmark_a, landmark_b in parallel_pairs or ():
@@ -5784,6 +6557,9 @@ def solve_landmark_sync(
         message += " · scale from depth heuristic"
     if did_bundle_adjust:
         message += " · joint BA"
+    if recovered:
+        recovered_list = ", ".join(f"'{name}'" for name in sorted(recovered))
+        message += f" · recovered {recovered_list} after joint lock"
     if downweighted_ids:
         message += f" · downweighted {len(downweighted_ids)} outlier(s)"
     if parallel_angles_deg:
@@ -5795,6 +6571,11 @@ def solve_landmark_sync(
             message += " (direction locked)"
     if disconnected:
         message += f" · skipped {len(disconnected)} disconnected"
+    if skipped_unregistered:
+        pending_list = ", ".join(f"'{name}'" for name in sorted(skipped_unregistered))
+        message += f" · skipped {pending_list}"
+        if failure_detail:
+            message += f" ({failure_detail})"
     # Soft warn: accepted but likely inaccurate picks or intrinsics.
     if mean_rmse > 8.0:
         point_only_rmse = {

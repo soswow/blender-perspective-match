@@ -1,7 +1,11 @@
 TODOs to be done:
+- Some py files are 5K+ lines of code. Should they be broken up? Will this help with maintainability? And agent's effectiveness?
+- I want general thinking to be done on the topic of what can be done to improve future development using AI agents.
+- All AprilTag IDs should be 3 digit (or more if needed) long at minimum with 0 padding.
 
 Done TODOs:
 - Make Section with all PMs and their confedence dropdowns below "Pick Confedence" (including that main dropdown). All below "Pick in Active Match" button to be collapsable. And collapsed by default.
+- Collect agent debugging tools in-repo and point AGENTS.md at them (check in new probes when solving a problem).
 - Mark Ground landmarks with different color (maybe magenta-ish?)
 - Detect AprilTags from both DICT_APRILTAG_25h9 and DICT_APRILTAG_36h10, keeping family-qualified landmark names.
 - When I bulk add images, it doesn't pick all the things from camera intrinsicis. MAybe specifically all the imported Ks
