@@ -653,8 +653,15 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
         slack_row = sync_body.row(align=True)
         slack_row.use_property_split = False
         slack_row.prop(workspace, "ground_slack", text="Ground Slack")
+        opts_row = sync_body.row(align=True)
+        opts_row.use_property_split = False
+        opts_row.prop(workspace, "share_lens", text="Same Lens")
+        span = opts_row.row(align=True)
+        span.ui_units_x = 4
+        span.prop(workspace, "lens_refine_span_percent", text="%")
         refine_row = sync_body.row(align=True)
         if operators.lens_refine_is_running():
+            opts_row.enabled = False
             progress = refine_row.row(align=True)
             progress.enabled = False
             progress.prop(
@@ -674,11 +681,6 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
                 "perspective_match.refine_lenses",
                 icon="CAMERA_DATA",
             )
-            span = refine_row.row(align=True)
-            span.ui_units_x = 4
-            span.prop(workspace, "lens_refine_span_percent", text="%")
-            same = refine_row.row(align=True)
-            same.prop(workspace, "share_lens", text="Same Lens", toggle=True)
         empties_row = sync_body.row(align=True)
         empties_row.use_property_split = False
         empties_row.prop(workspace, "show_landmark_empties", text="Landmark Empties")

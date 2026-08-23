@@ -5,6 +5,12 @@ from __future__ import annotations
 import numpy as np
 
 from .. import geometry as core
+from .constants import (
+    ACCEPT_RMSE_PX,
+    TRIANGULATION_ANGLE_WEIGHT_FLOOR,
+    TRIANGULATION_GN_STEPS,
+    TRIANGULATION_PARALLEL_COSINE,
+)
 from .types import (
     SimilarityTransform,
     SyncLineObservation,
@@ -166,6 +172,68 @@ def camera_ray_private(
     return calibration.camera_center.copy(), direction_world
 
 
+def _unit_directions(directions: list[np.ndarray]) -> list[np.ndarray]:
+    """Return unit-length copies of ray directions."""
+    units: list[np.ndarray] = []
+    for direction in directions:
+        vector = np.asarray(direction, dtype=np.float64).reshape(3)
+        units.append(vector / max(float(np.linalg.norm(vector)), 1.0e-12))
+    return units
+
+
+def _triangulation_angle_weights(directions: list[np.ndarray]) -> list[float]:
+    """Weight each ray by sin² of its largest stereo angle, shared among near-parallel views."""
+    units = _unit_directions(directions)
+    weights: list[float] = []
+    for index, direction in enumerate(units):
+        best = TRIANGULATION_ANGLE_WEIGHT_FLOOR
+        similar = 1
+        for other_index, other in enumerate(units):
+            if other_index == index:
+                continue
+            cosine = float(np.clip(np.dot(direction, other), -1.0, 1.0))
+            sine_squared = 1.0 - cosine * cosine
+            if sine_squared > best:
+                best = sine_squared
+            if cosine > TRIANGULATION_PARALLEL_COSINE:
+                similar += 1
+        weights.append(best / similar)
+    return weights
+
+
+def _linear_ray_midpoint(
+    origins: list[np.ndarray],
+    directions: list[np.ndarray],
+    weights: list[float],
+) -> np.ndarray | None:
+    """Least-squares midpoint of skew rays (no cheirality)."""
+    if len(origins) < 2:
+        return None
+    accumulator = np.zeros((3, 3), dtype=np.float64)
+    rhs = np.zeros(3, dtype=np.float64)
+    for origin, direction, weight in zip(origins, directions, weights):
+        scale = max(float(weight), 1.0e-12)
+        projector = np.eye(3, dtype=np.float64) - np.outer(direction, direction)
+        accumulator += scale * projector
+        rhs += scale * (projector @ origin)
+    try:
+        point = np.linalg.solve(accumulator, rhs)
+    except np.linalg.LinAlgError:
+        return None
+    if not np.all(np.isfinite(point)):
+        return None
+    return point
+
+
+def _ray_is_in_front(
+    point: np.ndarray,
+    origin: np.ndarray,
+    direction: np.ndarray,
+) -> bool:
+    """True when ``point`` lies in front of the ray origin along ``direction``."""
+    return float(np.dot(point - origin, direction)) > 1.0e-8
+
+
 def triangulate_midpoint(
     origins: list[np.ndarray],
     directions: list[np.ndarray],
@@ -174,25 +242,153 @@ def triangulate_midpoint(
     """Triangulate a point as the least-squares midpoint of skew rays.
 
     Optional ``weights`` pull the result toward higher-confidence rays.
+    Near-parallel extra views are downweighted by triangulation angle.
+    Views that put the point behind the camera are dropped; ≥2 must remain.
     """
     if len(origins) < 2:
         return None
-    # Solve sum w (I - d d^T)(X - o) = 0 → A X = b
-    accumulator = np.zeros((3, 3), dtype=np.float64)
-    rhs = np.zeros(3, dtype=np.float64)
-    for index, (origin, direction) in enumerate(zip(origins, directions)):
-        weight = 1.0 if weights is None else max(float(weights[index]), 1.0e-12)
-        direction = direction / max(float(np.linalg.norm(direction)), 1.0e-12)
-        projector = np.eye(3, dtype=np.float64) - np.outer(direction, direction)
-        accumulator += weight * projector
-        rhs += weight * (projector @ origin)
-    try:
-        point = np.linalg.solve(accumulator, rhs)
-    except np.linalg.LinAlgError:
+    units = _unit_directions(directions)
+    angle_weights = _triangulation_angle_weights(units)
+    observation_weights = (
+        [1.0] * len(origins) if weights is None else [float(value) for value in weights]
+    )
+    combined = [
+        max(obs, 1.0e-12) * angle
+        for obs, angle in zip(observation_weights, angle_weights)
+    ]
+    point = _linear_ray_midpoint(origins, units, combined)
+    if point is None:
         return None
-    if not np.all(np.isfinite(point)):
+    keep = [
+        index
+        for index, (origin, direction) in enumerate(zip(origins, units))
+        if _ray_is_in_front(point, origin, direction)
+    ]
+    if len(keep) < 2:
         return None
+    if len(keep) < len(origins):
+        point = _linear_ray_midpoint(
+            [origins[index] for index in keep],
+            [units[index] for index in keep],
+            [combined[index] for index in keep],
+        )
+        if point is None:
+            return None
+        keep = [
+            index
+            for index in keep
+            if _ray_is_in_front(
+                point, origins[index], units[index]
+            )
+        ]
+        if len(keep) < 2:
+            return None
     return point
+
+
+def refine_triangulated_point(
+    point: np.ndarray,
+    observations: list[SyncObservation],
+    similarities: dict[str, SimilarityTransform],
+    matches: dict[str, SyncMatchInput],
+    *,
+    steps: int | None = None,
+) -> np.ndarray | None:
+    """Gauss–Newton on pixel reprojection; drops views that put the point behind."""
+    xyz = np.asarray(point, dtype=np.float64).reshape(3).copy()
+    iteration_count = TRIANGULATION_GN_STEPS if steps is None else int(steps)
+
+    def project_observation(observation: SyncObservation, candidate: np.ndarray):
+        private = similarities[observation.match_id].inverse_point(candidate)
+        return project_private_point(
+            private, matches[observation.match_id].calibration
+        )
+
+    def in_front(observation: SyncObservation, candidate: np.ndarray) -> bool:
+        return project_observation(observation, candidate) is not None
+
+    kept = [item for item in observations if in_front(item, xyz)]
+    if len(kept) < 2:
+        return None
+
+    def residual_px(observation: SyncObservation, candidate: np.ndarray) -> float | None:
+        projected = project_observation(observation, candidate)
+        if projected is None:
+            return None
+        return float(
+            np.hypot(
+                float(projected[0]) - float(observation.u),
+                float(projected[1]) - float(observation.v),
+            )
+        )
+
+    def inliers(candidate: np.ndarray) -> list[SyncObservation]:
+        selected: list[SyncObservation] = []
+        for item in observations:
+            error = residual_px(item, candidate)
+            if error is not None and error <= ACCEPT_RMSE_PX:
+                selected.append(item)
+        return selected if len(selected) >= 2 else [
+            item for item in observations if in_front(item, candidate)
+        ]
+
+    best = xyz.copy()
+    best_cost = float("inf")
+    for _ in range(max(iteration_count, 0)):
+        kept = inliers(xyz)
+        if len(kept) < 2:
+            break
+        residuals: list[float] = []
+        jacobian_rows: list[list[float]] = []
+        for observation in kept:
+            projected = project_observation(observation, xyz)
+            if projected is None:
+                continue
+            scale = float(np.sqrt(max(float(observation.weight), 1.0e-12)))
+            residuals.extend(
+                (
+                    scale * (float(projected[0]) - float(observation.u)),
+                    scale * (float(projected[1]) - float(observation.v)),
+                )
+            )
+            row_u: list[float] = []
+            row_v: list[float] = []
+            for axis in range(3):
+                offset = np.zeros(3, dtype=np.float64)
+                offset[axis] = 1.0e-5
+                shifted = project_observation(observation, xyz + offset)
+                if shifted is None:
+                    row_u.append(0.0)
+                    row_v.append(0.0)
+                    continue
+                row_u.append(
+                    scale * (float(shifted[0]) - float(projected[0])) / 1.0e-5
+                )
+                row_v.append(
+                    scale * (float(shifted[1]) - float(projected[1])) / 1.0e-5
+                )
+            jacobian_rows.append(row_u)
+            jacobian_rows.append(row_v)
+        if len(residuals) < 4:
+            break
+        residual_vector = np.asarray(residuals, dtype=np.float64)
+        jacobian = np.asarray(jacobian_rows, dtype=np.float64)
+        cost = float(np.dot(residual_vector, residual_vector))
+        if cost <= best_cost:
+            best_cost = cost
+            best = xyz.copy()
+        try:
+            update, *_rest = np.linalg.lstsq(jacobian, residual_vector, rcond=None)
+        except np.linalg.LinAlgError:
+            break
+        xyz = xyz - update
+        if float(np.linalg.norm(update)) < 1.0e-9:
+            break
+    if sum(1 for item in observations if in_front(item, best)) >= 2:
+        return best
+    if sum(1 for item in observations if in_front(item, xyz)) >= 2:
+        return xyz
+    return None
 
 
 def _image_line_homogeneous(u1: float, v1: float, u2: float, v2: float) -> np.ndarray | None:

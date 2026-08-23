@@ -811,3 +811,41 @@ class PoseSyncTests(unittest.TestCase):
         self.assertIsNotNone(best_center)
         self.assertTrue(np.allclose(best_center, camera_center, atol=0.08))
 
+
+    def test_easiest_pending_order_is_not_alphabetical(self) -> None:
+        """A still with more overlap against registered views is tried first."""
+        intrinsics = core.CameraIntrinsics(
+            fx=800.0, fy=800.0, cx=400.0, cy=300.0, image_width=800, image_height=600
+        )
+        calibration = core.Calibration(
+            intrinsics, np.eye(3, dtype=np.float64), np.zeros(3, dtype=np.float64)
+        )
+        matches = {
+            match_id: sync.SyncMatchInput(match_id, calibration)
+            for match_id in ("anchor", "aaa", "zzz")
+        }
+        observations_by_landmark: dict[str, list[sync.SyncObservation]] = {}
+        for index in range(8):
+            landmark_id = f"strong_{index}"
+            observations_by_landmark[landmark_id] = [
+                sync.SyncObservation("anchor", landmark_id, 80.0 + 80.0 * index, 80.0),
+                sync.SyncObservation("zzz", landmark_id, 100.0 + 70.0 * index, 90.0),
+            ]
+        for index in range(5):
+            landmark_id = f"weak_{index}"
+            observations_by_landmark[landmark_id] = [
+                sync.SyncObservation("anchor", landmark_id, 200.0 + 10.0 * index, 200.0),
+                sync.SyncObservation("aaa", landmark_id, 210.0 + 10.0 * index, 205.0),
+            ]
+        order = sync._easiest_pending_order(
+            ["aaa", "zzz"],
+            ["anchor"],
+            {"aaa": {}, "zzz": {}},
+            observations_by_landmark,
+            matches,
+            {},
+            set(),
+        )
+        self.assertEqual(order[0], "zzz")
+        self.assertEqual(order[1], "aaa")
+

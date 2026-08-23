@@ -22,7 +22,7 @@ Your current scene (imported YAML `K`, ~72 landmarks, boarded veranda as “grou
 | 8 | Optional hard-drop of persistent outliers | You do not want silent drops | Checkbox **off** |
 | 9 | Diverse landmark subset + holdout validation | Experimental; do not change the main solve until 1–6 | Diagnose first |
 
-Items 1–3 are **implemented** (Same Lens Refine Lenses, Ground Slack, thaw 3D). Walk remaining items in order unless a later item is blocking a test you want to run now.
+Items 1–5 are **implemented** (Same Lens Refine Lenses, Ground Slack, thaw 3D, strongest-edge seed + easiest-next camera, N-view triangulation prior). Walk remaining items in order unless a later item is blocking a test you want to run now.
 
 ---
 
@@ -49,7 +49,7 @@ If a still has **no usable VP lines**, it is frozen and Refine Lenses will not m
 
 **Proposal**
 
-- Checkbox on the Refine Lenses row: **All images as same lens** (default **on**).
+- Checkbox above the Refine Lenses button: **Same Lens** (default **on**), then the % search window on that same row.
 - When on, search **one** `fx` (apply to every unfrozen still; remap if plate sizes differ the same way copy-K already does).
 - When off, keep today’s per-still search (mixed cameras / zooms).
 - New search path that **does not need VP lines**: leave each still’s orientation as already solved, vary shared `fx`/`fy`, re-run Solve Sync. YAML-only scenes can use this. If VP lines exist, keep the VP prior as a regularizer so the shared focal cannot fly away.

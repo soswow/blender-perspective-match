@@ -317,6 +317,145 @@ class BundleAdjustSyncTests(unittest.TestCase):
         self.assertIn("thaw 3D", result.message)
 
 
+    def test_triangulation_downweights_nearly_parallel_view(self) -> None:
+        """A grazing extra ray must not pull the point off the strong stereo pair."""
+        intrinsics = core.CameraIntrinsics(
+            fx=800.0, fy=800.0, cx=400.0, cy=300.0, image_width=800, image_height=600
+        )
+        point = np.array((0.0, 0.0, 0.0), dtype=np.float64)
+        left = core.Calibration(
+            intrinsics,
+            _look_at_rotation(np.array((-2.0, 0.0, 2.0)), point),
+            np.array((-2.0, 0.0, 2.0), dtype=np.float64),
+        )
+        right = core.Calibration(
+            intrinsics,
+            _look_at_rotation(np.array((2.0, 0.0, 2.0)), point),
+            np.array((2.0, 0.0, 2.0), dtype=np.float64),
+        )
+        grazing = core.Calibration(
+            intrinsics,
+            _look_at_rotation(np.array((-1.95, 0.02, 2.02)), point),
+            np.array((-1.95, 0.02, 2.02), dtype=np.float64),
+        )
+        origins = []
+        directions = []
+        for calibration in (left, right, grazing):
+            projected = sync.project_private_point(point, calibration)
+            self.assertIsNotNone(projected)
+            origin, direction = sync.camera_ray_private(
+                float(projected[0]), float(projected[1]), calibration
+            )
+            origins.append(origin)
+            directions.append(direction)
+        lateral = np.cross(directions[2], np.array((0.0, 0.0, 1.0)))
+        lateral = lateral / max(float(np.linalg.norm(lateral)), 1.0e-12)
+        origins[2] = origins[2] + 0.35 * lateral
+        units = [item / max(float(np.linalg.norm(item)), 1.0e-12) for item in directions]
+        naive = sync._linear_ray_midpoint(origins, units, [1.0, 1.0, 1.0])
+        stereo = sync.triangulate_midpoint(origins[:2], directions[:2])
+        with_grazing = sync.triangulate_midpoint(origins, directions)
+        self.assertIsNotNone(naive)
+        self.assertIsNotNone(stereo)
+        self.assertIsNotNone(with_grazing)
+        naive_error = float(np.linalg.norm(naive - stereo))
+        weighted_error = float(np.linalg.norm(with_grazing - stereo))
+        self.assertGreater(naive_error, 1.0e-4)
+        self.assertLess(weighted_error, 0.85 * naive_error)
+
+
+    def test_triangulation_drops_behind_camera_view(self) -> None:
+        """A view that places the point behind the camera is ignored."""
+        intrinsics = core.CameraIntrinsics(
+            fx=800.0, fy=800.0, cx=400.0, cy=300.0, image_width=800, image_height=600
+        )
+        point = np.array((0.0, 0.0, 0.0), dtype=np.float64)
+        left = core.Calibration(
+            intrinsics,
+            _look_at_rotation(np.array((-2.0, 0.0, 2.0)), point),
+            np.array((-2.0, 0.0, 2.0), dtype=np.float64),
+        )
+        right = core.Calibration(
+            intrinsics,
+            _look_at_rotation(np.array((2.0, 0.0, 2.0)), point),
+            np.array((2.0, 0.0, 2.0), dtype=np.float64),
+        )
+        behind = core.Calibration(
+            intrinsics,
+            _look_at_rotation(np.array((0.0, 0.0, -2.0)), np.array((0.0, 0.0, -4.0))),
+            np.array((0.0, 0.0, -2.0), dtype=np.float64),
+        )
+        origins = []
+        directions = []
+        for calibration in (left, right):
+            projected = sync.project_private_point(point, calibration)
+            origin, direction = sync.camera_ray_private(
+                float(projected[0]), float(projected[1]), calibration
+            )
+            origins.append(origin)
+            directions.append(direction)
+        origins.append(behind.camera_center.copy())
+        directions.append(np.array((0.0, 0.0, -1.0), dtype=np.float64))
+        stereo = sync.triangulate_midpoint(origins[:2], directions[:2])
+        with_behind = sync.triangulate_midpoint(origins, directions)
+        self.assertIsNotNone(stereo)
+        self.assertIsNotNone(with_behind)
+        self.assertTrue(np.allclose(with_behind, stereo, atol=0.05))
+
+
+    def test_refine_triangulation_drops_outlier_observation(self) -> None:
+        """Gauss–Newton must ignore a view whose pick is tens of pixels off."""
+        intrinsics = core.CameraIntrinsics(
+            fx=800.0, fy=800.0, cx=400.0, cy=300.0, image_width=800, image_height=600
+        )
+        point = np.array((0.0, 0.0, 0.5), dtype=np.float64)
+        cameras = {
+            "left": core.Calibration(
+                intrinsics,
+                _look_at_rotation(np.array((-2.0, 0.0, 2.0)), point),
+                np.array((-2.0, 0.0, 2.0), dtype=np.float64),
+            ),
+            "right": core.Calibration(
+                intrinsics,
+                _look_at_rotation(np.array((2.0, 0.0, 2.0)), point),
+                np.array((2.0, 0.0, 2.0), dtype=np.float64),
+            ),
+            "front": core.Calibration(
+                intrinsics,
+                _look_at_rotation(np.array((0.0, -2.0, 2.0)), point),
+                np.array((0.0, -2.0, 2.0), dtype=np.float64),
+            ),
+        }
+        similarities = {
+            match_id: sync.SimilarityTransform() for match_id in cameras
+        }
+        matches = {
+            match_id: sync.SyncMatchInput(match_id, calibration)
+            for match_id, calibration in cameras.items()
+        }
+        observations = []
+        origins = []
+        directions = []
+        for match_id, calibration in cameras.items():
+            projected = sync.project_private_point(point, calibration)
+            u_coord, v_coord = float(projected[0]), float(projected[1])
+            if match_id == "front":
+                u_coord += 80.0
+            observations.append(
+                sync.SyncObservation(match_id, "p0", u_coord, v_coord)
+            )
+            origin, direction = sync.camera_ray_private(u_coord, v_coord, calibration)
+            origins.append(origin)
+            directions.append(direction)
+        seed = sync.triangulate_midpoint(origins[:2], directions[:2])
+        self.assertIsNotNone(seed)
+        refined = sync.refine_triangulated_point(
+            seed, observations, similarities, matches
+        )
+        self.assertIsNotNone(refined)
+        self.assertLess(float(np.linalg.norm(refined - point)), 0.08)
+
+
 def _cluster_and_edge_scene() -> tuple:
     """Many central ground tags, few elevated edge tags, slightly long fx."""
     true_fx = 900.0

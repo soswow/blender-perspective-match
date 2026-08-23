@@ -1,5 +1,5 @@
 TODOs to be done:
-- Sync accuracy / reconstruction pipeline: walk `docs/sync-accuracy-plan.md` (same-lens Refine Lenses, ground slack, thaw 3D, strongest-edge seed, pose graph, optional outlier drop, holdout subset).
+- Sync accuracy / reconstruction pipeline: walk `docs/sync-accuracy-plan.md` (items 1–5 done; next is pose graph, then optional outlier drop and holdout subset).
 - I think we need some sort of indication somewhere in Sync section that would tell if current PM was successfully synced during last sync session. Right now it's unclear.
 
 Done TODOs:

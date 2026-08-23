@@ -843,7 +843,7 @@ class PMWorkspace(bpy.types.PropertyGroup):
         precision=0,
     )
     share_lens: bpy.props.BoolProperty(
-        name="All Images Same Lens",
+        name="Same Lens",
         description=(
             "When refining lenses, search one shared focal scale for every "
             "sync-enabled still (same physical camera). Turn off to search "

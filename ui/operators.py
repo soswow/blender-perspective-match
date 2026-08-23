@@ -2997,7 +2997,7 @@ class PM_OT_refine_lenses(bpy.types.Operator):
     bl_label = "Refine Lenses"
     bl_description = (
         "Search focal length so landmark sync and VP lines agree better, "
-        "then Solve Sync. With All Images Same Lens, one scale is applied "
+        "then Solve Sync. With Same Lens, one scale is applied "
         "to every still (works without VP lines). Otherwise each unlocked "
         "match is searched on its own. Runs in the background — Esc or "
         "Cancel Refine to stop"

@@ -22,6 +22,7 @@ from .projection import (
     _skew,
     camera_ray_private,
     project_private_point,
+    refine_triangulated_point,
     triangulate_midpoint,
 )
 from .types import (
@@ -231,7 +232,13 @@ def _triangulate_landmarks(
         point = triangulate_midpoint(origins, directions, weights)
         if point is None:
             continue
-        landmarks[landmark_id] = point
+        refined = refine_triangulated_point(
+            point,
+            registered_observations,
+            similarities,
+            matches,
+        )
+        landmarks[landmark_id] = point if refined is None else refined
     return landmarks
 
 

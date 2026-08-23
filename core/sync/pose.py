@@ -3078,6 +3078,271 @@ def _bridge_pose_candidates(
     return candidates
 
 
+def _image_spread_px(points: np.ndarray) -> float:
+    """Second singular value of centered 2D picks (cross-spread, pixels)."""
+    if len(points) < 3:
+        return 0.0
+    centered = points - points.mean(axis=0)
+    _u_matrix, singular, _vt_matrix = np.linalg.svd(centered, full_matrices=False)
+    if singular.size < 2:
+        return 0.0
+    return float(singular[1])
+
+
+def _pair_geometry_score(
+    pairs: list[tuple[SyncObservation, SyncObservation]],
+) -> tuple[float, float, int] | None:
+    """Return ``(disparity, min_spread, overlap)`` when the pair can register."""
+    if len(pairs) < 5:
+        return None
+    if _correspondence_geometry_issue(pairs, "_") is not None:
+        return None
+    points_a = np.array(
+        [(obs_a.u, obs_a.v) for obs_a, _obs_b in pairs],
+        dtype=np.float64,
+    )
+    points_b = np.array(
+        [(obs_b.u, obs_b.v) for _obs_a, obs_b in pairs],
+        dtype=np.float64,
+    )
+    spread = min(_image_spread_px(points_a), _image_spread_px(points_b))
+    deltas = points_b - points_a
+    magnitudes = np.hypot(deltas[:, 0], deltas[:, 1])
+    # Lower-percentile flow so a few mismatched picks cannot look like a wide baseline.
+    disparity = float(np.percentile(magnitudes, 40))
+    return (disparity, spread, len(pairs))
+
+
+def _pair_reprojection_rmse(
+    relative: SimilarityTransform,
+    pairs: list[tuple[SyncObservation, SyncObservation]],
+    calibration_a: core.Calibration,
+    calibration_b: core.Calibration,
+) -> float:
+    """Weighted pair RMSE for a solved 2D↔2D relative pose."""
+    errors = _reprojection_errors_for_similarity(
+        relative,
+        pairs,
+        calibration_a,
+        calibration_b,
+        [],
+        [],
+        weighted=True,
+    )
+    if not errors:
+        return float("inf")
+    return float(np.sqrt(np.mean(np.square(errors))))
+
+
+def _iter_pair_edges(
+    match_ids: list[str],
+    observations_by_landmark: dict[str, list[SyncObservation]],
+    known_world_ids: set[str],
+) -> list[
+    tuple[tuple[float, float, int], str, str, list[tuple[SyncObservation, SyncObservation]]]
+]:
+    """Undirected well-spread 2D edges, strongest geometry first."""
+    edges: list[
+        tuple[
+            tuple[float, float, int],
+            str,
+            str,
+            list[tuple[SyncObservation, SyncObservation]],
+        ]
+    ] = []
+    for id_a, id_b in combinations(sorted(match_ids), 2):
+        pairs = _point_pairs_between_matches(
+            id_a,
+            id_b,
+            observations_by_landmark,
+            excluded_landmark_ids=known_world_ids,
+        )
+        score = _pair_geometry_score(pairs)
+        if score is None:
+            continue
+        edges.append((score, id_a, id_b, pairs))
+    edges.sort(key=lambda item: item[0], reverse=True)
+    return edges
+
+
+def _connected_component(adjacency: dict[str, list[str]], start_id: str) -> set[str]:
+    """Undirected BFS component containing ``start_id``."""
+    component: set[str] = set()
+    stack = [start_id]
+    while stack:
+        node = stack.pop()
+        if node in component:
+            continue
+        component.add(node)
+        stack.extend(adjacency.get(node, []))
+    return component
+
+
+def _seed_from_strongest_pair(
+    anchor_id: str,
+    pending: set[str],
+    similarities: dict[str, SimilarityTransform],
+    observations_by_landmark: dict[str, list[SyncObservation]],
+    matches: dict[str, SyncMatchInput],
+    known_world_ids: set[str],
+    failure_details: list[str],
+    *,
+    use_pose_cache: bool,
+    solve_vs_anchor,
+) -> None:
+    """Register one camera from the strongest pair via the usual vs-anchor solver.
+
+    A non-anchor strongest pair still enters through the member that best
+    connects to the anchor. Later cameras join via easiest-next bridges so a
+    wide-baseline pair is not discarded just because both stills also see the
+    anchor.
+    """
+    if len(similarities) > 1:
+        return
+    match_ids = [anchor_id, *pending]
+    edges = _iter_pair_edges(match_ids, observations_by_landmark, known_world_ids)
+    if not edges:
+        return
+    adjacency: dict[str, list[str]] = {match_id: [] for match_id in match_ids}
+    for _score, id_a, id_b, _pairs in edges:
+        adjacency[id_a].append(id_b)
+        adjacency[id_b].append(id_a)
+    component = _connected_component(adjacency, anchor_id)
+    component_edges = [
+        item
+        for item in edges
+        if item[1] in component and item[2] in component
+    ]
+    if not component_edges:
+        return
+    scored_edges: list[
+        tuple[float, tuple[float, float, int], str, str]
+    ] = []
+    for geometry, id_a, id_b, pairs in component_edges[:4]:
+        relative = _solve_relative_from_pairs(
+            pairs,
+            matches[id_a].calibration,
+            matches[id_b].calibration,
+            use_pose_cache=use_pose_cache,
+        )
+        rmse = float("inf")
+        if relative is not None:
+            rmse = _pair_reprojection_rmse(
+                relative,
+                pairs,
+                matches[id_a].calibration,
+                matches[id_b].calibration,
+            )
+        scored_edges.append((rmse, geometry, id_a, id_b))
+    accepted = [
+        item for item in scored_edges if item[0] <= ACCEPT_RMSE_PX
+    ]
+    pool = accepted if accepted else scored_edges
+    pool.sort(
+        key=lambda item: (item[0], -item[1][0], -item[1][1], -item[1][2])
+    )
+    _rmse, _geometry, id_a, id_b = pool[0]
+    if anchor_id in (id_a, id_b):
+        first_id = id_b if id_a == anchor_id else id_a
+    else:
+        vs_a = _pair_geometry_score(
+            _point_pairs_between_matches(
+                anchor_id,
+                id_a,
+                observations_by_landmark,
+                excluded_landmark_ids=known_world_ids,
+            )
+        )
+        vs_b = _pair_geometry_score(
+            _point_pairs_between_matches(
+                anchor_id,
+                id_b,
+                observations_by_landmark,
+                excluded_landmark_ids=known_world_ids,
+            )
+        )
+        if vs_a is None and vs_b is None:
+            first_id = None
+            seen = {anchor_id}
+            queue = list(adjacency.get(anchor_id, []))
+            while queue:
+                node = queue.pop(0)
+                if node in seen:
+                    continue
+                seen.add(node)
+                if node in (id_a, id_b):
+                    first_id = node
+                    break
+                queue.extend(adjacency.get(node, []))
+            if first_id is None:
+                return
+        elif vs_a is None:
+            first_id = id_b
+        elif vs_b is None:
+            first_id = id_a
+        else:
+            first_id = id_a if vs_a >= vs_b else id_b
+    match_id, solved, detail = solve_vs_anchor(first_id)
+    if solved is None:
+        if detail:
+            failure_details.append(detail)
+        return
+    similarities[match_id] = solved
+    pending.discard(match_id)
+
+
+def _easiest_pending_order(
+    pending_ids: list[str],
+    registered_ids: list[str],
+    relatives_by_match: dict[str, dict[str, SimilarityTransform | None]],
+    observations_by_landmark: dict[str, list[SyncObservation]],
+    matches: dict[str, SyncMatchInput],
+    landmarks: dict[str, np.ndarray],
+    known_world_ids: set[str],
+) -> list[str]:
+    """Pending cameras easiest to add next (never alphabetical except ties)."""
+    keys: list[tuple] = []
+    for match_id in pending_ids:
+        overlap_ids: set[str] = set()
+        best_rmse = float("inf")
+        best_geometry = (0.0, 0.0, 0)
+        for reference_id in registered_ids:
+            pairs = _point_pairs_between_matches(
+                reference_id,
+                match_id,
+                observations_by_landmark,
+                excluded_landmark_ids=known_world_ids,
+            )
+            for obs_a, _obs_b in pairs:
+                overlap_ids.add(obs_a.landmark_id)
+            geometry = _pair_geometry_score(pairs)
+            relative = relatives_by_match.get(match_id, {}).get(reference_id)
+            rmse = float("inf")
+            if relative is not None and geometry is not None:
+                rmse = _pair_reprojection_rmse(
+                    relative,
+                    pairs,
+                    matches[reference_id].calibration,
+                    matches[match_id].calibration,
+                )
+            if geometry is not None and (
+                rmse < best_rmse
+                or (rmse == best_rmse and geometry > best_geometry)
+            ):
+                best_rmse = rmse
+                best_geometry = geometry
+        collected = _collect_pnp_correspondences(
+            match_id, observations_by_landmark, landmarks
+        )
+        pnp_count = 0 if collected is None else len(collected[0])
+        overlap = max(len(overlap_ids), pnp_count)
+        disparity, spread, count = best_geometry
+        keys.append(
+            (-overlap, best_rmse, -disparity, -spread, -count, match_id)
+        )
+    keys.sort()
+    return [item[-1] for item in keys]
+
 
 def _register_from_relative_pose(
     anchor_id: str,
@@ -3173,18 +3438,31 @@ def _register_from_relative_pose(
         )
         return match_id, solved, detail
 
-    direct_ids = [
-        match_id
-        for match_id in sorted(pending)
-        if strong_anchor_support(match_id)
-    ]
-    for match_id, solved, detail in _map_pair_jobs(solve_vs_anchor, direct_ids):
-        if solved is None:
-            if detail:
-                failure_details.append(detail)
-            continue
-        similarities[match_id] = solved
-        pending.discard(match_id)
+    if lock_rotation or lock_translation:
+        direct_ids = [
+            match_id
+            for match_id in sorted(pending)
+            if strong_anchor_support(match_id)
+        ]
+        for match_id, solved, detail in _map_pair_jobs(solve_vs_anchor, direct_ids):
+            if solved is None:
+                if detail:
+                    failure_details.append(detail)
+                continue
+            similarities[match_id] = solved
+            pending.discard(match_id)
+    else:
+        _seed_from_strongest_pair(
+            anchor_id,
+            pending,
+            similarities,
+            observations_by_landmark,
+            matches,
+            known_world_ids,
+            failure_details,
+            use_pose_cache=use_pose_cache,
+            solve_vs_anchor=solve_vs_anchor,
+        )
 
     max_passes = len(pending) + 1
     for _pass in range(max_passes):
@@ -3205,7 +3483,7 @@ def _register_from_relative_pose(
                 known_world,
             )
         )
-        pending_now = sorted(pending)
+        pending_now = list(pending)
         relatives_by_match: dict[str, dict[str, SimilarityTransform | None]] = {
             match_id: {} for match_id in pending_now
         }
@@ -3238,7 +3516,15 @@ def _register_from_relative_pose(
             ):
                 relatives_by_match.setdefault(match_id, {})[reference_id] = relative
 
-        for match_id in pending_now:
+        for match_id in _easiest_pending_order(
+            pending_now,
+            list(similarities.keys()),
+            relatives_by_match,
+            observations_by_landmark,
+            matches,
+            landmarks,
+            known_world_ids,
+        ):
             collected = _collect_pnp_correspondences(
                 match_id,
                 observations_by_landmark,
@@ -3279,7 +3565,13 @@ def _register_from_relative_pose(
                 )
             solved = None
             pose_candidates: list[SimilarityTransform] = []
-            if collected is not None:
+            if strong_anchor_support(match_id):
+                _match_id, vs_solved, vs_detail = solve_vs_anchor(match_id)
+                if vs_solved is not None:
+                    solved = vs_solved
+                elif vs_detail:
+                    failure_details.append(vs_detail)
+            if solved is None and collected is not None:
                 points_shared, points_image = collected
                 pnp_candidate = _pnp_similarity(
                     match_id,
@@ -3304,7 +3596,7 @@ def _register_from_relative_pose(
                 if pnp_candidate is not None:
                     pose_candidates.append(pnp_candidate)
 
-            if not lock_rotation and not lock_translation:
+            if solved is None and not lock_rotation and not lock_translation:
                 pose_candidates.extend(
                     _bridge_pose_candidates(
                         match_id,
@@ -3318,33 +3610,34 @@ def _register_from_relative_pose(
                     )
                 )
 
-            ranked_candidates: list[
-                tuple[float, float, SimilarityTransform]
-            ] = []
-            for candidate in pose_candidates:
-                graph_rmse = _registration_candidate_rmse(
-                    match_id,
-                    candidate,
-                    similarities,
-                    observations_by_landmark,
-                    matches,
-                    landmarks,
-                    known_world_ids=known_world_ids,
-                )
-                strong_pair_rmse = _registration_strong_pair_rmse(
-                    match_id,
-                    candidate,
-                    similarities,
-                    observations_by_landmark,
-                    matches,
-                    known_world_ids=known_world_ids,
-                )
-                ranked_candidates.append(
-                    (strong_pair_rmse, graph_rmse, candidate)
-                )
-            selected = _select_registration_candidate(ranked_candidates)
-            if selected is not None:
-                solved = selected
+            if solved is None:
+                ranked_candidates: list[
+                    tuple[float, float, SimilarityTransform]
+                ] = []
+                for candidate in pose_candidates:
+                    graph_rmse = _registration_candidate_rmse(
+                        match_id,
+                        candidate,
+                        similarities,
+                        observations_by_landmark,
+                        matches,
+                        landmarks,
+                        known_world_ids=known_world_ids,
+                    )
+                    strong_pair_rmse = _registration_strong_pair_rmse(
+                        match_id,
+                        candidate,
+                        similarities,
+                        observations_by_landmark,
+                        matches,
+                        known_world_ids=known_world_ids,
+                    )
+                    ranked_candidates.append(
+                        (strong_pair_rmse, graph_rmse, candidate)
+                    )
+                selected = _select_registration_candidate(ranked_candidates)
+                if selected is not None:
+                    solved = selected
 
             if solved is None and len(line_constraints) >= 3:
                 for seed in _mixed_pose_seeds(
@@ -3383,28 +3676,16 @@ def _register_from_relative_pose(
             similarities[match_id] = solved
             pending.discard(match_id)
             progressed = True
+            break
         if not progressed:
-            # Preserve minimal direct-anchor workflows as a fallback, but do
-            # not let a weak direct pose override a stronger registered-view
-            # bridge that merely failed its whole-graph quality check.
-            fallback_ids = []
-            for match_id in sorted(pending):
-                has_pair_bridge = any(
-                    len(
-                        _point_pairs_between_matches(
-                            reference_id,
-                            match_id,
-                            observations_by_landmark,
-                            excluded_landmark_ids=known_world_ids,
-                        )
-                    )
-                    >= 5
-                    for reference_id in similarities
-                    if reference_id != anchor_id
-                )
-                if has_pair_bridge:
-                    continue
-                fallback_ids.append(match_id)
+            # Pairwise bridges already ran for every pending still. Retry the
+            # mixed vs-anchor solver (On Ground / Known 3D) for cameras that
+            # still have no pose — including those with a non-anchor pair.
+            fallback_ids = [
+                match_id
+                for match_id in pending
+                if strong_anchor_support(match_id)
+            ]
             for match_id, solved, detail in _map_pair_jobs(
                 solve_vs_anchor, fallback_ids
             ):

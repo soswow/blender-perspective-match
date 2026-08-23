@@ -42,3 +42,10 @@ SPATIAL_GRID_SIZE = 3
 SPATIAL_WEIGHT_CLIP = 4.0
 # Extra leverage for picks far from the principal point: 1 + gain * r_norm^2.
 RADIAL_WEIGHT_GAIN = 2.0
+
+# N-view triangulation: Gauss–Newton reprojection steps after the linear midpoint.
+TRIANGULATION_GN_STEPS = 4
+# Floor on sin²(angle) so a near-parallel extra view cannot zero a ray weight.
+TRIANGULATION_ANGLE_WEIGHT_FLOOR = 1.0e-3
+# Rays with direction cosine above this share one stereo weight (same viewpoint).
+TRIANGULATION_PARALLEL_COSINE = 0.995
