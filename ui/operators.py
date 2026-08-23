@@ -2996,10 +2996,11 @@ class PM_OT_refine_lenses(bpy.types.Operator):
     bl_idname = "perspective_match.refine_lenses"
     bl_label = "Refine Lenses"
     bl_description = (
-        "Search each unlocked match's focal length (re-orient from VP lines) "
-        "to lower sync reprojection error, then Solve Sync. "
-        "Runs in the background — Esc or Cancel Refine to stop. "
-        "Skips 1-point matches and matches without enough VP lines"
+        "Search focal length so landmark sync and VP lines agree better, "
+        "then Solve Sync. With All Images Same Lens, one scale is applied "
+        "to every still (works without VP lines). Otherwise each unlocked "
+        "match is searched on its own. Runs in the background — Esc or "
+        "Cancel Refine to stop"
     )
     bl_options = {"REGISTER", "UNDO"}
 
@@ -3027,8 +3028,14 @@ class PM_OT_refine_lenses(bpy.types.Operator):
 
         from ..core import lens_refine
 
-        free_count = sum(1 for item in prep.lens_inputs if not item.freeze_focal)
-        total = lens_refine.estimate_refine_evaluation_count(free_count)
+        if prep.share_lens:
+            search_count = len(prep.lens_inputs)
+        else:
+            search_count = sum(1 for item in prep.lens_inputs if not item.freeze_focal)
+        total = lens_refine.estimate_refine_evaluation_count(
+            search_count,
+            share_lens=bool(prep.share_lens),
+        )
         cancel_event = threading.Event()
         result_box: dict = {"done": False}
         progress_state = {"step": 0, "total": max(total, 1), "label": "Starting…"}
@@ -3066,6 +3073,8 @@ class PM_OT_refine_lenses(bpy.types.Operator):
                     fx_span=prep.fx_span,
                     lock_rotation=prep.lock_rotation,
                     lock_translation=prep.lock_translation,
+                    share_lens=prep.share_lens,
+                    ground_slack=prep.ground_slack,
                     cancel_check=cancel_event.is_set,
                     progress_callback=_on_progress,
                 )

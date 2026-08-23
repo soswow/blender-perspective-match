@@ -1243,12 +1243,21 @@ def _consistent_metric_landmarks(
     metric: dict[str, np.ndarray],
     triangulated: dict[str, np.ndarray],
     known_world_ids: set[str],
+    *,
+    ground_slack: float = 0.0,
 ) -> dict[str, np.ndarray]:
-    """Keep Known 3D always; keep On Ground only when triangulation agrees."""
+    """Keep Known 3D always; keep On Ground only when triangulation agrees.
+
+    ``ground_slack > 0`` leaves On Ground free so joint BA can pull Z toward
+    the plane with a spring instead of pinning the Z=0 raycast.
+    """
     consistent: dict[str, np.ndarray] = {}
+    slack = max(float(ground_slack), 0.0)
     for landmark_id, point in metric.items():
         if landmark_id in known_world_ids:
             consistent[landmark_id] = point
+            continue
+        if slack > 1.0e-12:
             continue
         triangulated_point = triangulated.get(landmark_id)
         if triangulated_point is None or _ground_metric_agrees(

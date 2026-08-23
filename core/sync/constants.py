@@ -16,6 +16,13 @@ STRETCHED_PIXEL_RATIO = 0.2
 # |Z| vs point scale (and On Ground vs triangulation) for "on the ground plane".
 GROUND_PLANE_Z_FRACTION = 0.15
 
+# Default On Ground Z slack in Blender units (plank cup / tag thickness).
+# 0 pins On Ground to the Z=0 raycast when triangulation agrees.
+GROUND_SLACK_DEFAULT = 0.02
+
+# Soft Z residual at |z| = slack equals this many pixels before Huber.
+GROUND_Z_RESIDUAL_PX = 6.0
+
 # LM clips log-scale to ± this. Hitting the floor collapses the match Empty
 # (det ≈ 0) so overlay corners project as noise and jump when the view pans.
 LOG_SCALE_CLIP = 18.0

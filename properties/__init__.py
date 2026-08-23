@@ -842,6 +842,32 @@ class PMWorkspace(bpy.types.PropertyGroup):
         step=100,
         precision=0,
     )
+    share_lens: bpy.props.BoolProperty(
+        name="All Images Same Lens",
+        description=(
+            "When refining lenses, search one shared focal scale for every "
+            "sync-enabled still (same physical camera). Turn off to search "
+            "each still independently (mixed cameras or zooms)"
+        ),
+        default=True,
+        update=_redraw,
+    )
+    ground_slack: bpy.props.FloatProperty(
+        name="Ground Slack",
+        description=(
+            "How far On Ground landmarks may sit off Z=0 (scene units). "
+            "0 pins them to the floor raycast. A small value (plank cup / "
+            "tag thickness) lets a boarded floor flex without bending cameras"
+        ),
+        default=0.02,
+        min=0.0,
+        soft_max=0.25,
+        max=2.0,
+        step=1,
+        precision=3,
+        unit="LENGTH",
+        update=_redraw,
+    )
     lens_refine_progress: bpy.props.FloatProperty(
         name="Refine Progress",
         description="Progress of the running Refine Lenses job",

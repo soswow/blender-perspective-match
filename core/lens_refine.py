@@ -44,6 +44,8 @@ class MatchLensInput:
     freeze_focal: bool = False
     # Exact private calib to keep when freeze_focal (avoids re-orienting).
     base_calibration: core.Calibration | None = None
+    # Rebuild orientation from VP lines when fx changes (needs usable lines).
+    reorient_from_vp: bool = False
 
 
 @dataclass
@@ -70,8 +72,17 @@ def estimate_refine_evaluation_count(
     refine_samples: int = 7,
     couple_pair_limit: int = 3,
     couple_samples: int = 3,
+    share_lens: bool = False,
 ) -> int:
     """Upper bound on sync evaluations (for progress bars)."""
+    if share_lens:
+        coarse_evaluations = max(int(coarse_samples), 0) - (
+            1 if int(coarse_samples) > 0 and int(coarse_samples) % 2 == 1 else 0
+        )
+        refine_evaluations = max(int(refine_samples), 0) - (
+            1 if int(refine_samples) > 0 and int(refine_samples) % 2 == 1 else 0
+        )
+        return 1 + coarse_evaluations + refine_evaluations
     if free_match_count <= 0:
         return 1
     # The current focal and fine-grid center already have known scores.
@@ -135,6 +146,13 @@ def _sample_focals(center: float, span: float, count: int) -> list[float]:
     return [float(value) for value in np.linspace(low, high, count)]
 
 
+def _sample_scales(center: float, span: float, count: int) -> list[float]:
+    """Sample relative focal scales; unlike ``_sample_focals`` this may go below 1."""
+    low = max(float(center) * (1.0 - float(span)), 1.0e-3)
+    high = max(float(center) * (1.0 + float(span)), low + 1.0e-6)
+    return [float(value) for value in np.linspace(low, high, count)]
+
+
 def calibration_at_focal(
     match: MatchLensInput,
     focal_px: float,
@@ -169,6 +187,30 @@ def calibration_at_focal(
             match.origin_image,
         )
     return calibration
+
+
+def calibration_scaled_keep_pose(
+    base: core.Calibration,
+    scale: float,
+) -> core.Calibration:
+    """Copy a calibration with fx/fy multiplied, orientation unchanged."""
+    scale = max(float(scale), 1.0e-6)
+    source = base.intrinsics
+    return core.Calibration(
+        intrinsics=core.CameraIntrinsics(
+            fx=max(float(source.fx) * scale, 1.0),
+            fy=max(float(source.fy) * scale, 1.0),
+            cx=float(source.cx),
+            cy=float(source.cy),
+            image_width=int(source.image_width),
+            image_height=int(source.image_height),
+        ),
+        rotation_w2c=np.array(base.rotation_w2c, copy=True),
+        camera_center=np.array(base.camera_center, copy=True),
+        division_lambda=float(base.division_lambda),
+        lambda_saturated=bool(base.lambda_saturated),
+        brown_conrady=tuple(base.brown_conrady),
+    )
 
 
 def _sync_rmse(result: sync_module.SyncSolveResult) -> float:
@@ -241,6 +283,7 @@ def _run_sync(
     *,
     lock_rotation: bool = False,
     lock_translation: bool = False,
+    ground_slack: float | None = None,
 ) -> sync_module.SyncSolveResult:
     sync_matches = [
         sync_module.SyncMatchInput(match_id=match_id, calibration=calibrations[match_id])
@@ -257,6 +300,7 @@ def _run_sync(
         initial_similarities=initial_similarities,
         lock_rotation=lock_rotation,
         lock_translation=lock_translation,
+        ground_slack=ground_slack,
     )
 
 
@@ -280,6 +324,8 @@ def refine_lenses_from_landmarks(
     couple_samples: int = 3,
     lock_rotation: bool = False,
     lock_translation: bool = False,
+    share_lens: bool = False,
+    ground_slack: float | None = None,
     cancel_check=None,
     progress_callback=None,
 ) -> LensRefineResult:
@@ -289,8 +335,11 @@ def refine_lenses_from_landmarks(
     then jointly varies focals for landmark-sharing pairs (and a global
     relative-scale probe) so multi-camera FOV error can shrink together.
 
+    When ``share_lens`` is true, search one scale applied to every match's fx
+    (YAML-only stills keep orientation; stills with VP lines may re-orient).
+
     Frozen matches (Manual FOV / 1-point / weak VPs) keep their starting fx but
-    still contribute VP residual and sync observations.
+    still contribute VP residual and sync observations — unless ``share_lens``.
 
     ``cancel_check`` is an optional ``() -> bool`` polled between evaluations.
     ``progress_callback(step, total, label)`` reports progress (may be called
@@ -319,6 +368,8 @@ def refine_lenses_from_landmarks(
     parallel_pairs = parallel_pairs or []
 
     free_ids = [item.match_id for item in matches if not item.freeze_focal]
+    if share_lens:
+        free_ids = [item.match_id for item in matches]
     total_steps = estimate_refine_evaluation_count(
         len(free_ids),
         passes=passes,
@@ -326,6 +377,7 @@ def refine_lenses_from_landmarks(
         refine_samples=refine_samples,
         couple_pair_limit=couple_pair_limit,
         couple_samples=couple_samples,
+        share_lens=share_lens,
     )
     step = 0
 
@@ -353,6 +405,7 @@ def refine_lenses_from_landmarks(
             initial_similarities,
             lock_rotation=lock_rotation,
             lock_translation=lock_translation,
+            ground_slack=ground_slack,
         )
         cost = _joint_cost(
             cals,
@@ -428,6 +481,113 @@ def refine_lenses_from_landmarks(
     best_cals = {key: value for key, value in calibrations.items()}
     start_fx = {item.match_id: float(item.intrinsics.fx) for item in matches}
     _progress("Initial sync scored")
+
+    def _calibrations_at_scale(scale: float) -> dict[str, core.Calibration]:
+        trial: dict[str, core.Calibration] = {}
+        for item in matches:
+            start = calibrations[item.match_id]
+            if item.reorient_from_vp:
+                focal = max(float(item.intrinsics.fx) * float(scale), 1.0)
+                trial[item.match_id] = calibration_at_focal(item, focal)
+            else:
+                trial[item.match_id] = calibration_scaled_keep_pose(start, scale)
+        return trial
+
+    if share_lens:
+        if _cancelled():
+            return _cancelled_result(
+                best_cals,
+                best_sync,
+                initial_cost,
+                best_cost,
+                initial_sync,
+                start_fx,
+                free_ids,
+            )
+        local_best_scale = 1.0
+        for scale in _sample_scales(1.0, fx_span, coarse_samples):
+            if abs(scale - 1.0) <= 1.0e-9:
+                continue
+            if _cancelled():
+                return _cancelled_result(
+                    best_cals,
+                    best_sync,
+                    initial_cost,
+                    best_cost,
+                    initial_sync,
+                    start_fx,
+                    free_ids,
+                )
+            _progress(f"Same lens · scale {scale:.3f}")
+            trial = _calibrations_at_scale(scale)
+            cost, result = evaluate(
+                trial,
+                initial_similarities=best_sync.similarities,
+            )
+            if cost + 1.0e-6 < best_cost:
+                best_cost = cost
+                best_sync = result
+                best_cals = trial
+                local_best_scale = scale
+        fine_span = fx_span * 0.25
+        fine_center = local_best_scale
+        for scale in _sample_scales(local_best_scale, fine_span, refine_samples):
+            if abs(scale - fine_center) <= 1.0e-9:
+                continue
+            if _cancelled():
+                return _cancelled_result(
+                    best_cals,
+                    best_sync,
+                    initial_cost,
+                    best_cost,
+                    initial_sync,
+                    start_fx,
+                    free_ids,
+                )
+            _progress(f"Same lens refine · scale {scale:.3f}")
+            trial = _calibrations_at_scale(scale)
+            cost, result = evaluate(
+                trial,
+                initial_similarities=best_sync.similarities,
+            )
+            if cost + 1.0e-6 < best_cost:
+                best_cost = cost
+                best_sync = result
+                best_cals = trial
+                local_best_scale = scale
+        fx_deltas = {
+            match_id: float(best_cals[match_id].intrinsics.fx - start_fx[match_id])
+            for match_id in free_ids
+        }
+        improved = best_cost + 1.0e-3 < initial_cost
+        initial_rmse = _sync_rmse(initial_sync)
+        final_rmse = _sync_rmse(best_sync)
+        percent = (local_best_scale - 1.0) * 100.0
+        anchor_fx = float(best_cals[anchor_id].intrinsics.fx)
+        start_anchor = start_fx[anchor_id]
+        if improved:
+            message = (
+                f"Same lens ×{local_best_scale:.4f} ({percent:+.1f}%) · "
+                f"fx {start_anchor:.0f}→{anchor_fx:.0f}px · "
+                f"sync {initial_rmse:.1f}→{final_rmse:.1f}px"
+            )
+        else:
+            message = (
+                f"No shared-lens improvement · fx {anchor_fx:.0f}px · "
+                f"sync {final_rmse:.1f}px"
+            )
+        _progress("Finished")
+        return LensRefineResult(
+            calibrations=best_cals,
+            sync_result=best_sync,
+            initial_cost=initial_cost,
+            final_cost=best_cost,
+            initial_sync_rmse=initial_rmse,
+            final_sync_rmse=final_rmse,
+            fx_deltas=fx_deltas,
+            message=message,
+            improved=improved,
+        )
 
     if not free_ids:
         return LensRefineResult(

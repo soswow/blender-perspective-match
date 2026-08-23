@@ -64,7 +64,7 @@ The camera refines whenever enough required lines exist. **Auto from VPs** allow
 
 ## Set origin
 
-Use **Pick Origin** to choose a ground point that should become world origin (placement updates automatically after VP solves). Clear (X) removes the pick. **Solve Sync** / **Diagnose** / **Refine Lenses** also auto-set Origin from the first **On Ground** landmark pick when a match still has none.
+Use **Pick Origin** to choose a ground point that should become world origin (placement updates automatically after VP solves). Clear (X) removes the pick. **Solve Sync** / **Diagnose** / **Refine Lenses** also auto-set Origin from the first **On Ground** landmark pick when a match still has none. **Ground Slack** (next to Lock Rotation) is how far those On Ground tags may leave Z=0 — leave the default for a boarded floor; 0 for a machined plate.
 
 With complete locked/imported K on an anchor plus at least two supporting matches, four or more shared, well-spread **On Ground** landmarks can also initialize the camera orientations when the anchor has no VP lines. Five or six landmarks are recommended. Sync recovers Z from their common plane; X/Y yaw remains an arbitrary shared choice. See [Sync matches](sync.md#calibrated-ground-only-workflow-no-vp-lines).
 

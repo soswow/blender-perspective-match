@@ -51,7 +51,7 @@ Do not special-case a `.blend` filename in solver code or UI copy.
 
 | Module | Role |
 | --- | --- |
-| `constants.py` | `ACCEPT_RMSE_PX`, `STRETCHED_PIXEL_RATIO`, `GROUND_PLANE_Z_FRACTION`, `LOG_SCALE_CLIP`, `BA_FREE_LANDMARK_LIMIT`, `SPATIAL_GRID_SIZE`, `SPATIAL_WEIGHT_CLIP`, `RADIAL_WEIGHT_GAIN` |
+| `constants.py` | `ACCEPT_RMSE_PX`, `STRETCHED_PIXEL_RATIO`, `GROUND_PLANE_Z_FRACTION`, `GROUND_SLACK_DEFAULT`, `GROUND_Z_RESIDUAL_PX`, `LOG_SCALE_CLIP`, `BA_FREE_LANDMARK_LIMIT`, `SPATIAL_GRID_SIZE`, `SPATIAL_WEIGHT_CLIP`, `RADIAL_WEIGHT_GAIN` |
 | `types.py` | `SimilarityTransform`, observations, `SyncSolveResult` |
 | `projection.py` | Project, rays, triangulate, image-line geometry |
 | `pose.py` | Essential / PnP / IPPE / pairwise register |
@@ -60,7 +60,7 @@ Do not special-case a `.blend` filename in solver code or UI copy.
 | `ba.py` | Joint BA, residuals, leave-one-out Diagnose |
 | `solve.py` | `solve_landmark_sync` stages |
 
-**Solve stages** (in order): pairwise register → peel cameras above `ACCEPT_RMSE_PX` → joint BA → peel again → resect skipped stills against frozen 3D (On Ground / near-Z=0 if off-plane picks disagree) → triangulate landmarks now visible in recovered views and PnP stills that had no cloud support → report. Recovered cameras must not fail the joint RMSE. Copying locked K onto a different aspect uses one scale for fx and fy unless the sizes are an exact portrait/landscape swap (same pixels, axes swapped). Solve Sync sets fy=fx when they already differ by more than `STRETCHED_PIXEL_RATIO`.
+**Solve stages** (in order): pairwise register → peel cameras above `ACCEPT_RMSE_PX` → joint BA (pose-only above `BA_FREE_LANDMARK_LIMIT`, then a thaw of free 3D if that helps) → peel again → resect skipped stills against frozen 3D (On Ground / near-Z=0 if off-plane picks disagree) → triangulate landmarks now visible in recovered views and PnP stills that had no cloud support → report. On Ground landmarks with `ground_slack > 0` are a soft Z spring, not a hard Z=0 pin. Recovered cameras must not fail the joint RMSE. Copying locked K onto a different aspect uses one scale for fx and fy unless the sizes are an exact portrait/landscape swap (same pixels, axes swapped). Solve Sync sets fy=fx when they already differ by more than `STRETCHED_PIXEL_RATIO`.
 
 **When you change sync:** update this map if stages or files moved; put a new threshold in `constants.py` instead of a raw `40.0`; keep function docstrings to a short contract (what / what not), not algorithm history. Tests: `tests/test_sync_pose.py`, `test_sync_ground.py`, `test_sync_ba.py`, `test_sync_lines.py`, `test_sync_solve.py` (helpers in `tests/sync_fixtures.py`). Pairwise covering (true camera vs stored K/pose): `tests/edge_pairs.md`, `tests/pair_fixtures.py`, `tests/test_edge_pairs.py`. Joint BA reweights picks so occupied image-grid cells share influence (a central cluster cannot ignore a few edge picks that pin camera distance).
 

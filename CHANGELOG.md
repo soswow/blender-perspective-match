@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - AprilTag sheets can export matching page-sized SVG cut outlines for vinyl cutters
 - Find AprilTags now detects both 25h9 and 36h10 families with distinct family-qualified landmark names
 - Diagnose / Solve Sync name a mismatched landmark pick when that still is skipped because one correspondence disagrees with the other views
+- Refine Lenses **Same Lens** (on by default) searches one shared focal scale for every still, including YAML-only matches with no VP lines
+- **Ground Slack** lets On Ground landmarks sit a little off Z=0 so a boarded floor can flex without bending cameras
 
 ### Changed
 - Solve Sync balances landmarks across the frame so a cluster of well-fitting central picks cannot ignore a few near the edge that pin camera distance
@@ -31,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Diagnose leave-one-out reuses the last locked poses instead of re-running pairwise registration for each worst landmark
 - Diagnose and Solve Sync reuse pairwise poses when that still pair's picks and cameras have not changed (Clear Sync drops the cache)
 - Diagnose and Solve Sync solve independent still pairs in parallel on the first run
+- Solve Sync with many landmarks now thaws 3D after cameras settle so a bent triangulation can unbend
 
 ### Fixed
 - Snap to AprilTag recenters on the full inner black body of small blurry tags instead of a dark fragment

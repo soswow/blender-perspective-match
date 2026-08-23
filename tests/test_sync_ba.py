@@ -279,6 +279,43 @@ class BundleAdjustSyncTests(unittest.TestCase):
             msg=f"outer {outer_rmse:.1f}px vs inner {inner_rmse:.1f}px",
         )
 
+    def test_ground_slack_does_not_pin_off_plane_on_ground(self) -> None:
+        """Positive slack leaves On Ground free instead of pinning the Z=0 raycast."""
+        metric = {"g": np.array((1.0, 2.0, 0.0), dtype=np.float64)}
+        triangulated = {"g": np.array((1.0, 2.0, 0.08), dtype=np.float64)}
+        pinned = sync._consistent_metric_landmarks(
+            metric, triangulated, set(), ground_slack=0.0
+        )
+        self.assertIn("g", pinned)
+        free = sync._consistent_metric_landmarks(
+            metric, triangulated, set(), ground_slack=0.02
+        )
+        self.assertNotIn("g", free)
+
+    def test_thaw_pass_still_converges_when_structure_starts_frozen(self) -> None:
+        """Pass B (thaw 3D) must still lock a well-observed synthetic scene."""
+        matches, observations, _true, _center, _shared = _synthetic_scene(
+            with_ground=True
+        )
+        original = sync.BA_FREE_LANDMARK_LIMIT
+        import match_perspective.core.sync.solve as solve_module
+
+        try:
+            sync.BA_FREE_LANDMARK_LIMIT = 0
+            solve_module.BA_FREE_LANDMARK_LIMIT = 0
+            result = sync.solve_landmark_sync(
+                matches,
+                observations,
+                anchor_id="anchor",
+                ground_slack=0.02,
+            )
+        finally:
+            sync.BA_FREE_LANDMARK_LIMIT = original
+            solve_module.BA_FREE_LANDMARK_LIMIT = original
+        self.assertTrue(result.success, result.message)
+        self.assertLess(result.mean_reprojection_px, 2.0)
+        self.assertIn("thaw 3D", result.message)
+
 
 def _cluster_and_edge_scene() -> tuple:
     """Many central ground tags, few elevated edge tags, slightly long fx."""

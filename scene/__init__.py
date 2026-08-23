@@ -2728,6 +2728,7 @@ def diagnose_sync(context: bpy.types.Context):
         lock_rotation=bool(space.lock_rotation),
         lock_translation=bool(space.lock_translation),
         use_pose_cache=True,
+        ground_slack=float(getattr(space, "ground_slack", 0.02)),
     )
     if result.mean_reprojection_px > 8.0 or not result.success:
         result.leave_one_out = sync_module.leave_one_out_landmark_report(
@@ -2742,6 +2743,7 @@ def diagnose_sync(context: bpy.types.Context):
             baseline=result if result.per_landmark_rmse_px else None,
             lock_rotation=bool(space.lock_rotation),
             lock_translation=bool(space.lock_translation),
+            ground_slack=float(getattr(space, "ground_slack", 0.02)),
         )
     _apply_sync_landmark_diagnostics(context, result)
 
@@ -2852,6 +2854,7 @@ def solve_and_apply_sync(context: bpy.types.Context):
         lock_rotation=bool(space.lock_rotation),
         lock_translation=bool(space.lock_translation),
         use_pose_cache=True,
+        ground_slack=float(getattr(space, "ground_slack", 0.02)),
     )
     _apply_sync_landmark_diagnostics(context, result)
     message = result.message
@@ -2968,6 +2971,8 @@ def refine_lenses_and_sync(context: bpy.types.Context):
         fx_span=prep.fx_span,
         lock_rotation=prep.lock_rotation,
         lock_translation=prep.lock_translation,
+        share_lens=prep.share_lens,
+        ground_slack=prep.ground_slack,
     )
     return apply_lens_refine_result(context, refine_result, prep.root_by_name)
 
@@ -2987,6 +2992,8 @@ class LensRefinePrep:
     root_by_name: dict
     lock_rotation: bool = False
     lock_translation: bool = False
+    share_lens: bool = True
+    ground_slack: float | None = None
 
 
 def prepare_lens_refine(context: bpy.types.Context) -> LensRefinePrep:
@@ -2994,6 +3001,8 @@ def prepare_lens_refine(context: bpy.types.Context) -> LensRefinePrep:
     from ..core import lens_refine
 
     space = properties.workspace(context)
+    share_lens = bool(getattr(space, "share_lens", True))
+    ground_slack = float(getattr(space, "ground_slack", 0.02))
     anchor = properties.anchor_root(context)
     if anchor is None:
         raise ValueError("Choose an anchor match first")
@@ -3028,8 +3037,8 @@ def prepare_lens_refine(context: bpy.types.Context) -> LensRefinePrep:
             lock_focal=True,
             vp_mode=settings.vp_mode,
         )
-        freeze = settings.vp_mode == "1" or not can_orient
-        # Manual FOV matches stay searchable — Refine Lenses exists to adjust fx.
+        freeze = (not share_lens) and (settings.vp_mode == "1" or not can_orient)
+        reorient = can_orient and settings.vp_mode != "1"
         origin_image = None
         if settings.origin_is_set:
             origin_image = (
@@ -3046,6 +3055,7 @@ def prepare_lens_refine(context: bpy.types.Context) -> LensRefinePrep:
                 origin_image=origin_image,
                 freeze_focal=freeze,
                 base_calibration=item.calibration,
+                reorient_from_vp=reorient,
             )
         )
 
@@ -3064,6 +3074,8 @@ def prepare_lens_refine(context: bpy.types.Context) -> LensRefinePrep:
         root_by_name=root_by_name,
         lock_rotation=bool(space.lock_rotation),
         lock_translation=bool(space.lock_translation),
+        share_lens=share_lens,
+        ground_slack=ground_slack,
     )
 
 

@@ -157,6 +157,10 @@ class LensRefinePlumbingTests(unittest.TestCase):
             lens_refine.estimate_refine_evaluation_count(4),
             139,
         )
+        self.assertEqual(
+            lens_refine.estimate_refine_evaluation_count(4, share_lens=True),
+            15,
+        )
 
     def test_ranked_couple_pairs_prefer_shared_landmarks(self) -> None:
         observations = [
@@ -175,6 +179,25 @@ class LensRefinePlumbingTests(unittest.TestCase):
         self.assertEqual(len(pairs), 2)
         self.assertIn(("A", "B"), pairs)
         self.assertIn(("B", "C"), pairs)
+
+    def test_scaled_calibration_keeps_pose_and_aspect(self) -> None:
+        base = core.Calibration(
+            core.CameraIntrinsics(
+                fx=1000.0,
+                fy=980.0,
+                cx=400.0,
+                cy=300.0,
+                image_width=800,
+                image_height=600,
+            ),
+            rotation_w2c=np.eye(3, dtype=np.float64),
+            camera_center=np.array((1.0, 2.0, 3.0), dtype=np.float64),
+        )
+        scaled = lens_refine.calibration_scaled_keep_pose(base, 1.1)
+        self.assertAlmostEqual(scaled.intrinsics.fx, 1100.0, places=3)
+        self.assertAlmostEqual(scaled.intrinsics.fy, 1078.0, places=3)
+        self.assertTrue(np.allclose(scaled.rotation_w2c, base.rotation_w2c))
+        self.assertTrue(np.allclose(scaled.camera_center, base.camera_center))
 
     def test_calibration_at_focal_changes_fx(self) -> None:
         bundles = {

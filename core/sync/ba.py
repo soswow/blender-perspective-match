@@ -6,6 +6,7 @@ import numpy as np
 
 from .. import geometry as core
 from .constants import (
+    GROUND_Z_RESIDUAL_PX,
     OUTLIER_WEIGHT_FACTOR,
     RADIAL_WEIGHT_GAIN,
     SPATIAL_GRID_SIZE,
@@ -628,6 +629,8 @@ def _ba_raw_residuals_and_jacobian(
     free_line_ids: list[str] | None = None,
     fixed_line_points: dict[str, np.ndarray] | None = None,
     fixed_line_directions: dict[str, np.ndarray] | None = None,
+    ground_landmark_ids: list[str] | None = None,
+    ground_slack: float = 0.0,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Unweighted BA residuals and block-analytic Jacobian."""
     free_line_ids = free_line_ids or []
@@ -744,6 +747,21 @@ def _ba_raw_residuals_and_jacobian(
                 row_v[offset : offset + 3] = block[1]
         jacobian_rows.extend((row_u, row_v))
 
+    slack = max(float(ground_slack), 0.0)
+    if slack > 1.0e-12:
+        spring = GROUND_Z_RESIDUAL_PX / slack
+        for landmark_id in ground_landmark_ids or ():
+            if landmark_id not in landmark_offset:
+                continue
+            point_shared = landmarks.get(landmark_id)
+            if point_shared is None:
+                continue
+            residuals.append(spring * float(point_shared[2]))
+            row_z = np.zeros(column_count, dtype=np.float64)
+            start = landmark_offset[landmark_id]
+            row_z[start + 2] = spring
+            jacobian_rows.append(row_z)
+
     # Lines: pose FD + free-midpoint FD (directions stay fixed from the seed).
     for landmark_id, _seed_point, direction, observation in line_constraints:
         match_id = observation.match_id
@@ -830,6 +848,8 @@ def _ba_residual_vector(
     free_line_ids: list[str] | None = None,
     fixed_line_points: dict[str, np.ndarray] | None = None,
     fixed_line_directions: dict[str, np.ndarray] | None = None,
+    ground_landmark_ids: list[str] | None = None,
+    ground_slack: float = 0.0,
 ) -> np.ndarray:
     """Joint reprojection residuals for free poses + free landmarks (+ lines)."""
     residual_array, _jacobian = _ba_raw_residuals_and_jacobian(
@@ -850,6 +870,8 @@ def _ba_residual_vector(
         free_line_ids=free_line_ids,
         fixed_line_points=fixed_line_points,
         fixed_line_directions=fixed_line_directions,
+        ground_landmark_ids=ground_landmark_ids,
+        ground_slack=ground_slack,
     )
     return residual_array * _robust_weights(residual_array, huber_delta)
 
@@ -961,6 +983,8 @@ def _bundle_adjust_registration(
     max_iterations: int = 20,
     huber_delta: float = 6.0,
     max_free_lines: int = 24,
+    ground_landmark_ids: list[str] | None = None,
+    ground_slack: float = 0.0,
 ) -> tuple[
     dict[str, SimilarityTransform],
     dict[str, np.ndarray],
@@ -1078,6 +1102,8 @@ def _bundle_adjust_registration(
         "free_line_ids": free_line_ids,
         "fixed_line_points": fixed_line_points,
         "fixed_line_directions": fixed_line_directions,
+        "ground_landmark_ids": list(ground_landmark_ids or ()),
+        "ground_slack": float(ground_slack),
     }
     damping = 1.0e-2
     previous_cost = float("inf")
@@ -1280,6 +1306,7 @@ def leave_one_out_landmark_report(
     baseline: SyncSolveResult | None = None,
     lock_rotation: bool = False,
     lock_translation: bool = False,
+    ground_slack: float | None = None,
 ) -> list[tuple[str, float, float]]:
     """Re-solve without each of the worst landmarks; report RMSE deltas.
 
@@ -1297,6 +1324,7 @@ def leave_one_out_landmark_report(
             parallel_pairs=parallel_pairs,
             lock_rotation=lock_rotation,
             lock_translation=lock_translation,
+            ground_slack=ground_slack,
         )
     if not baseline.per_landmark_rmse_px:
         return []
@@ -1349,6 +1377,7 @@ def leave_one_out_landmark_report(
             initial_similarities=baseline.similarities,
             lock_rotation=lock_rotation,
             lock_translation=lock_translation,
+            ground_slack=ground_slack,
         )
         without_rmse = (
             float(without.mean_reprojection_px)

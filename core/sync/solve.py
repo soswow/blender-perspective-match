@@ -21,6 +21,7 @@ from .constants import (
     ACCEPT_RMSE_PX,
     BA_FREE_LANDMARK_LIMIT,
     GROUND_PLANE_Z_FRACTION,
+    GROUND_SLACK_DEFAULT,
 )
 from .lines import (
     _enforce_parallel_line_segments,
@@ -107,16 +108,20 @@ def _observations_for_landmark_ids(
 def _ground_like_landmark_ids(
     cloud: dict[str, np.ndarray],
     observations_by_landmark: dict[str, list[SyncObservation]],
+    *,
+    ground_slack: float = 0.0,
 ) -> set[str]:
     """Landmarks tagged On Ground, or whose triangulated Z is near the plane."""
     keep: set[str] = set()
+    slack = max(float(ground_slack), 0.0)
     for landmark_id, point in cloud.items():
         items = observations_by_landmark.get(landmark_id, [])
         if any(item.on_ground for item in items):
             keep.add(landmark_id)
             continue
         scale = max(float(np.linalg.norm(point)), 1.0e-3)
-        if abs(float(point[2])) <= GROUND_PLANE_Z_FRACTION * scale:
+        limit = slack if slack > 1.0e-12 else GROUND_PLANE_Z_FRACTION * scale
+        if abs(float(point[2])) <= limit:
             keep.add(landmark_id)
     return keep
 
@@ -313,6 +318,7 @@ class _SolveState:
     lock_rotation: bool
     lock_translation: bool
     use_pose_cache: bool
+    ground_slack: float
     identity_result: dict[str, SimilarityTransform]
     valid_observations: list[SyncObservation]
     observations_by_landmark_all: dict[str, list[SyncObservation]]
@@ -388,7 +394,10 @@ class _SolveState:
             self.known_world,
         )
         consistent = _consistent_metric_landmarks(
-            metric_points, rebuilt, set(self.known_world)
+            metric_points,
+            rebuilt,
+            set(self.known_world),
+            ground_slack=self.ground_slack,
         )
         rebuilt.update(consistent)
         for landmark_id, point in self.known_world.items():
@@ -611,7 +620,9 @@ def _resect_skipped_matches(state: _SolveState) -> None:
     cloud = dict(state.known_world)
     cloud.update(state.landmarks)
     ground_ids = _ground_like_landmark_ids(
-        cloud, state.observations_by_landmark_all
+        cloud,
+        state.observations_by_landmark_all,
+        ground_slack=state.ground_slack,
     )
     ground_cloud = {
         landmark_id: cloud[landmark_id] for landmark_id in ground_ids
@@ -677,6 +688,7 @@ def solve_landmark_sync(
     lock_rotation: bool = False,
     lock_translation: bool = False,
     use_pose_cache: bool = False,
+    ground_slack: float | None = None,
 ) -> SyncSolveResult:
     """Register non-anchor matches from 2D correspondences and/or known 3D.
 
@@ -685,8 +697,12 @@ def solve_landmark_sync(
     if off-plane picks disagree) → triangulate landmarks now visible in
     recovered views and PnP stills that had no cloud support → report.
     Recovered cameras must not fail the joint RMSE. fy=fx when pixels were
-    aspect-stretched.
+    aspect-stretched. ``ground_slack`` is how far On Ground landmarks may leave
+    Z=0 in joint BA (0 pins them when triangulation agrees with the raycast).
     """
+    if ground_slack is None:
+        ground_slack = GROUND_SLACK_DEFAULT
+    ground_slack = max(float(ground_slack), 0.0)
     known_world = {
         landmark_id: np.asarray(point, dtype=np.float64).reshape(3)
         for landmark_id, point in (known_world or {}).items()
@@ -911,6 +927,7 @@ def solve_landmark_sync(
         lock_rotation=lock_rotation,
         lock_translation=lock_translation,
         use_pose_cache=use_pose_cache,
+        ground_slack=ground_slack,
         identity_result=identity_result,
         valid_observations=valid_observations,
         observations_by_landmark_all=observations_by_landmark_all,
@@ -957,31 +974,26 @@ def solve_landmark_sync(
         seed_rmse,
     )
     ba_observations = _balance_observation_weights(ba_observations, match_map)
-    fixed_landmark_ids = set(known_world) | set(consistent_metric)
+    ground_landmark_ids = sorted(
+        {
+            observation.landmark_id
+            for observation in ba_observations
+            if observation.on_ground and observation.landmark_id not in known_world
+        }
+    )
+    # Slack > 0: keep On Ground free so BA can spring Z toward the plane.
+    if ground_slack > 1.0e-12:
+        fixed_landmark_ids = set(known_world)
+    else:
+        fixed_landmark_ids = set(known_world) | set(consistent_metric)
     free_landmark_ids = [
         landmark_id
         for landmark_id in landmark_ids
         if landmark_id in landmarks and landmark_id not in fixed_landmark_ids
     ]
-    # Large graphs: refine poses against triangulated 3D so cameras move
-    # instead of a few landmarks absorbing peripheral error.
-    ba_free_landmark_ids = free_landmark_ids
-    ba_iterations = 20
-    if len(free_landmark_ids) > BA_FREE_LANDMARK_LIMIT:
-        ba_free_landmark_ids = []
-        ba_iterations = 12
-    fixed_landmarks = {
-        landmark_id: landmarks[landmark_id].copy()
-        for landmark_id in fixed_landmark_ids
-        if landmark_id in landmarks
-    }
-    if not ba_free_landmark_ids:
-        # Pose-only BA still needs every triangulated point as a fixed target.
-        fixed_landmarks = {
-            landmark_id: landmarks[landmark_id].copy()
-            for landmark_id in landmark_ids
-            if landmark_id in landmarks
-        }
+    froze_structure = len(free_landmark_ids) > BA_FREE_LANDMARK_LIMIT
+    ba_free_landmark_ids = [] if froze_structure else list(free_landmark_ids)
+    ba_iterations = 12 if froze_structure else 20
     line_constraints = _collect_ba_line_constraints(
         line_segments,
         known_lines,
@@ -1003,32 +1015,53 @@ def solve_landmark_sync(
         landmark_id: (point_a.copy(), point_b.copy())
         for landmark_id, (point_a, point_b) in line_segments.items()
     }
-    similarities, landmarks, line_segments, did_bundle_adjust = (
-        _bundle_adjust_registration(
-            free_match_ids,
-            ba_free_landmark_ids,
-            fixed_landmarks,
-            similarities,
-            landmarks,
-            anchor_id,
-            match_map,
-            ba_observations,
-            line_constraints,
-            known_line_ids=set(known_lines),
-            line_segments=line_segments,
-            lock_rotation=lock_rotation,
-            lock_translation=lock_translation,
-            max_iterations=ba_iterations,
-        )
-    )
-    if did_bundle_adjust:
-        # Keep BA-refined free midpoints; only rebuild length along the seed
-        # direction from observations when a line was not free in BA.
+
+    def _mean_rmse(values: dict[str, float]) -> float:
+        if not values:
+            return 0.0
+        squares = [value * value for value in values.values()]
+        return float(np.sqrt(np.mean(squares)))
+
+    def _copy_similarities():
+        return {
+            match_id: SimilarityTransform(
+                scale=item.scale,
+                rotation=np.array(item.rotation, copy=True),
+                translation=np.array(item.translation, copy=True),
+            )
+            for match_id, item in similarities.items()
+        }
+
+    def _copy_landmarks():
+        return {
+            landmark_id: point.copy() for landmark_id, point in landmarks.items()
+        }
+
+    def _copy_segments():
+        return {
+            landmark_id: (point_a.copy(), point_b.copy())
+            for landmark_id, (point_a, point_b) in line_segments.items()
+        }
+
+    def _fixed_landmarks_for(free_ids: list[str]) -> dict[str, np.ndarray]:
+        if not free_ids:
+            return {
+                landmark_id: landmarks[landmark_id].copy()
+                for landmark_id in landmark_ids
+                if landmark_id in landmarks
+            }
+        free_set = set(free_ids)
+        return {
+            landmark_id: point.copy()
+            for landmark_id, point in landmarks.items()
+            if landmark_id in fixed_landmark_ids or landmark_id not in free_set
+        }
+
+    def _refresh_free_lines() -> None:
         for landmark_id, items in line_observations_by_landmark.items():
             if landmark_id in known_lines:
                 continue
             if landmark_id in line_segments:
-                # Refresh finite extent from current poses along BA direction.
                 point_a, point_b = line_segments[landmark_id]
                 direction = point_b - point_a
                 span = float(np.linalg.norm(direction))
@@ -1065,6 +1098,34 @@ def solve_landmark_sync(
             known_lines,
         )
 
+    def _run_ba(free_ids: list[str], iterations: int) -> bool:
+        nonlocal similarities, landmarks, line_segments
+        similarities, landmarks, line_segments, ran = (
+            _bundle_adjust_registration(
+                free_match_ids,
+                free_ids,
+                _fixed_landmarks_for(free_ids),
+                similarities,
+                landmarks,
+                anchor_id,
+                match_map,
+                ba_observations,
+                line_constraints,
+                known_line_ids=set(known_lines),
+                line_segments=line_segments,
+                lock_rotation=lock_rotation,
+                lock_translation=lock_translation,
+                max_iterations=iterations,
+                ground_landmark_ids=ground_landmark_ids,
+                ground_slack=ground_slack,
+            )
+        )
+        if ran:
+            _refresh_free_lines()
+        return ran
+
+    did_bundle_adjust = _run_ba(ba_free_landmark_ids, ba_iterations)
+
     post_ba_match_rmse = _per_match_rmse_snapshot(
         free_match_ids,
         landmark_ids,
@@ -1075,12 +1136,6 @@ def solve_landmark_sync(
         usable_observations,
     )
 
-    def _mean_rmse(values: dict[str, float]) -> float:
-        if not values:
-            return 0.0
-        squares = [value * value for value in values.values()]
-        return float(np.sqrt(np.mean(squares)))
-
     if did_bundle_adjust and _mean_rmse(post_ba_match_rmse) > max(
         8.0, _mean_rmse(pre_ba_match_rmse) + 2.0
     ):
@@ -1089,6 +1144,69 @@ def solve_landmark_sync(
         line_segments = pre_ba_segments
         did_bundle_adjust = False
         post_ba_match_rmse = pre_ba_match_rmse
+    elif did_bundle_adjust and froze_structure:
+        rmse_a = _mean_rmse(post_ba_match_rmse)
+        pass_a_similarities = _copy_similarities()
+        pass_a_landmarks = _copy_landmarks()
+        pass_a_segments = _copy_segments()
+        if _run_ba(list(free_landmark_ids), 12):
+            rmse_b = _mean_rmse(
+                _per_match_rmse_snapshot(
+                    free_match_ids,
+                    landmark_ids,
+                    similarities,
+                    landmarks,
+                    anchor_id,
+                    match_map,
+                    usable_observations,
+                )
+            )
+            if rmse_b <= rmse_a + 1.0e-6:
+                pass_b_similarities = _copy_similarities()
+                pass_b_landmarks = _copy_landmarks()
+                pass_b_segments = _copy_segments()
+                if _run_ba([], 8):
+                    rmse_c = _mean_rmse(
+                        _per_match_rmse_snapshot(
+                            free_match_ids,
+                            landmark_ids,
+                            similarities,
+                            landmarks,
+                            anchor_id,
+                            match_map,
+                            usable_observations,
+                        )
+                    )
+                    if rmse_c > rmse_b + 1.0e-6:
+                        similarities = pass_b_similarities
+                        landmarks = pass_b_landmarks
+                        line_segments = pass_b_segments
+                post_ba_match_rmse = _per_match_rmse_snapshot(
+                    free_match_ids,
+                    landmark_ids,
+                    similarities,
+                    landmarks,
+                    anchor_id,
+                    match_map,
+                    usable_observations,
+                )
+            else:
+                similarities = pass_a_similarities
+                landmarks = pass_a_landmarks
+                line_segments = pass_a_segments
+                post_ba_match_rmse = {
+                    match_id: rmse_a for match_id in post_ba_match_rmse
+                }
+                post_ba_match_rmse = _per_match_rmse_snapshot(
+                    free_match_ids,
+                    landmark_ids,
+                    similarities,
+                    landmarks,
+                    anchor_id,
+                    match_map,
+                    usable_observations,
+                )
+
 
     state.similarities = similarities
     state.landmarks = landmarks
@@ -1395,6 +1513,28 @@ def solve_landmark_sync(
         message += " · scale from depth heuristic"
     if did_bundle_adjust:
         message += " · joint BA"
+        if froze_structure:
+            message += " (thaw 3D)"
+    if ground_slack > 1.0e-12:
+        drifted = []
+        for landmark_id, items in observations_by_landmark.items():
+            if landmark_id not in landmarks:
+                continue
+            if not any(item.on_ground for item in items):
+                continue
+            if landmark_id in known_world:
+                continue
+            height = abs(float(landmarks[landmark_id][2]))
+            if height > ground_slack:
+                drifted.append(
+                    (names.get(landmark_id, landmark_id[:8]), height)
+                )
+        drifted.sort(key=lambda item: -item[1])
+        if drifted:
+            bits = [f"{name} Z={height:.3f}" for name, height in drifted[:4]]
+            message += (
+                f" · ground slack {ground_slack:g} exceeded: " + ", ".join(bits)
+            )
     if recovered:
         recovered_list = ", ".join(f"'{name}'" for name in sorted(recovered))
         message += f" · recovered {recovered_list} after joint lock"
