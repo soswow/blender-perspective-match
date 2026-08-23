@@ -35,7 +35,7 @@ def is_dev_install() -> bool:
 
 
 def _register_keymaps() -> None:
-    """Ctrl+Alt+NumPad 1–9 / arrows, and plate click-to-select landmarks."""
+    """Ctrl+Alt+NumPad 1–9 / arrows, Ctrl+Cmd+A pick, plate click-to-select."""
     _unregister_keymaps()
     window_manager = bpy.context.window_manager
     if window_manager is None:
@@ -75,6 +75,16 @@ def _register_keymaps() -> None:
         "LEFTMOUSE",
         "PRESS",
         head=True,
+    )
+    _addon_keymaps.append((keymap, item))
+    # Ctrl+Cmd+A (OS key): unused in factory 3D View; poll no-ops unless the
+    # Perspective Match tab is open in camera view of the active match.
+    item = keymap.keymap_items.new(
+        "perspective_match.pick_in_active_match",
+        "A",
+        "PRESS",
+        ctrl=True,
+        oskey=True,
     )
     _addon_keymaps.append((keymap, item))
 

@@ -63,6 +63,16 @@ def main() -> None:
         try:
             extension.register()
             registered = True
+            pick_keys = [
+                item
+                for _keymap, item in extension._addon_keymaps
+                if item.idname == "perspective_match.pick_in_active_match"
+            ]
+            assert len(pick_keys) == 1, pick_keys
+            pick_key = pick_keys[0]
+            assert pick_key.type == "A" and pick_key.value == "PRESS"
+            assert pick_key.ctrl and pick_key.oskey
+            assert not pick_key.shift and not pick_key.alt
             # Disable/re-enable and wheel extract can call register() twice.
             extension.register()
             extension.unregister()

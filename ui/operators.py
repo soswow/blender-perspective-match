@@ -2225,6 +2225,36 @@ class PM_OT_interact(bpy.types.Operator):
         self._finish(context, cancelled=True)
 
 
+class PM_OT_pick_in_active_match(bpy.types.Operator):
+    """Keymap wrapper for Pick in Active Match (Ctrl+Cmd+A)."""
+
+    bl_idname = "perspective_match.pick_in_active_match"
+    bl_label = "Pick in Active Match"
+    bl_description = (
+        "Start picking the active landmark on the plate. "
+        "Available in camera view while the Perspective Match sidebar tab is open"
+    )
+    bl_options = {"INTERNAL"}
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        # Leave Ctrl+Cmd+A to Blender unless the N-panel tab is selected,
+        # a match still is loaded, a landmark is active, and we are in that
+        # match's camera view (not a free orbit or another camera).
+        if not _perspective_match_sidebar_active(context):
+            return False
+        if scene.active_landmark(context) is None:
+            return False
+        return PM_OT_interact.poll(context) and scene.is_camera_view(context)
+
+    def invoke(self, context: bpy.types.Context, _event) -> set[str]:
+        result = bpy.ops.perspective_match.interact("INVOKE_DEFAULT", mode="LANDMARK")
+        # Inner operator owns the modal handler; do not return RUNNING_MODAL.
+        if result == {"RUNNING_MODAL"}:
+            return {"FINISHED"}
+        return result
+
+
 class PM_OT_activate_match_slot(bpy.types.Operator):
     """Activate a match by 1-based index in the name-sorted match list."""
 
@@ -3266,4 +3296,5 @@ CLASSES = (
     PM_OT_activate_match_slot,
     PM_OT_cycle_match,
     PM_OT_interact,
+    PM_OT_pick_in_active_match,
 )
