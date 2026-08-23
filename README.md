@@ -2,7 +2,7 @@
 
 Blender 5.1 extension for matching perspective cameras to stills. Keep several matches in one `.blend`, draw vanishing-point line bundles, solve each camera, pick a world origin, and optionally sync matches into one shared space with a landmark graph.
 
-Native port of the manual workflow from Perspective Match Studio — no Electron, sidecar, or network. Core matching uses NumPy (bundled with Blender). **Find AprilTags** and **Detect VP Lines** need OpenCV (`opencv-contrib-python-headless`); the extension still loads without it and hides those controls.
+Native port of the manual workflow from Perspective Match Studio — no Electron, sidecar, or network. Core matching uses NumPy (bundled with Blender). **Find AprilTags**, **Snap to AprilTag**, and **Detect VP Lines** need OpenCV (`opencv-contrib-python-headless`); the extension still loads without it and hides those controls.
 
 ## Features
 
@@ -18,7 +18,7 @@ Native port of the manual workflow from Perspective Match Studio — no Electron
 - Blender 5.1 or newer
 - A reference image with clear straight edges for the VP workflow
 
-No manual `pip install` into Blender’s Python. Release zips and `./scripts/fetch-wheels.sh` (also called from build / link-dev) bundle OpenCV for auto-detect. Without that wheel, matching / drawing / sync still work; **Detect VP Lines** and **Find AprilTags** stay hidden, and the Info editor logs that OpenCV is missing on enable.
+No manual `pip install` into Blender’s Python. Release zips and `./scripts/fetch-wheels.sh` (also called from build / link-dev) bundle OpenCV for auto-detect. Without that wheel, matching / drawing / sync still work; **Detect VP Lines**, **Find AprilTags**, and **Snap to AprilTag** stay hidden, and the Info editor logs that OpenCV is missing on enable.
 
 ## Installation
 

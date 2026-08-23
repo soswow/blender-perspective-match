@@ -67,6 +67,8 @@ def load_warning() -> str:
         hidden.append("Detect VP Lines")
     if not caps.apriltags:
         hidden.append("Find AprilTags")
+    if not caps.available:
+        hidden.append("Snap to AprilTag")
     if not hidden:
         return ""
     if caps.module is None:

@@ -590,6 +590,10 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
                 text="",
                 icon="X",
             )
+            if landmark.kind == "POINT":
+                caps = opencv_support.cached_capabilities()
+                if caps is not None and caps.available:
+                    sync_body.prop(workspace, "snap_landmark_to_apriltag")
             _header, confidence_body = _section(
                 sync_body,
                 "PM_landmark_confidence",

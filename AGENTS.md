@@ -39,6 +39,7 @@ Keep this map accurate when you add a module, move a stage, or change a named co
 | Landmark-graph sync | `core/sync/` (package; import as `match_perspective.core.sync`) |
 | Focal search | `core/lens_refine.py` |
 | Blender cameras, stills, Solve Sync apply | `scene/__init__.py` |
+| Image analysis (AprilTags, VP detect, edge/tag snap) | `detect/` |
 | Operators / panel / overlay | `ui/` |
 | RNA | `properties/__init__.py` |
 

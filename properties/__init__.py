@@ -777,6 +777,14 @@ class PMWorkspace(bpy.types.PropertyGroup):
         default="NORMAL",
         update=_redraw,
     )
+    snap_landmark_to_apriltag: bpy.props.BoolProperty(
+        name="Snap to AprilTag",
+        description=(
+            "When picking a point landmark, snap the click onto the centre of a "
+            "nearby dark AprilTag-like quadrilateral (too small or blurry to decode)"
+        ),
+        default=False,
+    )
     show_landmark_overlay: bpy.props.BoolProperty(
         name="Landmark Guides",
         description="Show landmark picks and line segments on the reference plate",

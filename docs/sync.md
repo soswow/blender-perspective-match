@@ -7,7 +7,7 @@ When several matches show the same scene, register them into one Blender world.
 1. Match each still on its own (VP lines; Origin optional). Origins do **not** need to match across stills. If every still has locked/imported full K, you can instead omit VP lines and use the calibrated ground-only workflow below.
 2. Choose an **Anchor** match — that world is shared space. Each match has **Enable sync for current match** (on by default); turn it off to exclude that still from Solve Sync / Diagnose / Refine Lenses.
 3. Add landmarks for features visible in two or more stills (≥5 shared 2D picks), **or** link **Known 3D** Blender objects (≥3) and pick them in the other stills.
-4. Pick each landmark in every still where it is visible.
+4. Pick each landmark in every still where it is visible. Optional: enable **Snap to AprilTag** (under **Pick in Active Match**) so a point click on a small or blurry marker snaps to the tag centre — the intersection of the dark quadrilateral's diagonals — without needing the marker to decode.
 5. Optional: tag **On Ground** on point landmarks in the anchor, or rely on Known 3D, to pin absolute scale.
 6. **Solve Sync** writes a rigid (or similarity) transform onto non-anchor root Empties. If a sync-enabled match still has no Pick Origin but has an **On Ground** pick, Sync auto-sets Origin from the earliest such pick (creation order) before solving — status shows `Auto origin: Match←landmark`.
 
@@ -40,6 +40,8 @@ Each landmark keeps a stable `item_id` plus a `creation_index` (add order). UI h
 
 Scans the active match still for **AprilTag 25h9 and 36h10** markers. Each tag's perspective-correct physical centre (the corner-diagonal intersection, corrected for active lens distortion) becomes a point pick. Landmark names include the family, such as `id005-25h9` and `id005-36h10`, so the same ID in both dictionaries creates distinct landmarks. Tag IDs are zero-padded to at least three digits (four for 36h10 IDs ≥ 1000). If a landmark whose name **starts with** the matching family-qualified name already exists (including older two-digit names such as `id05-25h9`), its pick for this match is updated and the name is rewritten to the current padding; otherwise a new point landmark is created. Needs OpenCV (`opencv-contrib-python-headless`); the button is hidden when neither dictionary is available.
 
+When a printed marker is too small or blurry to decode, pick it by hand with **Snap to AprilTag** enabled. The click does not identify the ID; it only recenters onto the dark blotch (the inner black quad, not the white quiet zone). Needs OpenCV; the checkbox is hidden when the wheel is missing.
+
 ### Known 3D workflow
 
 Model or place Empties in the anchor world → select them → Sync list **Landmarks from Selected** (auto-fills 2D on the anchor still) → in each other match, **Pick** those features in 2D. Add a few off-line 2D↔2D landmarks if the known points lie on one edge (kills spin-around-the-line ambiguity).
@@ -64,7 +66,7 @@ Without Known 3D ends, a free line needs **three or more** stills — two views 
 
 **Refine Lenses** searches each unlocked match’s focal length (re-orients from VP lines at each trial) with a per-line VP residual prior and hard VP guardrails, then a coupled polish, then Solve Sync. Runs in a background thread — watch the progress slider, press **Esc** or **Cancel** to stop. The % field is the ± search window around current fx (default 18). Skips **1-point** matches and matches without enough VP lines. Disable unrelated matches or landmarks before refining a subset.
 
-The eye icon on **Sync Matches** toggles landmark picks on the plate; **Landmark Empties** controls the 3D helpers after sync. With the **Perspective Match** sidebar tab open, click a pick on the plate — or select that landmark’s Empty / line helper in the viewport — to select it in the list (red overlay). Inactive **On Ground** picks are magenta; Known 3D are cyan. **Pick in Active Match** can still place or move the active landmark; clicking a different pick selects it instead of overwriting. Per-match pick coordinates, confidence, and last-sync RMSE are under the collapsed **Pick Confidence** header.
+The eye icon on **Sync Matches** toggles landmark picks on the plate; **Landmark Empties** controls the 3D helpers after sync. With the **Perspective Match** sidebar tab open, click a pick on the plate — or select that landmark’s Empty / line helper in the viewport — to select it in the list (red overlay). Inactive **On Ground** picks are magenta; Known 3D are cyan. **Pick in Active Match** can still place or move the active landmark; clicking a different pick selects it instead of overwriting. **Snap to AprilTag** (point landmarks) looks around the click for a dark four-sided blotch with a brighter border and moves the pick to that quad's diagonal intersection. Per-match pick coordinates, confidence, and last-sync RMSE are under the collapsed **Pick Confidence** header.
 
 ## Debugging a bad or rejected sync
 

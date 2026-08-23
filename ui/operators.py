@@ -18,6 +18,7 @@ from .. import core, properties, scene
 from ..detect import apriltags as apriltag_detect
 from ..detect import line_snap
 from ..detect import opencv as opencv_support
+from ..detect import tag_snap
 from ..detect import vp_lines as vp_line_detect
 from ..scene import distortion
 from . import overlay, overlay_hit
@@ -144,6 +145,35 @@ def _maybe_snap_vp_segment(
         snapped.point_a,
         snapped.point_b,
         f"Snapped to {label} ({snapped.mean_shift_px:.1f}px)",
+    )
+
+
+def _tag_snap_enabled(workspace) -> bool:
+    """True when Snap to AprilTag is on and OpenCV has already probed in."""
+    if workspace is None or not workspace.snap_landmark_to_apriltag:
+        return False
+    caps = opencv_support.cached_capabilities()
+    return caps is not None and caps.available
+
+
+def _maybe_snap_landmark_point(
+    context: bpy.types.Context,
+    image_point: tuple[float, float],
+) -> tuple[tuple[float, float], str | None]:
+    """Optionally snap a point pick onto a nearby AprilTag-like quad."""
+    workspace = _workspace(context)
+    settings = _session(context)
+    if settings is None or not _tag_snap_enabled(workspace):
+        return image_point, None
+    try:
+        snapped = tag_snap.snap_point_in_session(settings, image_point)
+    except Exception as error:
+        return image_point, f"AprilTag snap skipped: {error}"
+    if snapped is None:
+        return image_point, None
+    return (
+        snapped.center_xy,
+        f"Snapped to AprilTag ({snapped.mean_shift_px:.1f}px)",
     )
 
 
@@ -511,8 +541,6 @@ def activate_match_by_slot(
         if report is not None:
             report({"ERROR"}, str(error))
         return {"CANCELLED"}
-    if report is not None:
-        report({"INFO"}, f"Active match {index}: {root.name}")
     return {"FINISHED"}
 
 
@@ -1565,6 +1593,11 @@ class PM_OT_interact(bpy.types.Operator):
         if mode == "PP":
             return "Drag the principal point on the plate"
         if mode == "LANDMARK":
+            if _tag_snap_enabled(_workspace(context)):
+                return (
+                    "Pick the active landmark in this match; "
+                    "point clicks snap to a nearby AprilTag-like quad"
+                )
             return "Pick the active landmark in this match"
         return cls.bl_description
 
@@ -2154,13 +2187,18 @@ class PM_OT_interact(bpy.types.Operator):
                         )
                         return {"RUNNING_MODAL"}
                     try:
-                        scene.set_landmark_observation(context, image_point)
+                        snapped_point, snap_note = _maybe_snap_landmark_point(
+                            context, image_point
+                        )
+                        scene.set_landmark_observation(context, snapped_point)
                     except Exception as error:
                         self.report({"ERROR"}, str(error))
                         return {"RUNNING_MODAL"}
                     # Stay in the tool so the same landmark can be picked in other matches
                     # after switching Active Match from the sidebar.
                     settings.status = self._status_prompt()
+                    if snap_note:
+                        settings.status = f"{settings.status} · {snap_note}"
                     properties.tag_viewport_redraw(context)
                     return {"RUNNING_MODAL"}
                 self._begin_drag(context, event, image_point, region)
@@ -2197,7 +2235,7 @@ class PM_OT_activate_match_slot(bpy.types.Operator):
         "Re-selecting the current match keeps live zoom/pan. "
         "Cancels any active Draw / Pick tool"
     )
-    bl_options = {"REGISTER", "UNDO"}
+    bl_options = {"UNDO"}
 
     index: bpy.props.IntProperty(
         name="Slot",
@@ -2225,7 +2263,7 @@ class PM_OT_cycle_match(bpy.types.Operator):
         "Switch to the previous or next Perspective Match "
         "(Ctrl+Alt+Arrow). Wraps around the name-sorted list"
     )
-    bl_options = {"REGISTER", "UNDO"}
+    bl_options = {"UNDO"}
 
     direction: bpy.props.IntProperty(
         name="Direction",

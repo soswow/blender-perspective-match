@@ -8,7 +8,7 @@ Point Blender's installed extension at this git checkout with a symlink (no ZIP 
 ./scripts/link-dev.sh
 ```
 
-That replaces `~/Library/Application Support/Blender/5.1/extensions/user_default/match_perspective` with a link to this repo (and downloads OpenCV wheels if missing). Enable **Perspective Match** once if it is not already on — **disable then re-enable** after the first link so Blender extracts the OpenCV wheel. The add-on still enables without OpenCV; **Detect VP Lines** / **Find AprilTags** stay hidden and Info logs that the wheel is missing.
+That replaces `~/Library/Application Support/Blender/5.1/extensions/user_default/match_perspective` with a link to this repo (and downloads OpenCV wheels if missing). Enable **Perspective Match** once if it is not already on — **disable then re-enable** after the first link so Blender extracts the OpenCV wheel. The add-on still enables without OpenCV; **Detect VP Lines** / **Find AprilTags** / **Snap to AprilTag** stay hidden and Info logs that the wheel is missing.
 
 Daily loop:
 

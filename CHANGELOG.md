@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Snap to AprilTag under Pick in Active Match recenters a point pick on a nearby dark tag-like quadrilateral (hidden when OpenCV is missing)
 - Click a landmark pick on the plate to select it in the Sync list (Perspective Match sidebar tab open)
 - Selecting a solved landmark Empty (or line helper) in the viewport selects that landmark in the Sync list when the Perspective Match sidebar tab is open
 - Calibrated sync can infer the shared ground frame from four or more matching On Ground landmarks across three or more images, without requiring VP lines

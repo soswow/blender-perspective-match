@@ -53,7 +53,7 @@ class OpenCvProbeTests(unittest.TestCase):
     def test_load_warning_matches_hidden_features(self) -> None:
         caps = opencv_support.capabilities(refresh=True)
         warning = opencv_support.load_warning()
-        if caps.apriltags and caps.line_segment_detector:
+        if caps.apriltags and caps.line_segment_detector and caps.available:
             self.assertEqual(warning, "")
             return
         self.assertTrue(warning.startswith("Perspective Match:"))
@@ -61,3 +61,5 @@ class OpenCvProbeTests(unittest.TestCase):
             self.assertIn("Detect VP Lines", warning)
         if not caps.apriltags:
             self.assertIn("Find AprilTags", warning)
+        if not caps.available:
+            self.assertIn("Snap to AprilTag", warning)
