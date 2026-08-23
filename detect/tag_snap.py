@@ -17,6 +17,10 @@ UPSCALE = 3
 ADAPTIVE_C = 5
 MIN_CONTRAST = 8.0
 MIN_SIDE_PX = 3.0
+# Recover the rest of a split inner body (~original pixels around the seed).
+INNER_EXPAND_PX = 4
+# Ignore near-black padding when growing; interior holes are filled by the hull.
+MIN_RECLASS_VALUE = 40
 
 
 @dataclass(frozen=True)
@@ -147,6 +151,47 @@ def _label_at_or_near(labels: np.ndarray, x: int, y: int, max_radius: int) -> in
     return 0
 
 
+def _convex_blob(cv2, blob: np.ndarray) -> np.ndarray:
+    """Fill the convex hull of the largest external contour."""
+    contours, _unused = cv2.findContours(
+        blob, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
+    if not contours:
+        return blob
+    contour = max(contours, key=cv2.contourArea)
+    filled = np.zeros_like(blob)
+    cv2.fillConvexPoly(filled, cv2.convexHull(contour), 1)
+    return filled
+
+
+def _complete_inner_body(cv2, equalized: np.ndarray, blob: np.ndarray) -> np.ndarray:
+    """Fill the inner black body around a dark seed, stopping at the quiet zone."""
+    seed = _convex_blob(cv2, blob)
+    if int(seed.sum()) < 8:
+        return blob
+    radius = max(int(INNER_EXPAND_PX * UPSCALE), 3) | 1
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (radius, radius))
+    expanded = cv2.dilate(seed, kernel, iterations=1)
+    ring = (expanded > 0) & (seed == 0)
+    if not np.any(ring):
+        return seed
+    interior_mean = float(equalized[seed > 0].mean())
+    ring_bright = float(np.percentile(equalized[ring], 70.0))
+    threshold = 0.5 * (interior_mean + ring_bright)
+    kept = (
+        (expanded > 0)
+        & (equalized <= threshold)
+        & (equalized >= MIN_RECLASS_VALUE)
+    ).astype(np.uint8)
+    _count, labels = cv2.connectedComponents(kept)
+    overlap = labels[seed > 0]
+    overlap = overlap[overlap > 0]
+    if overlap.size == 0:
+        return seed
+    label = int(np.bincount(overlap).argmax())
+    return _convex_blob(cv2, (labels == label).astype(np.uint8))
+
+
 def _approx_quad(cv2, blob: np.ndarray) -> np.ndarray | None:
     contours, _unused = cv2.findContours(
         blob, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
@@ -225,7 +270,11 @@ def snap_click_to_tag_center(
         label = _label_at_or_near(labels, local_x, local_y, 10 * scale)
         if label == 0:
             continue
-        blob = _fill_holes(cv2, (labels == label).astype(np.uint8))
+        blob = _complete_inner_body(
+            cv2,
+            equalized,
+            _fill_holes(cv2, (labels == label).astype(np.uint8)),
+        )
         area = int(blob.sum())
         if area < 16 * scale * scale or area > 0.7 * blob.size:
             continue
@@ -255,7 +304,8 @@ def snap_click_to_tag_center(
         if contrast < MIN_CONTRAST:
             continue
         area_px = area / float(scale * scale)
-        score = contrast / max(area_px, 1.0) ** 0.5
+        # Prefer a complete inner body over a high-contrast fragment of the bits.
+        score = contrast * max(area_px, 1.0) ** 0.5
         center = projective_quad_center(corners)
         result = TagSnapResult(
             center_xy=(float(center[0]), float(center[1])),

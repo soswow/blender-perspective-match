@@ -330,54 +330,68 @@ def _ground_truth_tags(cv2, gray, red_bgr):
     return tags
 
 
+_SAMPLE_FIXTURES = (
+    ("sample-small-tags", 8),
+    ("sample-small-tags2", 5),
+)
+
+
 class SampleSmallTagSnapTests(unittest.TestCase):
-    """Regression: clicks inside the eight hand-traced sample tags snap to centre."""
+    """Regression: clicks inside hand-traced sample tags snap to centre."""
 
     @classmethod
     def setUpClass(cls) -> None:
         cls.cv2 = _import_cv2()
+        cls.plates: dict[str, tuple[np.ndarray, list]] = {}
         if cls.cv2 is None:
             return
-        plate = _ROOT / "tests" / "fixtures" / "sample-small-tags.png"
-        overlay = _ROOT / "tests" / "fixtures" / "sample-small-tags-just-red.png"
-        bgr = cls.cv2.imread(str(plate), cls.cv2.IMREAD_COLOR)
-        red = cls.cv2.imread(str(overlay), cls.cv2.IMREAD_COLOR)
-        if bgr is None or red is None:
-            cls.cv2 = None
-            return
-        cls.gray = cls.cv2.cvtColor(bgr, cls.cv2.COLOR_BGR2GRAY)
-        cls.tags = _ground_truth_tags(cls.cv2, cls.gray, red)
+        for stem, _expected in _SAMPLE_FIXTURES:
+            plate = _ROOT / "tests" / "fixtures" / f"{stem}.png"
+            overlay = _ROOT / "tests" / "fixtures" / f"{stem}-just-red.png"
+            bgr = cls.cv2.imread(str(plate), cls.cv2.IMREAD_COLOR)
+            red = cls.cv2.imread(str(overlay), cls.cv2.IMREAD_COLOR)
+            if bgr is None or red is None:
+                continue
+            gray = cls.cv2.cvtColor(bgr, cls.cv2.COLOR_BGR2GRAY)
+            cls.plates[stem] = (gray, _ground_truth_tags(cls.cv2, gray, red))
 
     def test_clicks_inside_each_traced_tag_snap_to_its_centre(self) -> None:
         if self.cv2 is None:
             self.skipTest("OpenCV not installed")
-        self.assertEqual(len(self.tags), 8)
         rng = np.random.default_rng(0)
-        for tag_index, (region, centre) in enumerate(self.tags):
-            rows, cols = np.nonzero(region)
-            pixels = np.column_stack((cols, rows))
-            clicks = [(float(centre[0]), float(centre[1]))]
-            chosen = rng.choice(len(pixels), size=min(5, len(pixels)), replace=False)
-            for pixel in pixels[chosen]:
-                clicks.append((float(pixel[0]) + 0.5, float(pixel[1]) + 0.5))
-            for click in clicks:
-                result = tag_snap.snap_click_to_tag_center(self.gray, click)
-                self.assertIsNotNone(
-                    result, msg=f"tag {tag_index} no snap at {click}"
-                )
-                assert result is not None
-                error = float(
-                    np.linalg.norm(np.array(result.center_xy) - centre)
-                )
-                self.assertLess(
-                    error,
-                    4.0,
-                    msg=(
-                        f"tag {tag_index} click {click} snapped to "
-                        f"{result.center_xy} (want {tuple(centre.round(1))}, "
-                        f"err {error:.2f}px)"
-                    ),
-                )
+        for stem, expected_count in _SAMPLE_FIXTURES:
+            with self.subTest(stem=stem):
+                self.assertIn(stem, self.plates)
+                gray, tags = self.plates[stem]
+                self.assertEqual(len(tags), expected_count)
+                for tag_index, (region, centre) in enumerate(tags):
+                    rows, cols = np.nonzero(region)
+                    pixels = np.column_stack((cols, rows))
+                    clicks = [(float(centre[0]), float(centre[1]))]
+                    chosen = rng.choice(
+                        len(pixels), size=min(5, len(pixels)), replace=False
+                    )
+                    for pixel in pixels[chosen]:
+                        clicks.append((float(pixel[0]) + 0.5, float(pixel[1]) + 0.5))
+                    for click in clicks:
+                        result = tag_snap.snap_click_to_tag_center(gray, click)
+                        self.assertIsNotNone(
+                            result,
+                            msg=f"{stem} tag {tag_index} no snap at {click}",
+                        )
+                        assert result is not None
+                        error = float(
+                            np.linalg.norm(np.array(result.center_xy) - centre)
+                        )
+                        self.assertLess(
+                            error,
+                            4.0,
+                            msg=(
+                                f"{stem} tag {tag_index} click {click} snapped to "
+                                f"{result.center_xy} (want {tuple(centre.round(1))}, "
+                                f"err {error:.2f}px)"
+                            ),
+                        )
 
 
 if __name__ == "__main__":
