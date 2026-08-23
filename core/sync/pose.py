@@ -14,7 +14,12 @@ from .ba import (
     _sampson_distance,
     _triangulate_landmarks,
 )
-from .constants import ACCEPT_RMSE_PX, GROUND_PLANE_Z_FRACTION, STRETCHED_PIXEL_RATIO
+from .constants import (
+    ACCEPT_RMSE_PX,
+    GROUND_PLANE_Z_FRACTION,
+    LOG_SCALE_CLIP,
+    STRETCHED_PIXEL_RATIO,
+)
 from .ground import (
     _fit_homography_dlt,
     _homography_transfer_errors,
@@ -333,6 +338,30 @@ def _similarity_from_camera_pose(
     )
 
 
+def _is_collapsed_scale(scale: float) -> bool:
+    """True when log-scale sat on the LM clip floor (Empty would vanish)."""
+    if float(scale) <= 0.0:
+        return True
+    return abs(math.log(float(scale))) >= LOG_SCALE_CLIP - 0.5
+
+
+def _metric_scale_similarity(
+    similarity: SimilarityTransform,
+    calibration: core.Calibration,
+) -> SimilarityTransform:
+    """Keep the shared camera; rewrite a collapsed Empty scale as rigid s=1."""
+    if not _is_collapsed_scale(similarity.scale):
+        return similarity
+    center_shared = similarity.transform_point(calibration.camera_center)
+    rotation_w2c_shared = calibration.rotation_w2c @ similarity.rotation.T
+    return _similarity_from_camera_pose(
+        calibration,
+        rotation_w2c_shared,
+        center_shared,
+        scale=1.0,
+    )
+
+
 
 @lru_cache(maxsize=1)
 def _axis_aligned_rotations() -> tuple[np.ndarray, ...]:
@@ -456,7 +485,11 @@ def _unpack_similarity_pose(
         # Least-squares may briefly probe extreme log-scales while initializing
         # a planar solve. Keep those trial values finite without constraining
         # any physically useful scene scale.
-        scale = float(np.exp(np.clip(float(params[0]), -18.0, 18.0)))
+        scale = float(
+            np.exp(
+                np.clip(float(params[0]), -LOG_SCALE_CLIP, LOG_SCALE_CLIP)
+            )
+        )
         offset = 1
     if lock_rotation:
         rotation = (
@@ -2444,7 +2477,7 @@ def _relative_pose_from_correspondences(
             # Keep parallel refine only when it does not wreck point fit.
             if refined_rmse <= best_rmse + 5.0:
                 best = refined
-    return best, ""
+    return _metric_scale_similarity(best, other), ""
 
 
 def _point_pairs_between_matches(

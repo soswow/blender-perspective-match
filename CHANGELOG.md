@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - AprilTag sheet padding now wraps all four outer edges of the packed tag group
 
 ### Fixed
+- Solve Sync no longer shrinks a below-ground camera to a point, which made landmark overlays jump when panning
 - Solve Sync still registers the cameras that fit when one still cannot, instead of failing the whole solve
 - Solve Sync still registers a photo looking straight down at the ground from On Ground landmarks; if off-ground picks still disagree, that still is placed from the floor after the others lock
 - Landmarks wrongly marked On Ground no longer block a pose that already fits the 2D picks

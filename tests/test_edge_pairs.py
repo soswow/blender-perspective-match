@@ -158,3 +158,57 @@ class SyncPairTests(unittest.TestCase):
         self.assertTrue(result.success, result.message)
         self.assertIn("side", result.similarities)
         self.assertNotIn("Could not", result.message)
+
+    def test_from_below_raised_only_keeps_metric_scale(self) -> None:
+        """C from-below × D raised-only × E leftover look-at."""
+        leftover = np.array((0.0, -5.0, 1.7), dtype=np.float64)
+        matches, observations, true_by_id = build_views(
+            [
+                ViewSpec(
+                    "anchor",
+                    YAML_WIDTH,
+                    YAML_HEIGHT,
+                    np.array((-3.0, -4.0, 2.2)),
+                    np.array((0.2, 0.1, 0.0)),
+                ),
+                ViewSpec(
+                    "side",
+                    YAML_WIDTH,
+                    YAML_HEIGHT,
+                    np.array((3.4, -3.1, 2.3)),
+                    np.array((0.1, 0.2, 0.0)),
+                ),
+                ViewSpec(
+                    "below",
+                    YAML_WIDTH,
+                    YAML_HEIGHT,
+                    np.array((0.2, 0.3, -1.6)),
+                    np.array((0.2, 0.3, 0.68)),
+                    leftover_center=leftover,
+                    leftover_target=np.array((0.5, 0.5, 0.0)),
+                    skip_ground=True,
+                ),
+            ]
+        )
+        result = sync.solve_landmark_sync(
+            matches, observations, anchor_id="anchor"
+        )
+        self.assertTrue(result.success, result.message)
+        self.assertIn("below", result.similarities)
+        recovered = result.similarities["below"]
+        stored = next(item.calibration for item in matches if item.match_id == "below")
+        self.assertFalse(sync._is_collapsed_scale(recovered.scale))
+        self.assertAlmostEqual(float(recovered.scale), 1.0, delta=0.05)
+        recovered_center = recovered.transform_point(stored.camera_center)
+        self.assertLess(float(recovered_center[2]), -0.3)
+        axis_private = stored.rotation_w2c.T[:, 2]
+        axis_shared = recovered.rotation @ axis_private
+        self.assertGreater(float(axis_shared[2]), 0.2)
+        self.assertLess(result.per_match_rmse_px.get("below", 99.0), 8.0)
+        self.assertTrue(
+            np.allclose(
+                recovered_center,
+                true_by_id["below"].camera_center,
+                atol=0.35,
+            )
+        )

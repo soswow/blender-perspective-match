@@ -77,5 +77,5 @@ The eye icon on **Sync Matches** toggles landmark picks on the plate; **Landmark
 - **Many landmarks all high** — FOV or VP solve is likely off on one match; try **Refine Lenses**, or re-refine that camera manually.
 - **Sync broke after adding one landmark** — turn off **Use in Sync** on the new one and Diagnose again.
 - **Known 3D warn (Empty vs anchor pick)** — the Empty moved or the anchor camera changed; re-run **Landmarks from Selected**.
-- **Uncertain pick** — set that still's confidence to **Low**. High-confidence picks dominate the pose.
+- **Landmarks jump on the plate when panning one still** — that match Empty was shrunk to a point (typical for a below-ground camera). Switch to the match or re-run **Solve Sync**; the camera should stay below-ground, but overlay picks stay on the photo.
 - **One free line looks skewed vs another that should be parallel** — tag **Is Parallel To**. Prefer linking the bad free line to a better-fitting free line or a Known 3D edge.

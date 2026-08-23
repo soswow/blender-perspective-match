@@ -79,6 +79,8 @@ class ViewSpec:
     target: np.ndarray
     leftover_center: np.ndarray | None = None
     leftover_target: np.ndarray | None = None
+    skip_ground: bool = False
+    skip_raised: bool = False
 
 
 def build_views(
@@ -128,12 +130,16 @@ def build_views(
 
     for index, point in enumerate(GROUND_POINTS):
         for view in views:
+            if view.skip_ground:
+                continue
             if view.match_id == nadir_id and not nadir_ground:
                 continue
             add_point(f"g{index}", point, True, view.match_id)
     if include_raised:
         for index, point in enumerate(RAISED_POINTS):
             for view in views:
+                if view.skip_raised:
+                    continue
                 if view.match_id == nadir_id and not nadir_raised:
                     continue
                 add_point(f"e{index}", point, False, view.match_id)

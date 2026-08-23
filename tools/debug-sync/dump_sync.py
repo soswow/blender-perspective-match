@@ -236,6 +236,7 @@ def main(argv: list[str]) -> int:
             f"nadir_deg={_angle_from_vertical_deg(optical):5.1f} "
             f"center_vs_z_deg={_angle_from_vertical_deg(center_ray):5.1f} "
             f"C_z={float(calibration.camera_center[2]):6.2f} "
+            f"empty_s={float(root.matrix_world.to_scale().x):.3g} "
             f"axis=({optical[0]:+.2f},{optical[1]:+.2f},{optical[2]:+.2f})"
         )
 
@@ -579,6 +580,9 @@ def main(argv: list[str]) -> int:
         log(f"mean_rmse={result.mean_reprojection_px:.3f}")
         log(f"per_match={result.per_match_rmse_px}")
         log(f"registered={sorted(result.similarities)}")
+        for match_id in sorted(result.similarities):
+            similarity = result.similarities[match_id]
+            log(f"  {match_id} scale={similarity.scale:.6g}")
     except Exception:
         log(traceback.format_exc())
 

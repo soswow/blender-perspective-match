@@ -16,5 +16,9 @@ STRETCHED_PIXEL_RATIO = 0.2
 # |Z| vs point scale (and On Ground vs triangulation) for "on the ground plane".
 GROUND_PLANE_Z_FRACTION = 0.15
 
+# LM clips log-scale to ± this. Hitting the floor collapses the match Empty
+# (det ≈ 0) so overlay corners project as noise and jump when the view pans.
+LOG_SCALE_CLIP = 18.0
+
 # Multiply an outlier landmark's pick weight by this in joint BA.
 OUTLIER_WEIGHT_FACTOR = 0.15

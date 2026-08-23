@@ -28,6 +28,7 @@ Recovered-still overlay (ground vs off-plane RMSE after `solve_landmark_sync`):
 ## What to look at
 
 - **Stored nadir_deg** — current Blender camera vs world ±Z. Only meaningful if that match already locked; unsynced cameras often still sit on a leftover default pose.
+- **empty_s** — match-Empty scale from `matrix_world`. Values near `exp(-18) ≈ 1.5e-8` mean a collapsed log-scale pose; overlay corners project as one point and landmarks jump when panning. Re-activate the match or Solve Sync to rewrite it as rigid `s=1`.
 - **rec_nadir_deg** — optical axis of the *recovered* pairwise pose in the anchor/shared frame. Near 0° = looking along ±Z (image plane ≈ ground). That is the planar / essential-matrix degeneracy, even when On Ground tags are correct.
 - **H_rmse** — DLT homography residual between the two stills. Low H_rmse with high mixed_rmse means the correspondence is planar (homography fits; metric PnP does not).
 - **center_vs_z_deg** — stored ray through the image center (differs from stored nadir_deg when PP is off-center).

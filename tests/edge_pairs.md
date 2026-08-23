@@ -29,6 +29,7 @@ Before changing remap / bind / copy-K / `solve_landmark_sync`: scan **Untested**
 | A swap × C nadir × D raised × E leftover | `test_edge_pairs.SyncPairTests.test_nadir_landscape_after_portrait_yaml` | covered |
 | A swap × D raised-only on nadir | `test_edge_pairs.SyncPairTests.test_nadir_raised_only_does_not_crash` | covered |
 | C from-below × overlap | `test_graph_bridge_recovers_camera_below_ground` | covered |
+| C from-below × D raised-only × E leftover | `test_edge_pairs.SyncPairTests.test_from_below_raised_only_keeps_metric_scale` | covered |
 | F un-registerable × rest lock | `test_partial_sync_keeps_registered_matches` | covered |
 | C nadir × leftover × same K | `test_nadir_camera_registers_from_ground_plane` | covered |
 | A swap × 180° (same W×H, upside-down JPEG) | — | N/A — size remap cannot see 180° |

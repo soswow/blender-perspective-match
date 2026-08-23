@@ -8,7 +8,7 @@ from pathlib import Path
 import bpy
 import numpy as np
 from bpy_extras import view3d_utils
-from mathutils import Matrix, Vector
+from mathutils import Matrix, Quaternion, Vector
 
 from .. import core, properties
 
@@ -1740,6 +1740,15 @@ def ensure_match_ready(context: bpy.types.Context) -> bool:
         apply_camera(context.scene, settings, calibration_from_settings(settings))
     except Exception:
         return False
+    root = properties.active_root(context)
+    if root is not None and settings.sync_is_applied:
+        from ..core import sync as sync_module
+
+        live_scale = float(root.matrix_world.to_scale().x)
+        if sync_module._is_collapsed_scale(live_scale) or sync_module._is_collapsed_scale(
+            float(settings.sync_scale)
+        ):
+            apply_similarity_to_root(root, _similarity_from_session(settings))
     return True
 
 
@@ -1991,8 +2000,28 @@ def clear_similarity_on_session(session: properties.PMSession) -> None:
     session.sync_rmse_px = 0.0
 
 
+def _similarity_from_session(session: properties.PMSession):
+    """Rebuild a SimilarityTransform from persisted match RNA."""
+    from ..core import sync as sync_module
+
+    rotation = Quaternion(tuple(session.sync_rotation)).to_matrix()
+    return sync_module.SimilarityTransform(
+        scale=float(session.sync_scale),
+        rotation=np.array(rotation, dtype=np.float64),
+        translation=np.array(session.sync_translation, dtype=np.float64),
+    )
+
+
 def apply_similarity_to_root(root: bpy.types.Object, similarity) -> None:
     """Write a similarity onto a match root Empty."""
+    session = root.pm_session
+    if session is not None and float(session.fx) > 0.0:
+        from ..core import sync as sync_module
+
+        similarity = sync_module._metric_scale_similarity(
+            similarity,
+            calibration_from_settings(session),
+        )
     root.matrix_world = _similarity_to_matrix(similarity)
     store_similarity_on_session(root.pm_session, similarity)
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import unittest
 
 import numpy as np
@@ -151,6 +152,60 @@ class PoseSyncTests(unittest.TestCase):
         self.assertLess(float(recovered_center[2]), -0.5)
         recovered_forward = recovered.rotation @ local_rotation.T[:, 2]
         self.assertGreater(float(recovered_forward[2]), 0.05)
+        self.assertFalse(sync._is_collapsed_scale(recovered.scale))
+        self.assertAlmostEqual(float(recovered.scale), 1.0, delta=0.05)
+
+    def test_collapsed_log_scale_rewrites_as_rigid_camera(self) -> None:
+        """LM floor s=exp(-18) must not be applied as an Empty scale."""
+        intrinsics = core.CameraIntrinsics(
+            fx=900.0,
+            fy=900.0,
+            cx=400.0,
+            cy=300.0,
+            image_width=800,
+            image_height=600,
+        )
+        private_center = np.array((0.0, -5.0, 1.7), dtype=np.float64)
+        private_rotation = _look_at_rotation(
+            private_center,
+            np.array((0.5, 0.5, 0.0), dtype=np.float64),
+        )
+        calibration = core.Calibration(
+            intrinsics, private_rotation, private_center
+        )
+        true_center = np.array((0.4, -0.6, -0.5), dtype=np.float64)
+        true_rotation = _look_at_rotation(
+            true_center,
+            np.array((0.4, -0.6, 0.7), dtype=np.float64),
+        )
+        rotation_sim = true_rotation.T @ private_rotation
+        collapsed = sync.SimilarityTransform(
+            scale=math.exp(-sync.LOG_SCALE_CLIP),
+            rotation=rotation_sim,
+            translation=true_center.copy(),
+        )
+        self.assertTrue(sync._is_collapsed_scale(collapsed.scale))
+        rigid = sync._metric_scale_similarity(collapsed, calibration)
+        self.assertFalse(sync._is_collapsed_scale(rigid.scale))
+        self.assertAlmostEqual(float(rigid.scale), 1.0, places=6)
+        self.assertAlmostEqual(
+            abs(float(np.linalg.det(rigid.matrix()[:3, :3]))), 1.0, places=6
+        )
+        self.assertTrue(
+            np.allclose(
+                rigid.transform_point(private_center),
+                collapsed.transform_point(private_center),
+                atol=1.0e-6,
+            )
+        )
+        axis_private = private_rotation.T[:, 2]
+        self.assertTrue(
+            np.allclose(
+                rigid.rotation @ axis_private,
+                collapsed.rotation @ axis_private,
+                atol=1.0e-8,
+            )
+        )
 
 
     def test_registration_candidate_uses_graph_to_resolve_pair_scale(self) -> None:
