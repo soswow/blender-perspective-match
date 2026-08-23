@@ -534,3 +534,168 @@ class SolveSyncTests(unittest.TestCase):
             result.inconsistent_picks,
         )
 
+    def test_resected_views_triangulate_exclusive_landmarks(self) -> None:
+        """Bottom-only tags still get 3D after their bridging cameras peel.
+
+        Two below-ground stills share floor tags with the top graph (so they
+        recover after peel) and exclusive underside tags with a hanging still
+        that never sees the joint cloud. That hanging still must be PnP'd from
+        the exclusive 3D instead of keeping a leftover pose and 0 px RMSE.
+        """
+        intrinsics = core.CameraIntrinsics(
+            fx=800.0,
+            fy=800.0,
+            cx=400.0,
+            cy=300.0,
+            image_width=800,
+            image_height=600,
+        )
+        ground_points = (
+            np.array((-1.5, -1.2, 0.0)),
+            np.array((1.6, -1.0, 0.0)),
+            np.array((1.8, 1.4, 0.0)),
+            np.array((-1.3, 1.6, 0.0)),
+            np.array((0.1, -0.2, 0.0)),
+            np.array((0.8, 0.6, 0.0)),
+            np.array((-0.4, 0.3, 0.0)),
+        )
+        elevated_points = (
+            np.array((-0.6, -0.5, 0.8)),
+            np.array((0.5, -0.4, 0.8)),
+            np.array((0.4, 0.5, 0.8)),
+            np.array((-0.5, 0.4, 0.8)),
+            np.array((0.0, 0.0, 0.8)),
+        )
+        bottom_points = (
+            np.array((-0.5, -0.4, 0.0)),
+            np.array((0.6, -0.3, 0.0)),
+            np.array((0.5, 0.5, 0.0)),
+            np.array((-0.4, 0.6, 0.0)),
+            np.array((0.1, 0.1, 0.0)),
+            np.array((0.2, -0.2, 0.0)),
+        )
+        leftover_center = np.array((0.0, -5.0, 1.7), dtype=np.float64)
+        leftover = core.Calibration(
+            intrinsics,
+            _look_at_rotation(leftover_center, np.array((0.5, 0.5, 0.0))),
+            leftover_center,
+        )
+        anchor_center = np.array((-3.0, -4.0, 2.2), dtype=np.float64)
+        anchor = core.Calibration(
+            intrinsics,
+            _look_at_rotation(anchor_center, np.array((0.2, 0.1, 0.0))),
+            anchor_center,
+        )
+        side_center = np.array((3.4, -3.1, 2.3), dtype=np.float64)
+        side = core.Calibration(
+            intrinsics,
+            _look_at_rotation(side_center, np.array((0.1, 0.2, 0.0))),
+            side_center,
+        )
+        bridge_a_center = np.array((0.55, -0.45, -1.6), dtype=np.float64)
+        bridge_a_true = core.Calibration(
+            intrinsics,
+            _look_at_rotation(bridge_a_center, np.array((0.2, 0.2, 0.0))),
+            bridge_a_center,
+        )
+        bridge_b_center = np.array((-0.5, 0.55, -1.55), dtype=np.float64)
+        bridge_b_true = core.Calibration(
+            intrinsics,
+            _look_at_rotation(bridge_b_center, np.array((0.2, 0.2, 0.0))),
+            bridge_b_center,
+        )
+        underside_center = np.array((0.2, 0.15, -1.4), dtype=np.float64)
+        underside_true = core.Calibration(
+            intrinsics,
+            _look_at_rotation(underside_center, np.array((0.2, 0.15, 0.0))),
+            underside_center,
+        )
+        matches = [
+            sync.SyncMatchInput("anchor", anchor),
+            sync.SyncMatchInput("side", side),
+            sync.SyncMatchInput("bridge_a", leftover),
+            sync.SyncMatchInput("bridge_b", leftover),
+            sync.SyncMatchInput("underside", leftover),
+        ]
+        observations: list[sync.SyncObservation] = []
+        true_by_id = {
+            "anchor": anchor,
+            "side": side,
+            "bridge_a": bridge_a_true,
+            "bridge_b": bridge_b_true,
+            "underside": underside_true,
+        }
+        for index, point in enumerate(ground_points):
+            for match_id in ("anchor", "side", "bridge_a", "bridge_b"):
+                observations.append(
+                    sync.SyncObservation(
+                        match_id,
+                        f"g{index}",
+                        *_project(point, true_by_id[match_id]),
+                        True,
+                        landmark_name=f"g{index}",
+                    )
+                )
+        for index, point in enumerate(elevated_points):
+            for match_id in ("anchor", "side"):
+                observations.append(
+                    sync.SyncObservation(
+                        match_id,
+                        f"e{index}",
+                        *_project(point, true_by_id[match_id]),
+                        False,
+                        landmark_name=f"e{index}",
+                    )
+                )
+            for match_id in ("bridge_a", "bridge_b"):
+                u_coord, v_coord = _project(point, true_by_id[match_id])
+                observations.append(
+                    sync.SyncObservation(
+                        match_id,
+                        f"e{index}",
+                        u_coord + 180.0,
+                        v_coord,
+                        False,
+                        landmark_name=f"e{index}",
+                    )
+                )
+        for index, point in enumerate(bottom_points):
+            for match_id in ("bridge_a", "bridge_b", "underside"):
+                observations.append(
+                    sync.SyncObservation(
+                        match_id,
+                        f"b{index}",
+                        *_project(point, true_by_id[match_id]),
+                        False,
+                        landmark_name=f"b{index}",
+                    )
+                )
+
+        result = sync.solve_landmark_sync(
+            matches,
+            observations,
+            anchor_id="anchor",
+        )
+        self.assertTrue(result.success, result.message)
+        self.assertIn("underside", result.similarities)
+        for index in range(len(bottom_points)):
+            self.assertIn(f"b{index}", result.landmarks, result.message)
+        self.assertGreater(
+            result.per_match_rmse_px.get("underside", -1.0),
+            0.0,
+            result.per_match_rmse_px,
+        )
+        self.assertLess(
+            result.per_match_rmse_px.get("underside", 99.0),
+            8.0,
+            result.message,
+        )
+        recovered = result.similarities["underside"]
+        recovered_center = recovered.transform_point(leftover.camera_center)
+        self.assertLess(float(recovered_center[2]), -0.2)
+        self.assertTrue(
+            np.allclose(recovered_center, underside_center, atol=0.35),
+            recovered_center,
+        )
+
+

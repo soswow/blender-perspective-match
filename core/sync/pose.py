@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from itertools import combinations
 import math
+import os
+import threading
 
 import numpy as np
 
@@ -336,6 +339,207 @@ def _similarity_from_camera_pose(
     return SimilarityTransform(
         scale=scale, rotation=rotation_sim, translation=translation
     )
+
+
+def _copy_similarity(similarity: SimilarityTransform) -> SimilarityTransform:
+    """Independent copy so later BA cannot mutate a cached pose."""
+    return SimilarityTransform(
+        scale=float(similarity.scale),
+        rotation=np.asarray(similarity.rotation, dtype=np.float64).copy(),
+        translation=np.asarray(similarity.translation, dtype=np.float64).copy(),
+    )
+
+
+def _rounded_floats(values, digits: int = 8) -> tuple[float, ...]:
+    return tuple(round(float(value), digits) for value in np.asarray(values).ravel())
+
+
+def _calibration_key(calibration: core.Calibration) -> tuple:
+    """Private-frame K + pose; origin / FOV changes must miss the cache."""
+    intrinsics = calibration.intrinsics
+    return (
+        round(float(intrinsics.fx), 6),
+        round(float(intrinsics.fy), 6),
+        round(float(intrinsics.cx), 6),
+        round(float(intrinsics.cy), 6),
+        int(intrinsics.image_width),
+        int(intrinsics.image_height),
+        round(float(calibration.division_lambda), 8),
+        _rounded_floats(calibration.brown_conrady),
+        _rounded_floats(calibration.camera_center),
+        _rounded_floats(calibration.rotation_w2c),
+    )
+
+
+def _observation_point_bit(item: SyncObservation) -> tuple:
+    return (
+        item.match_id,
+        item.landmark_id,
+        round(float(item.u), 4),
+        round(float(item.v), 4),
+        round(float(item.weight), 6),
+        bool(item.on_ground),
+    )
+
+
+def _observation_line_bit(item: SyncLineObservation) -> tuple:
+    return (
+        item.match_id,
+        item.landmark_id,
+        round(float(item.u1), 4),
+        round(float(item.v1), 4),
+        round(float(item.u2), 4),
+        round(float(item.v2), 4),
+        round(float(item.weight), 6),
+    )
+
+
+def _pair_correspondence_key(
+    anchor_id: str,
+    other_id: str,
+    observations_by_landmark: dict[str, list[SyncObservation]],
+    matches: dict[str, SyncMatchInput],
+    known_world: dict[str, np.ndarray] | None,
+    known_lines: dict[str, tuple[np.ndarray, np.ndarray]] | None,
+    line_observations_by_landmark: dict[str, list[SyncLineObservation]] | None,
+    parallel_pairs: list[tuple[str, str]] | None,
+    *,
+    lock_rotation: bool,
+    lock_translation: bool,
+) -> tuple:
+    """Fingerprint the two-view inputs that determine relative pose.
+
+    A re-pick on a third still does not invalidate this pair. Known 3D seen
+    only in ``other`` is included because PnP uses it.
+    """
+    pair_ids = {anchor_id, other_id}
+    involved: set[str] = set()
+    point_bits: list[tuple] = []
+    line_bits: list[tuple] = []
+    for landmark_id, items in observations_by_landmark.items():
+        by_match = {item.match_id: item for item in items}
+        in_pair = pair_ids.intersection(by_match)
+        used = False
+        if anchor_id in by_match and other_id in by_match:
+            used = True
+        elif known_world and landmark_id in known_world and other_id in by_match:
+            used = True
+        if not used:
+            continue
+        involved.add(landmark_id)
+        for match_id in in_pair:
+            point_bits.append(_observation_point_bit(by_match[match_id]))
+        if known_world and landmark_id in known_world:
+            point_bits.append(
+                ("known3d", landmark_id, *_rounded_floats(known_world[landmark_id]))
+            )
+    for landmark_id, items in (line_observations_by_landmark or {}).items():
+        by_match = {item.match_id: item for item in items}
+        in_pair = pair_ids.intersection(by_match)
+        used = False
+        if in_pair:
+            used = True
+        elif known_lines and landmark_id in known_lines and other_id in by_match:
+            used = True
+        if not used:
+            continue
+        involved.add(landmark_id)
+        for match_id in in_pair:
+            line_bits.append(_observation_line_bit(by_match[match_id]))
+        if known_lines and landmark_id in known_lines:
+            point_a, point_b = known_lines[landmark_id]
+            line_bits.append(
+                (
+                    "known3d",
+                    landmark_id,
+                    *_rounded_floats(point_a),
+                    *_rounded_floats(point_b),
+                )
+            )
+    parallel_bits = tuple(
+        sorted(
+            pair
+            for pair in (parallel_pairs or [])
+            if pair[0] in involved or pair[1] in involved
+        )
+    )
+    return (
+        anchor_id,
+        other_id,
+        bool(lock_rotation),
+        bool(lock_translation),
+        tuple(sorted(point_bits)),
+        tuple(sorted(line_bits)),
+        _calibration_key(matches[anchor_id].calibration),
+        _calibration_key(matches[other_id].calibration),
+        parallel_bits,
+    )
+
+
+def _pairs_only_key(
+    pairs: list[tuple[SyncObservation, SyncObservation]],
+    anchor: core.Calibration,
+    other: core.Calibration,
+    *,
+    lock_rotation: bool,
+    lock_translation: bool,
+) -> tuple:
+    bits = tuple(
+        sorted(
+            (
+                getattr(anchor_obs, "landmark_id", ""),
+                round(float(anchor_obs.u), 4),
+                round(float(anchor_obs.v), 4),
+                round(float(anchor_obs.weight), 6),
+                round(float(other_obs.u), 4),
+                round(float(other_obs.v), 4),
+                round(float(other_obs.weight), 6),
+            )
+            for anchor_obs, other_obs in pairs
+        )
+    )
+    return (
+        bits,
+        _calibration_key(anchor),
+        _calibration_key(other),
+        bool(lock_rotation),
+        bool(lock_translation),
+    )
+
+
+_PAIR_CACHE: dict[tuple, object] = {}
+_PAIR_CACHE_LOCK = threading.Lock()
+_CACHE_MISS = object()
+
+
+def clear_registration_cache() -> None:
+    """Drop cached pairwise poses (Clear Sync / tests)."""
+    with _PAIR_CACHE_LOCK:
+        _PAIR_CACHE.clear()
+
+
+def _cached_similarity(value: SimilarityTransform | None) -> SimilarityTransform | None:
+    if value is None:
+        return None
+    return _copy_similarity(value)
+
+
+def _pair_worker_count(job_count: int) -> int:
+    """One worker per independent pair, capped at the host CPU count."""
+    if job_count <= 1:
+        return 1
+    return min(int(job_count), os.cpu_count() or 1)
+
+
+def _map_pair_jobs(func, items: list):
+    """Run independent pair solves; keep input order."""
+    if not items:
+        return []
+    if len(items) == 1:
+        return [func(items[0])]
+    workers = _pair_worker_count(len(items))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        return list(pool.map(func, items))
 
 
 def _is_collapsed_scale(scale: float) -> bool:
@@ -1476,8 +1680,52 @@ def _solve_relative_from_pairs(
     *,
     lock_rotation: bool = False,
     lock_translation: bool = False,
+    use_pose_cache: bool = False,
 ) -> SimilarityTransform | None:
     """Multi-start ray-distance LM for Empty (R, t) from 2D↔2D pairs only."""
+    if use_pose_cache:
+        cache_key = (
+            "pairs",
+            _pairs_only_key(
+                pairs,
+                anchor,
+                other,
+                lock_rotation=lock_rotation,
+                lock_translation=lock_translation,
+            ),
+        )
+        with _PAIR_CACHE_LOCK:
+            hit = _PAIR_CACHE.get(cache_key, _CACHE_MISS)
+            if hit is not _CACHE_MISS:
+                return _cached_similarity(hit)  # type: ignore[arg-type]
+        solved = _compute_relative_from_pairs(
+            pairs,
+            anchor,
+            other,
+            lock_rotation=lock_rotation,
+            lock_translation=lock_translation,
+        )
+        with _PAIR_CACHE_LOCK:
+            _PAIR_CACHE[cache_key] = _cached_similarity(solved)
+        return solved
+    return _compute_relative_from_pairs(
+        pairs,
+        anchor,
+        other,
+        lock_rotation=lock_rotation,
+        lock_translation=lock_translation,
+    )
+
+
+def _compute_relative_from_pairs(
+    pairs: list[tuple[SyncObservation, SyncObservation]],
+    anchor: core.Calibration,
+    other: core.Calibration,
+    *,
+    lock_rotation: bool = False,
+    lock_translation: bool = False,
+) -> SimilarityTransform | None:
+    """Uncached 2D↔2D relative pose (see ``_solve_relative_from_pairs``)."""
     if len(pairs) < 5:
         return None
     if lock_rotation and lock_translation:
@@ -2015,6 +2263,7 @@ def _relative_pose_from_correspondences(
     *,
     lock_rotation: bool = False,
     lock_translation: bool = False,
+    use_pose_cache: bool = False,
 ) -> tuple[SimilarityTransform | None, str]:
     """Register other from free 2D↔2D and/or Known 3D points/lines.
 
@@ -2024,6 +2273,74 @@ def _relative_pose_from_correspondences(
     lines use 2D segments in the other still. Free 2D↔2D lines need ≥3 stills
     (handled after two matches are registered).
     """
+    if use_pose_cache:
+        cache_key = (
+            "rel",
+            _pair_correspondence_key(
+                anchor_id,
+                other_id,
+                observations_by_landmark,
+                matches,
+                known_world,
+                known_lines,
+                line_observations_by_landmark,
+                parallel_pairs,
+                lock_rotation=lock_rotation,
+                lock_translation=lock_translation,
+            ),
+        )
+        with _PAIR_CACHE_LOCK:
+            hit = _PAIR_CACHE.get(cache_key, _CACHE_MISS)
+            if hit is not _CACHE_MISS:
+                solved, detail = hit  # type: ignore[misc]
+                return _cached_similarity(solved), detail
+        solved, detail = _compute_relative_pose_from_correspondences(
+            anchor_id,
+            other_id,
+            observations_by_landmark,
+            matches,
+            known_world,
+            known_lines=known_lines,
+            line_observations_by_landmark=line_observations_by_landmark,
+            parallel_pairs=parallel_pairs,
+            initial_similarity=initial_similarity,
+            lock_rotation=lock_rotation,
+            lock_translation=lock_translation,
+        )
+        with _PAIR_CACHE_LOCK:
+            _PAIR_CACHE[cache_key] = (_cached_similarity(solved), detail)
+        return solved, detail
+    return _compute_relative_pose_from_correspondences(
+        anchor_id,
+        other_id,
+        observations_by_landmark,
+        matches,
+        known_world,
+        known_lines=known_lines,
+        line_observations_by_landmark=line_observations_by_landmark,
+        parallel_pairs=parallel_pairs,
+        initial_similarity=initial_similarity,
+        lock_rotation=lock_rotation,
+        lock_translation=lock_translation,
+    )
+
+
+def _compute_relative_pose_from_correspondences(
+    anchor_id: str,
+    other_id: str,
+    observations_by_landmark: dict[str, list[SyncObservation]],
+    matches: dict[str, SyncMatchInput],
+    known_world: dict[str, np.ndarray] | None = None,
+    known_lines: dict[str, tuple[np.ndarray, np.ndarray]] | None = None,
+    line_observations_by_landmark: dict[str, list[SyncLineObservation]]
+    | None = None,
+    parallel_pairs: list[tuple[str, str]] | None = None,
+    initial_similarity: SimilarityTransform | None = None,
+    *,
+    lock_rotation: bool = False,
+    lock_translation: bool = False,
+) -> tuple[SimilarityTransform | None, str]:
+    """Uncached pairwise register (see ``_relative_pose_from_correspondences``)."""
     if lock_rotation and lock_translation:
         return SimilarityTransform(), ""
     known_ids = set(known_world or {})
@@ -2641,6 +2958,32 @@ def _select_registration_candidate(
     return selected[2] if selected[1] <= acceptance_px else None
 
 
+def _iter_bridge_pair_inputs(
+    match_ids: list[str],
+    registered_ids: list[str],
+    observations_by_landmark: dict[str, list[SyncObservation]],
+    known_world_ids: set[str] | None,
+) -> list[tuple[str, str, list[tuple[SyncObservation, SyncObservation]]]]:
+    """Independent (reference, pending) pairs with enough 2D overlap to bridge."""
+    jobs: list[tuple[str, str, list[tuple[SyncObservation, SyncObservation]]]] = []
+    for match_id in match_ids:
+        for reference_id in registered_ids:
+            if reference_id == match_id:
+                continue
+            pairs = _point_pairs_between_matches(
+                reference_id,
+                match_id,
+                observations_by_landmark,
+                excluded_landmark_ids=known_world_ids,
+            )
+            if len(pairs) < 5:
+                continue
+            if _correspondence_geometry_issue(pairs, match_id) is not None:
+                continue
+            jobs.append((reference_id, match_id, pairs))
+    return jobs
+
+
 def _bridge_pose_candidates(
     match_id: str,
     registered: dict[str, SimilarityTransform],
@@ -2649,6 +2992,8 @@ def _bridge_pose_candidates(
     landmarks: dict[str, np.ndarray],
     *,
     known_world_ids: set[str] | None = None,
+    use_pose_cache: bool = False,
+    relatives: dict[str, SimilarityTransform | None] | None = None,
 ) -> list[SimilarityTransform]:
     """Register a pending match through any solved view with 5+ shared picks."""
     candidates: list[SimilarityTransform] = []
@@ -2663,11 +3008,15 @@ def _bridge_pose_candidates(
             continue
         if _correspondence_geometry_issue(pairs, match_id) is not None:
             continue
-        relative = _solve_relative_from_pairs(
-            pairs,
-            matches[reference_id].calibration,
-            matches[match_id].calibration,
-        )
+        if relatives is not None:
+            relative = relatives.get(reference_id)
+        else:
+            relative = _solve_relative_from_pairs(
+                pairs,
+                matches[reference_id].calibration,
+                matches[match_id].calibration,
+                use_pose_cache=use_pose_cache,
+            )
         if relative is None:
             continue
         relative_candidates = [relative]
@@ -2735,6 +3084,7 @@ def _register_from_relative_pose(
     *,
     lock_rotation: bool = False,
     lock_translation: bool = False,
+    use_pose_cache: bool = False,
 ) -> tuple[dict[str, SimilarityTransform] | None, str]:
     """Register free matches vs anchor, then bridge via triangulated landmarks."""
     similarities: dict[str, SimilarityTransform] = {
@@ -2747,6 +3097,14 @@ def _register_from_relative_pose(
     pending = set(free_match_ids)
     failure_details: list[str] = []
     known_world_ids = set(known_world or {})
+    # Diagnose leave-one-out and lens refine already have a locked graph.
+    # Reuse those poses so we skip the expensive multi-start pairwise search.
+    for match_id in list(pending):
+        seed = (initial_similarities or {}).get(match_id)
+        if seed is None:
+            continue
+        similarities[match_id] = _copy_similarity(seed)
+        pending.discard(match_id)
     anchor_metric = _metric_landmarks(
         observations_by_landmark,
         anchor_id,
@@ -2789,9 +3147,7 @@ def _register_from_relative_pose(
             or lock_translation
         )
 
-    for match_id in sorted(list(pending)):
-        if not strong_anchor_support(match_id):
-            continue
+    def solve_vs_anchor(match_id: str) -> tuple[str, SimilarityTransform | None, str]:
         solved, detail = _relative_pose_from_correspondences(
             anchor_id,
             match_id,
@@ -2804,7 +3160,16 @@ def _register_from_relative_pose(
             initial_similarity=(initial_similarities or {}).get(match_id),
             lock_rotation=lock_rotation,
             lock_translation=lock_translation,
+            use_pose_cache=use_pose_cache,
         )
+        return match_id, solved, detail
+
+    direct_ids = [
+        match_id
+        for match_id in sorted(pending)
+        if strong_anchor_support(match_id)
+    ]
+    for match_id, solved, detail in _map_pair_jobs(solve_vs_anchor, direct_ids):
         if solved is None:
             if detail:
                 failure_details.append(detail)
@@ -2831,7 +3196,40 @@ def _register_from_relative_pose(
                 known_world,
             )
         )
-        for match_id in sorted(list(pending)):
+        pending_now = sorted(pending)
+        relatives_by_match: dict[str, dict[str, SimilarityTransform | None]] = {
+            match_id: {} for match_id in pending_now
+        }
+        if not lock_rotation and not lock_translation and pending_now:
+
+            def solve_bridge(
+                job: tuple[
+                    str,
+                    str,
+                    list[tuple[SyncObservation, SyncObservation]],
+                ],
+            ) -> tuple[str, str, SimilarityTransform | None]:
+                reference_id, match_id, pairs = job
+                relative = _solve_relative_from_pairs(
+                    pairs,
+                    matches[reference_id].calibration,
+                    matches[match_id].calibration,
+                    use_pose_cache=use_pose_cache,
+                )
+                return reference_id, match_id, relative
+
+            for reference_id, match_id, relative in _map_pair_jobs(
+                solve_bridge,
+                _iter_bridge_pair_inputs(
+                    pending_now,
+                    list(similarities.keys()),
+                    observations_by_landmark,
+                    known_world_ids,
+                ),
+            ):
+                relatives_by_match.setdefault(match_id, {})[reference_id] = relative
+
+        for match_id in pending_now:
             collected = _collect_pnp_correspondences(
                 match_id,
                 observations_by_landmark,
@@ -2906,6 +3304,8 @@ def _register_from_relative_pose(
                         matches,
                         landmarks,
                         known_world_ids=known_world_ids,
+                        use_pose_cache=use_pose_cache,
+                        relatives=relatives_by_match.get(match_id, {}),
                     )
                 )
 
@@ -2978,7 +3378,8 @@ def _register_from_relative_pose(
             # Preserve minimal direct-anchor workflows as a fallback, but do
             # not let a weak direct pose override a stronger registered-view
             # bridge that merely failed its whole-graph quality check.
-            for match_id in sorted(list(pending)):
+            fallback_ids = []
+            for match_id in sorted(pending):
                 has_pair_bridge = any(
                     len(
                         _point_pairs_between_matches(
@@ -2994,19 +3395,10 @@ def _register_from_relative_pose(
                 )
                 if has_pair_bridge:
                     continue
-                solved, detail = _relative_pose_from_correspondences(
-                    anchor_id,
-                    match_id,
-                    observations_by_landmark,
-                    matches,
-                    known_world,
-                    known_lines=known_lines,
-                    line_observations_by_landmark=line_observations_by_landmark,
-                    parallel_pairs=parallel_pairs,
-                    initial_similarity=(initial_similarities or {}).get(match_id),
-                    lock_rotation=lock_rotation,
-                    lock_translation=lock_translation,
-                )
+                fallback_ids.append(match_id)
+            for match_id, solved, detail in _map_pair_jobs(
+                solve_vs_anchor, fallback_ids
+            ):
                 if solved is None:
                     if detail:
                         failure_details.append(detail)

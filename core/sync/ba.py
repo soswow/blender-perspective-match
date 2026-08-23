@@ -1239,6 +1239,7 @@ def leave_one_out_landmark_report(
             line_observations=filtered_lines,
             known_lines=filtered_known_lines,
             parallel_pairs=filtered_parallel,
+            initial_similarities=baseline.similarities,
             lock_rotation=lock_rotation,
             lock_translation=lock_translation,
         )

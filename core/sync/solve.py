@@ -157,6 +157,7 @@ def _try_register_against_cloud(
     lock_rotation: bool,
     lock_translation: bool,
     rmse_limit: float = ACCEPT_RMSE_PX,
+    use_pose_cache: bool = False,
 ) -> SimilarityTransform | None:
     """PnP a skipped still against a frozen 3D cloud (no free 2D↔2D pairs)."""
     if len(cloud) < 4:
@@ -173,6 +174,7 @@ def _try_register_against_cloud(
         parallel_pairs=parallel_pairs,
         lock_rotation=lock_rotation,
         lock_translation=lock_translation,
+        use_pose_cache=use_pose_cache,
     )
     if solved is None:
         return None
@@ -305,6 +307,7 @@ class _SolveState:
     parallel_pairs: list[tuple[str, str]] | None
     lock_rotation: bool
     lock_translation: bool
+    use_pose_cache: bool
     identity_result: dict[str, SimilarityTransform]
     valid_observations: list[SyncObservation]
     observations_by_landmark_all: dict[str, list[SyncObservation]]
@@ -324,6 +327,7 @@ class _SolveState:
         default_factory=dict
     )
     recovered: list[str] = field(default_factory=list)
+    skip_notes: dict[str, str] = field(default_factory=dict)
     downweighted_ids: list[str] = field(default_factory=list)
     did_bundle_adjust: bool = False
     pre_ba_match_rmse: dict[str, float] = field(default_factory=dict)
@@ -459,9 +463,145 @@ def _peel_cameras_above_rmse(state: _SolveState) -> SyncSolveResult | None:
     return None
 
 
+def _cloud_observation_count(
+    match_id: str,
+    cloud: dict[str, np.ndarray],
+    observations_by_landmark: dict[str, list[SyncObservation]],
+) -> int:
+    """How many cloud landmarks this still actually picked."""
+    count = 0
+    for landmark_id in cloud:
+        items = observations_by_landmark.get(landmark_id, [])
+        if any(item.match_id == match_id for item in items):
+            count += 1
+    return count
+
+
+def _posed_observations(
+    state: _SolveState,
+) -> dict[str, list[SyncObservation]]:
+    """Observations whose cameras currently have a pose."""
+    posed = set(state.similarities)
+    grouped: dict[str, list[SyncObservation]] = {}
+    for observation in state.valid_observations:
+        if observation.match_id not in posed:
+            continue
+        grouped.setdefault(observation.landmark_id, []).append(observation)
+    return grouped
+
+
+def _expand_landmarks_after_resect(state: _SolveState) -> None:
+    """Triangulate landmarks now visible in recovered views; pose hanging stills.
+
+    A still that only shares tags with peeled cameras can stay in the graph with
+    a leftover pose and zero residuals after those cameras drop. Exclusive
+    landmarks then keep a stale Empty / list RMSE. Fill 3D from the recovered
+    cameras, then PnP stills that never had four cloud hits.
+    """
+    if len(state.similarities) < 2:
+        return
+    original_cloud = dict(state.landmarks)
+    observations_posed = _posed_observations(state)
+    extra = _triangulate_landmarks(
+        sorted(observations_posed.keys()),
+        observations_posed,
+        state.similarities,
+        state.match_map,
+    )
+    added_ids: set[str] = set()
+    for landmark_id, point in extra.items():
+        if landmark_id in state.landmarks:
+            continue
+        state.landmarks[landmark_id] = point
+        added_ids.add(landmark_id)
+    if not added_ids:
+        return
+    retry_kwargs = {
+        "observations_by_landmark": state.observations_by_landmark_all,
+        "matches": state.match_map,
+        "anchor_id": state.anchor_id,
+        "known_lines": state.known_lines,
+        "line_observations_by_landmark": state.line_observations_by_landmark_all,
+        "parallel_pairs": state.parallel_pairs,
+        "lock_rotation": state.lock_rotation,
+        "lock_translation": state.lock_translation,
+        "use_pose_cache": state.use_pose_cache,
+    }
+    weak_ids = [
+        match_id
+        for match_id in list(state.similarities)
+        if match_id != state.anchor_id
+        and _cloud_observation_count(
+            match_id,
+            original_cloud,
+            state.observations_by_landmark_all,
+        )
+        < 4
+    ]
+    for match_id in weak_ids:
+        solved = _try_register_against_cloud(
+            match_id, state.landmarks, **retry_kwargs
+        )
+        if solved is None:
+            state.similarities.pop(match_id, None)
+            if match_id not in state.skipped_unregistered:
+                state.skipped_unregistered.append(match_id)
+            state.skip_notes[match_id] = (
+                "could not lock from landmarks only visible on recovered stills"
+            )
+            state.free_match_ids = [
+                item for item in state.free_match_ids if item != match_id
+            ]
+            continue
+        state.similarities[match_id] = solved
+        if match_id not in state.recovered:
+            state.recovered.append(match_id)
+        state.skipped_unregistered = [
+            item for item in state.skipped_unregistered if item != match_id
+        ]
+        if match_id not in state.free_match_ids:
+            state.free_match_ids.append(match_id)
+    observations_posed = _posed_observations(state)
+    refined = _triangulate_landmarks(
+        sorted(observations_posed.keys()),
+        observations_posed,
+        state.similarities,
+        state.match_map,
+    )
+    for landmark_id, point in refined.items():
+        if landmark_id not in state.landmarks or landmark_id in added_ids:
+            state.landmarks[landmark_id] = point
+
+
+def _rebuild_usable_observations(state: _SolveState) -> None:
+    """Keep observations whose camera and landmark both survived the solve."""
+    skip = set(state.skipped_unregistered)
+    state.usable_observations = [
+        observation
+        for observation in state.valid_observations
+        if observation.match_id in state.similarities
+        and observation.match_id not in skip
+        and observation.landmark_id in state.landmarks
+    ]
+    state.observations_by_landmark = {}
+    for observation in state.usable_observations:
+        state.observations_by_landmark.setdefault(
+            observation.landmark_id, []
+        ).append(observation)
+    state.landmark_ids = sorted(state.landmarks.keys())
+    state.line_observations_by_landmark = {
+        landmark_id: [
+            item
+            for item in items
+            if item.match_id in state.similarities and item.match_id not in skip
+        ]
+        for landmark_id, items in state.line_observations_by_landmark_all.items()
+    }
+
+
 def _resect_skipped_matches(state: _SolveState) -> None:
     """PnP skipped stills against the frozen cloud; ground-only if that fails."""
-    if not (state.skipped_unregistered and state.landmarks):
+    if not state.landmarks:
         return
     cloud = dict(state.known_world)
     cloud.update(state.landmarks)
@@ -480,6 +620,7 @@ def _resect_skipped_matches(state: _SolveState) -> None:
         "parallel_pairs": state.parallel_pairs,
         "lock_rotation": state.lock_rotation,
         "lock_translation": state.lock_translation,
+        "use_pose_cache": state.use_pose_cache,
     }
     recovered: list[str] = []
     for match_id in list(state.skipped_unregistered):
@@ -502,8 +643,6 @@ def _resect_skipped_matches(state: _SolveState) -> None:
             continue
         state.similarities[match_id] = solved
         recovered.append(match_id)
-    if not recovered:
-        return
     recovered_set = set(recovered)
     for match_id in recovered:
         state.inconsistent_picks.pop(match_id, None)
@@ -515,28 +654,9 @@ def _resect_skipped_matches(state: _SolveState) -> None:
     state.free_match_ids.extend(
         match_id for match_id in recovered if match_id not in state.free_match_ids
     )
-    skip = set(state.skipped_unregistered)
-    state.usable_observations = [
-        observation
-        for observation in state.valid_observations
-        if observation.match_id in state.similarities
-        and observation.match_id not in skip
-        and observation.landmark_id in state.landmarks
-    ]
-    state.observations_by_landmark = {}
-    for observation in state.usable_observations:
-        state.observations_by_landmark.setdefault(
-            observation.landmark_id, []
-        ).append(observation)
-    state.line_observations_by_landmark = {
-        landmark_id: [
-            item
-            for item in items
-            if item.match_id in state.similarities and item.match_id not in skip
-        ]
-        for landmark_id, items in state.line_observations_by_landmark_all.items()
-    }
     state.recovered = recovered
+    _expand_landmarks_after_resect(state)
+    _rebuild_usable_observations(state)
 
 
 def solve_landmark_sync(
@@ -551,13 +671,16 @@ def solve_landmark_sync(
     initial_similarities: dict[str, SimilarityTransform] | None = None,
     lock_rotation: bool = False,
     lock_translation: bool = False,
+    use_pose_cache: bool = False,
 ) -> SyncSolveResult:
     """Register non-anchor matches from 2D correspondences and/or known 3D.
 
     Stages: pairwise register → peel cameras above ``ACCEPT_RMSE_PX`` → joint
     BA → peel again → resect skipped stills against frozen 3D (ground tags
-    if off-plane picks disagree) → report. Recovered cameras must not fail
-    the joint RMSE. fy=fx when pixels were aspect-stretched.
+    if off-plane picks disagree) → triangulate landmarks now visible in
+    recovered views and PnP stills that had no cloud support → report.
+    Recovered cameras must not fail the joint RMSE. fy=fx when pixels were
+    aspect-stretched.
     """
     known_world = {
         landmark_id: np.asarray(point, dtype=np.float64).reshape(3)
@@ -731,6 +854,7 @@ def solve_landmark_sync(
         initial_similarities=initial_similarities,
         lock_rotation=lock_rotation,
         lock_translation=lock_translation,
+        use_pose_cache=use_pose_cache,
     )
     if similarities is None:
         return SyncSolveResult(
@@ -781,6 +905,7 @@ def solve_landmark_sync(
         parallel_pairs=parallel_pairs,
         lock_rotation=lock_rotation,
         lock_translation=lock_translation,
+        use_pose_cache=use_pose_cache,
         identity_result=identity_result,
         valid_observations=valid_observations,
         observations_by_landmark_all=observations_by_landmark_all,
@@ -1284,6 +1409,8 @@ def solve_landmark_sync(
             picks = state.inconsistent_picks.get(match_id)
             if picks:
                 skip_bits.append(f"'{match_id}' ({_mismatch_reason(picks)})")
+            elif match_id in state.skip_notes:
+                skip_bits.append(f"'{match_id}' ({state.skip_notes[match_id]})")
             else:
                 skip_bits.append(f"'{match_id}'")
         message += " · skipped " + ", ".join(skip_bits)
@@ -1291,8 +1418,11 @@ def solve_landmark_sync(
             match_id
             for match_id in skipped_unregistered
             if match_id not in state.inconsistent_picks
+            and match_id not in state.skip_notes
         ]
-        if unnamed and failure_detail:
+        if unnamed and failure_detail and any(
+            match_id in failure_detail for match_id in unnamed
+        ):
             message += f" ({failure_detail})"
     # Soft warn: accepted but likely inaccurate picks or intrinsics.
     if mean_rmse > 8.0:

@@ -26,9 +26,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - AprilTag sheet printing now accepts only official OpenCV dictionary names and reports out-of-range marker IDs clearly
 - Printed AprilTag labels contain only the marker number, without an `ID` prefix
 - AprilTag sheet padding now wraps all four outer edges of the packed tag group
+- Diagnose leave-one-out reuses the last locked poses instead of re-running pairwise registration for each worst landmark
+- Diagnose and Solve Sync reuse pairwise poses when that still pair's picks and cameras have not changed (Clear Sync drops the cache)
+- Diagnose and Solve Sync solve independent still pairs in parallel on the first run
 
 ### Fixed
 - Snap to AprilTag recenters on the full inner black body of small blurry tags instead of a dark fragment
+- Solve Sync triangulates landmarks that only appear on recovered stills and poses hanging cameras from that 3D, so their Empties match the picks instead of keeping a stale 1px RMSE
 - Solve Sync no longer shrinks a below-ground camera to a point, which made landmark overlays jump when panning
 - Solve Sync still registers the cameras that fit when one still cannot, instead of failing the whole solve
 - Solve Sync still registers a photo looking straight down at the ground from On Ground landmarks; if off-ground picks still disagree, that still is placed from the floor after the others lock

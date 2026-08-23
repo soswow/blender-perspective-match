@@ -1,4 +1,6 @@
 TODOs to be done:
+- I think we need some sort of indication somewhere in Sync section that would tell if current PM was successfully synced during last sync session. Right now it's unclear.
+- I am noticing the tendency of sync algo to sucrifice some individual landmarks accuracey when there is big number of those that match well. Unfortunately often, those unlucky that got thrown under the bus are those farther from the optical center. Sometimes there are a lot of landmarks closer to center and only view on the outside. But those on outside are actually crutial in finding correct camera position. Often that would mean camera is closer or farther then it could have been. If object I am interested is close to the camera that sucrifices in points closer to the edge of the camera makes a very big difference.  
 
 Done TODOs:
 - Split core/sync.py into a package, named solve stages, named RMSE/K constants, agent map in AGENTS.md, cursor sync rule, tests split by seam.

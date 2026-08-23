@@ -2650,9 +2650,7 @@ def _apply_sync_landmark_diagnostics(context: bpy.types.Context, result) -> None
     space = properties.workspace(context)
     for landmark in space.landmarks:
         rmse = result.per_landmark_rmse_px.get(landmark.item_id)
-        if rmse is None:
-            continue
-        landmark.rmse_px = float(rmse)
+        landmark.rmse_px = float(rmse) if rmse is not None else 0.0
 
 
 def diagnose_sync(context: bpy.types.Context):
@@ -2691,6 +2689,7 @@ def diagnose_sync(context: bpy.types.Context):
         parallel_pairs=parallel_pairs,
         lock_rotation=bool(space.lock_rotation),
         lock_translation=bool(space.lock_translation),
+        use_pose_cache=True,
     )
     if result.mean_reprojection_px > 8.0 or not result.success:
         result.leave_one_out = sync_module.leave_one_out_landmark_report(
@@ -2814,6 +2813,7 @@ def solve_and_apply_sync(context: bpy.types.Context):
         parallel_pairs=parallel_pairs,
         lock_rotation=bool(space.lock_rotation),
         lock_translation=bool(space.lock_translation),
+        use_pose_cache=True,
     )
     _apply_sync_landmark_diagnostics(context, result)
     message = result.message
@@ -2866,15 +2866,20 @@ def solve_and_apply_sync(context: bpy.types.Context):
                     update_scene_camera=False,
                 )
 
-    landmark_by_id = {landmark.item_id: landmark for landmark in space.landmarks}
-    for landmark_id, position in result.landmarks.items():
-        landmark = landmark_by_id.get(landmark_id)
-        if landmark is None:
+    solved_ids = set(result.landmarks)
+    for landmark in space.landmarks:
+        if landmark.item_id not in solved_ids:
+            landmark.has_position = False
+            landmark.has_line_segment = False
+            landmark.rmse_px = 0.0
             continue
+        position = result.landmarks[landmark.item_id]
         landmark.position = tuple(float(value) for value in position)
         landmark.has_position = True
-        landmark.rmse_px = float(result.per_landmark_rmse_px.get(landmark_id, 0.0))
-        segment = result.line_segments.get(landmark_id)
+        landmark.rmse_px = float(
+            result.per_landmark_rmse_px.get(landmark.item_id, 0.0)
+        )
+        segment = result.line_segments.get(landmark.item_id)
         if segment is not None:
             landmark.position = tuple(float(value) for value in segment[0])
             landmark.position_b = tuple(float(value) for value in segment[1])
@@ -2898,6 +2903,9 @@ def clear_sync_transforms(context: bpy.types.Context) -> None:
         landmark.rmse_px = 0.0
     clear_landmark_empties(context)
     space.sync_status = "Sync cleared"
+    from ..core import sync as sync_module
+
+    sync_module.clear_registration_cache()
     properties.tag_viewport_redraw(context)
 
 

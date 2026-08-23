@@ -18,6 +18,13 @@ BLENDER_BIN="${BLENDER_BIN:-/Applications/Blender 5.1.app/Contents/MacOS/blender
 
 Prints the same report to stdout. `--out` is optional.
 
+Landmark overlap, stored Empty vs pick, timed solve, per-observation residuals:
+
+```sh
+"$BLENDER_BIN" --factory-startup -b --python tools/debug-sync/probe_graph.py -- \
+    --blend "/path/to/scene.blend" --out /tmp/pm-graph.txt
+```
+
 Recovered-still overlay (ground vs off-plane RMSE after `solve_landmark_sync`):
 
 ```sh

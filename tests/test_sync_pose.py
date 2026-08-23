@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+from unittest.mock import patch
 import math
 import unittest
 
@@ -493,6 +495,85 @@ class PoseSyncTests(unittest.TestCase):
                 atol=1.0e-4,
             )
         )
+
+
+    def test_pose_cache_skips_unchanged_pair(self) -> None:
+        """Diagnose/Solve can reuse a pair whose picks and cameras did not change."""
+        sync.clear_registration_cache()
+        self.addCleanup(sync.clear_registration_cache)
+        matches, observations, *_ = _synthetic_scene(with_ground=True)
+        with patch.object(
+            sync.pose,
+            "_compute_relative_pose_from_correspondences",
+            wraps=sync.pose._compute_relative_pose_from_correspondences,
+        ) as mocked:
+            first = sync.solve_landmark_sync(
+                matches,
+                observations,
+                anchor_id="anchor",
+                use_pose_cache=True,
+            )
+            self.assertTrue(first.success, first.message)
+            first_calls = mocked.call_count
+            self.assertGreater(first_calls, 0)
+            second = sync.solve_landmark_sync(
+                matches,
+                observations,
+                anchor_id="anchor",
+                use_pose_cache=True,
+            )
+            self.assertTrue(second.success, second.message)
+            self.assertEqual(mocked.call_count, first_calls)
+            self.assertTrue(
+                np.allclose(
+                    second.similarities["other"].matrix(),
+                    first.similarities["other"].matrix(),
+                    atol=1.0e-6,
+                )
+            )
+
+
+    def test_pose_cache_misses_when_a_shared_pick_moves(self) -> None:
+        """Re-picking a correspondence on one still recomputes that pair."""
+        sync.clear_registration_cache()
+        self.addCleanup(sync.clear_registration_cache)
+        matches, observations, *_ = _synthetic_scene(with_ground=True)
+        with patch.object(
+            sync.pose,
+            "_compute_relative_pose_from_correspondences",
+            wraps=sync.pose._compute_relative_pose_from_correspondences,
+        ) as mocked:
+            first = sync.solve_landmark_sync(
+                matches,
+                observations,
+                anchor_id="anchor",
+                use_pose_cache=True,
+            )
+            self.assertTrue(first.success, first.message)
+            first_calls = mocked.call_count
+            moved = [
+                replace(item, u=item.u + 2.0)
+                if item.match_id == "other"
+                and item.landmark_id == observations[1].landmark_id
+                else item
+                for item in observations
+            ]
+            second = sync.solve_landmark_sync(
+                matches,
+                moved,
+                anchor_id="anchor",
+                use_pose_cache=True,
+            )
+            self.assertTrue(second.success, second.message)
+            self.assertGreater(mocked.call_count, first_calls)
+
+
+    def test_pair_jobs_keep_order_when_parallel(self) -> None:
+        """Independent pair workers must return results in the input order."""
+        self.assertEqual(sync._pair_worker_count(1), 1)
+        self.assertGreaterEqual(sync._pair_worker_count(8), 1)
+        self.assertLessEqual(sync._pair_worker_count(8), 8)
+        self.assertEqual(sync._map_pair_jobs(lambda value: value * 2, [1, 2, 3, 4]), [2, 4, 6, 8])
 
 
     def test_collinear_landmarks_fail_with_clear_message(self) -> None:
