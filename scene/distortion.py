@@ -476,9 +476,10 @@ def _write_image_pixels(image: bpy.types.Image, top_left_rgba: np.ndarray) -> No
 def generate_undistorted_plate(
     context: bpy.types.Context,
     output_path: str | None = None,
+    settings: properties.PMSession | None = None,
 ) -> bpy.types.Image:
     """Generate, save, and activate the undistorted camera background."""
-    settings = properties.active_session(context)
+    settings = settings or properties.active_session(context)
     if settings is None:
         raise ValueError("Create or activate a match camera first")
     if settings.image is None:
@@ -575,7 +576,16 @@ def generate_undistorted_plate(
     settings.undistorted_offset_x = offset_x
     settings.undistorted_offset_y = offset_y
     settings.view_undistorted = True
-    scene.refresh_background_projection(context)
+    active = properties.active_session(context)
+    if active is settings:
+        scene.refresh_background_projection(context)
+    else:
+        scene.apply_camera(
+            context.scene,
+            settings,
+            scene.calibration_from_settings(settings),
+            update_scene_camera=False,
+        )
     # Path is noisy in the sidebar footer — console is enough.
     print(f"Perspective Match: undistorted plate saved → {resolved_path}")
     return output_image
@@ -608,8 +618,30 @@ def sync_undistorted_plate_after_refine(context: bpy.types.Context) -> None:
             print(f"Perspective Match: undistorted plate failed: {error}")
         return
     # Viewing undistorted but λ is gone/unusable — fall back to the source still.
-    if settings.view_undistorted:
+    if settings.view_undistorted and not _session_has_distortion(settings):
+        settings.view_undistorted = False
         scene.invalidate_undistorted_cache(settings)
+        scene.refresh_background_projection(context)
+
+
+def rebuild_undistorted_plates(context: bpy.types.Context) -> None:
+    """Regenerate missing undistorted plates for matches that still want that view."""
+    for root in properties.iter_match_roots():
+        settings = root.pm_session
+        if not settings.view_undistorted:
+            continue
+        if not _session_has_distortion(settings) or settings.lambda_saturated:
+            settings.view_undistorted = False
+            scene.invalidate_undistorted_cache(settings)
+            continue
+        if settings.undistorted_image is not None:
+            continue
+        try:
+            generate_undistorted_plate(context, settings=settings)
+        except Exception as error:
+            settings.status = f"Distortion estimated; plate failed: {error}"
+            print(f"Perspective Match: undistorted plate failed: {error}")
+    if properties.active_session(context) is not None:
         scene.refresh_background_projection(context)
 
 
@@ -619,6 +651,7 @@ def revert_to_original_plate(context: bpy.types.Context) -> None:
     if settings is None:
         raise ValueError("Create or activate a match camera first")
     _clear_session_distortion(settings)
+    settings.view_undistorted = False
     scene.invalidate_undistorted_cache(settings)
     line_bundles = scene.line_bundles_from_settings(settings)
     lock_focal = bool(settings.lock_focal or settings.vp_mode == "1")
@@ -635,8 +668,19 @@ def revert_to_original_plate(context: bpy.types.Context) -> None:
 
 
 def use_original_plate(context: bpy.types.Context) -> None:
-    """Clear distortion and restore the original plate + camera."""
+    """Show the source still. Keep imported Brown–Conrady D; clear estimated λ."""
+    settings = properties.active_session(context)
+    if settings is None:
+        raise ValueError("Create or activate a match camera first")
+    if core.has_brown_conrady(tuple(settings.brown_conrady)):
+        set_undistorted_view(context, False)
+        return
     revert_to_original_plate(context)
+
+
+def use_undistorted_plate(context: bpy.types.Context) -> None:
+    """Show the undistorted pinhole plate for the current distortion model."""
+    set_undistorted_view(context, True)
 
 
 def estimate_distortion(context: bpy.types.Context) -> None:

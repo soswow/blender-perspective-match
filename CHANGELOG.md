@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Find AprilTags now detects both 25h9 and 36h10 families with distinct family-qualified landmark names
 - Diagnose / Solve Sync name a mismatched landmark pick when that still is skipped because one correspondence disagrees with the other views
 - Refine Lenses **Same Lens** checkbox (on by default, left of the % window above the button) searches one shared focal scale for every still, including YAML-only matches with no VP lines
+- **Undistorted Plate** (left of Original Plate) remaps the still with imported D / estimated λ and shows that pinhole plate
 - **Ground Slack** lets On Ground landmarks sit a little off Z=0 so a boarded floor can flex without bending cameras
 
 ### Changed
@@ -36,9 +37,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Solve Sync with many landmarks now thaws 3D after cameras settle so a bent triangulation can unbend
 - Solve Sync grows the camera graph from the strongest still pair and the easiest next camera, instead of registering every well-overlapped still only against the Anchor in name order
 - Solve Sync triangulation downweights near-parallel views, drops views that put a point behind the camera, and polishes 3D to the picks
+- Original Plate keeps imported Brown–Conrady D and only switches the background; estimated λ is still cleared
 
 ### Fixed
 - Snap to AprilTag recenters on the full inner black body of small blurry tags instead of a dark fragment
+- Refine Lenses no longer drops the undistorted plate, which made a pinhole 3D view sit on the original barrel still and look like a horizon at infinity
 - Solve Sync triangulates landmarks that only appear on recovered stills and poses hanging cameras from that 3D, so their Empties match the picks instead of keeping a stale 1px RMSE
 - Solve Sync no longer shrinks a below-ground camera to a point, which made landmark overlays jump when panning
 - Solve Sync still registers the cameras that fit when one still cannot, instead of failing the whole solve

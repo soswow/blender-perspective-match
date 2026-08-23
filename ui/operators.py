@@ -1439,13 +1439,47 @@ class PM_OT_estimate_distortion(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class PM_OT_use_undistorted_plate(bpy.types.Operator):
+    """Show the undistorted pinhole plate for the current distortion model."""
+
+    bl_idname = "perspective_match.use_undistorted_plate"
+    bl_label = "Undistorted Plate"
+    bl_description = (
+        "Remap the still with the current lens model (imported D or estimated λ) "
+        "and show that pinhole plate as the camera background"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        settings = _session(context)
+        return (
+            settings is not None
+            and settings.image is not None
+            and core.has_lens_distortion(
+                settings.division_lambda,
+                tuple(settings.brown_conrady),
+            )
+        )
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        try:
+            distortion.use_undistorted_plate(context)
+        except Exception as error:
+            return _report_exception(self, error)
+        scene.enter_camera_view(context)
+        self.report({"INFO"}, "Viewing undistorted plate")
+        return {"FINISHED"}
+
+
 class PM_OT_use_original_plate(bpy.types.Operator):
-    """Clear distortion and restore the original still."""
+    """Show the original still. Imported D stays; estimated λ is cleared."""
 
     bl_idname = "perspective_match.use_original_plate"
     bl_label = "Original Plate"
     bl_description = (
-        "Clear imported D / estimated λ, re-solve the camera, and show the original reference image"
+        "Show the original reference image. Imported Brown–Conrady D is kept "
+        "(use Undistorted Plate to remap again). Estimated λ is cleared and the camera is re-solved"
     )
     bl_options = {"REGISTER", "UNDO"}
 
@@ -3284,6 +3318,7 @@ CLASSES = (
     PM_OT_clear_placement,
     PM_OT_generate_undistorted,
     PM_OT_estimate_distortion,
+    PM_OT_use_undistorted_plate,
     PM_OT_use_original_plate,
     PM_OT_toggle_undistorted,
     PM_OT_apply_view_lighting,

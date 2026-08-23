@@ -32,6 +32,13 @@ Recovered-still overlay (ground vs off-plane RMSE after `solve_landmark_sync`):
     --blend "/path/to/scene.blend" [--match PM_some_Origin]
 ```
 
+Per-match K, distortion, Blender lens/FOV, undistorted-plate flags:
+
+```sh
+"$BLENDER_BIN" --factory-startup -b --python tools/debug-sync/probe_cameras.py -- \
+    --blend "/path/to/scene.blend" --out /tmp/pm-cameras.txt
+```
+
 ## What to look at
 
 - **Stored nadir_deg** — current Blender camera vs world ±Z. Only meaningful if that match already locked; unsynced cameras often still sit on a leftover default pose.

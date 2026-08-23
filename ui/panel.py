@@ -424,7 +424,13 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
                 settings.division_lambda,
                 tuple(settings.brown_conrady),
             ):
-                camera.operator(
+                plates = camera.row(align=True)
+                plates.operator(
+                    "perspective_match.use_undistorted_plate",
+                    text="Undistorted Plate",
+                    icon="MOD_UVPROJECT",
+                )
+                plates.operator(
                     "perspective_match.use_original_plate",
                     text="Original Plate",
                     icon="IMAGE_DATA",

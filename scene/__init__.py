@@ -1126,6 +1126,9 @@ def apply_manual_fov(context: bpy.types.Context) -> None:
     if settings.origin_is_set:
         reapply_placement(context)
     settings.status = f"Manual HFOV {settings.hfov_degrees:.2f}°"
+    from . import distortion
+
+    distortion.sync_undistorted_plate_after_refine(context)
     properties.tag_viewport_redraw(context)
 
 
@@ -1262,7 +1265,7 @@ def _intrinsics_or_distortion_changed(
 def invalidate_undistorted_cache(settings: properties.PMSession) -> None:
     """Discard a remap made with stale intrinsics; restore lit or original plate."""
     cached_image = settings.undistorted_image
-    settings.view_undistorted = False
+    # Keep view_undistorted: cache drop is not a request to show the barrel still.
     if (
         settings.camera_object is not None
         and len(settings.camera_object.data.background_images) > 0
@@ -3120,12 +3123,18 @@ def apply_lens_refine_result(context: bpy.types.Context, refine_result, root_by_
         message = refine_result.message + " · " + sync_result.message
         space.sync_status = message
         space.lens_refine_progress = 0.0
+        from . import distortion as distortion_module
+
+        distortion_module.rebuild_undistorted_plates(context)
         properties.tag_viewport_redraw(context)
         return refine_result, sync_result
     except Exception as error:
         # Lenses may still have improved even if the hard reject remains.
         space.sync_status = refine_result.message + " · " + str(error)
         space.lens_refine_progress = 0.0
+        from . import distortion as distortion_module
+
+        distortion_module.rebuild_undistorted_plates(context)
         properties.tag_viewport_redraw(context)
         # Surface a synthetic failed sync result so the operator can WARN, not ERROR.
         from ..core import sync as sync_module

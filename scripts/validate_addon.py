@@ -446,6 +446,25 @@ def main() -> None:
             assert reloaded.view_undistorted
             assert reloaded.undistorted_image is not None
 
+            scene.invalidate_undistorted_cache(reloaded)
+            assert reloaded.view_undistorted
+            assert reloaded.undistorted_image is None
+            distortion.sync_undistorted_plate_after_refine(bpy.context)
+            assert reloaded.view_undistorted
+            assert reloaded.undistorted_image is not None
+
+            reloaded.brown_conrady = (0.12, -0.25, 0.0, 0.0, 0.08, 0.0, 0.0, 0.0)
+            reloaded.division_lambda = 0.0
+            distortion.generate_undistorted_plate(bpy.context)
+            distortion.use_original_plate(bpy.context)
+            assert not reloaded.view_undistorted
+            assert abs(float(reloaded.brown_conrady[0]) - 0.12) < 1.0e-6
+            distortion.use_undistorted_plate(bpy.context)
+            assert reloaded.view_undistorted
+            assert reloaded.undistorted_image is not None
+            reloaded.brown_conrady = (0.0,) * 8
+            reloaded.division_lambda = 0.12
+
             # Landmark sync: 2D↔2D essential pose; ground tags pin absolute scale.
             from match_perspective.core import sync
             root_sync_a = scene.create_match_camera(bpy.context)

@@ -72,7 +72,7 @@ Build your own floor/wall geometry in Blender once the camera is matched—the e
 
 ## Lens distortion
 
-**Import YAML** with a ROS `camera_info` file that includes OpenCV `plumb_bob` (or `rational_polynomial`) coefficients applies that model and generates/switches to an undistorted plate. **Estimate Distortion** is separate: with a successful VP solve and ≥3 concurrent segments on one axis, it fits Fitzgibbon λ once (replacing imported D) and shows an undistorted plate. Editing VP lines afterward keeps the current model; press the button again to re-fit λ. Works with **Manual FOV**. **Original Plate** clears distortion, re-solves, and restores the source still. Plate file paths are logged to the console, not the sidebar status line.
+**Import YAML** with a ROS `camera_info` file that includes OpenCV `plumb_bob` (or `rational_polynomial`) coefficients applies that model and generates/switches to an undistorted plate. **Estimate Distortion** is separate: with a successful VP solve and ≥3 concurrent segments on one axis, it fits Fitzgibbon λ once (replacing imported D) and shows an undistorted plate. Editing VP lines afterward keeps the current model; press the button again to re-fit λ. Works with **Manual FOV**. **Undistorted Plate** remaps the current still with that model. **Original Plate** shows the source still (imported D is kept; estimated λ is cleared and the camera is re-solved). Plate file paths are logged to the console, not the sidebar status line.
 
 View lighting applies display-only exposure/contrast to `post-processed/<stem>-pm-view.png` next to the source still (undistorted and VP-detect debug plates go in the same folder). The folder is created if needed.
 
