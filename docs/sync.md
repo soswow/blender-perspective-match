@@ -56,7 +56,7 @@ Without Known 3D ends, a free line needs **three or more** stills — two views 
 
 ## Solve Sync and related tools
 
-**Solve Sync** seeds pairwise pose then runs a joint bundle-adjustment over Empty transforms + landmarks (Cauchy-weighted). Options between Solve Sync and Refine Lenses:
+**Solve Sync** seeds pairwise pose then runs a joint bundle-adjustment over Empty transforms + landmarks (Huber-weighted, with extra influence on poorly covered regions of each still so a cluster of central picks cannot ignore a few near the edge that pin camera distance). Options between Solve Sync and Refine Lenses:
 
 - **Lock Rotation** — keep each Empty’s rotation on a 90° world-axis jump (identity, ±90°, 180° about X/Y/Z, including an X/Y swap); only solve translation/scale. Use when VP axes already match across stills so a free solve would only add a few degrees of noise.
 - **Lock Translation** — keep Empty translation fixed; only solve rotation/scale.
@@ -66,7 +66,7 @@ Without Known 3D ends, a free line needs **three or more** stills — two views 
 
 **Refine Lenses** searches each unlocked match’s focal length (re-orients from VP lines at each trial) with a per-line VP residual prior and hard VP guardrails, then a coupled polish, then Solve Sync. Runs in a background thread — watch the progress slider, press **Esc** or **Cancel** to stop. The % field is the ± search window around current fx (default 18). Skips **1-point** matches and matches without enough VP lines. Disable unrelated matches or landmarks before refining a subset.
 
-The eye icon on **Sync Matches** toggles landmark picks on the plate; **Landmark Empties** controls the 3D helpers after sync. With the **Perspective Match** sidebar tab open, click a pick on the plate — or select that landmark’s Empty / line helper in the viewport — to select it in the list (red overlay). Inactive **On Ground** picks are magenta; Known 3D are cyan. **Pick in Active Match** can still place or move the active landmark; clicking a different pick selects it instead of overwriting. **Snap to AprilTag** (point landmarks) looks around the click for a dark four-sided blotch with a brighter border and moves the pick to that quad's diagonal intersection. Per-match pick coordinates, confidence, and last-sync RMSE are under the collapsed **Pick Confidence** header.
+The eye icon on **Sync Matches** toggles landmark picks on the plate; **Landmark Empties** controls the 3D helpers after sync. **Hide Origin Empty** is per match and hides that Origin Empty in the viewport (camera and collection stay visible); it stays in sync with the Origin's Outliner visibility. With the **Perspective Match** sidebar tab open, click a pick on the plate — or select that landmark’s Empty / line helper in the viewport — to select it in the list (red overlay). Inactive **On Ground** picks are magenta; Known 3D are cyan. **Pick in Active Match** can still place or move the active landmark; clicking a different pick selects it instead of overwriting. **Snap to AprilTag** (point landmarks) looks around the click for a dark four-sided blotch with a brighter border and moves the pick to that quad's diagonal intersection. Per-match pick coordinates, confidence, and last-sync RMSE are under the collapsed **Pick Confidence** header.
 
 ## Debugging a bad or rejected sync
 

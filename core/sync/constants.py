@@ -22,3 +22,16 @@ LOG_SCALE_CLIP = 18.0
 
 # Multiply an outlier landmark's pick weight by this in joint BA.
 OUTLIER_WEIGHT_FACTOR = 0.15
+
+# Joint BA freezes 3D and refines poses only above this landmark count.
+# Triangulation stays the 3D prior so cameras move instead of a few
+# landmarks absorbing edge error.
+BA_FREE_LANDMARK_LIMIT = 40
+
+# Per-camera image grid for spatial residual balancing. Each occupied cell
+# gets similar total weight so a cluster of central tags cannot outvote a
+# few peripheral picks that pin camera distance.
+SPATIAL_GRID_SIZE = 3
+SPATIAL_WEIGHT_CLIP = 4.0
+# Extra leverage for picks far from the principal point: 1 + gain * r_norm^2.
+RADIAL_WEIGHT_GAIN = 2.0

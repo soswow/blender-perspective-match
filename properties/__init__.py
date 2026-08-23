@@ -83,6 +83,16 @@ def _update_landmark_empties(_self, context: bpy.types.Context) -> None:
     tag_viewport_redraw(context)
 
 
+def _update_hide_origin_empty(self, context: bpy.types.Context) -> None:
+    """Hide or show this match Origin Empty (camera and collection stay visible)."""
+    from .. import scene
+
+    root = getattr(self, "id_data", None)
+    if is_match_root(root):
+        scene.apply_origin_empty_hidden(root, bool(self.hide_origin_empty))
+    tag_viewport_redraw(context)
+
+
 def _update_landmark_kind(self, context: bpy.types.Context) -> None:
     """Clear line-only links when switching away from Line."""
     if self.kind != "LINE":
@@ -718,6 +728,15 @@ class PMSession(bpy.types.PropertyGroup):
         options={"HIDDEN"},
     )
     sync_rmse_px: bpy.props.FloatProperty(default=0.0, options={"HIDDEN"})
+    hide_origin_empty: bpy.props.BoolProperty(
+        name="Hide Origin Empty",
+        description=(
+            "Hide this match Origin Empty in the viewport. "
+            "The match camera and collection stay visible"
+        ),
+        default=False,
+        update=_update_hide_origin_empty,
+    )
 
 
 class PMWorkspace(bpy.types.PropertyGroup):

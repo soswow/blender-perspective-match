@@ -82,6 +82,12 @@ def _short_match(match_id: str) -> str:
     return name
 
 
+def _radius_norm(sync_module, observation, calibration) -> float:
+    return float(
+        sync_module._image_radius_norm(observation.u, observation.v, calibration)
+    )
+
+
 def _project_error(sync_module, similarity, calibration, point, u, v) -> float:
     projected = sync_module.project_private_point(
         similarity.inverse_point(point), calibration
@@ -412,6 +418,55 @@ def main(argv: list[str]) -> int:
                 f"look_{'up' if axis[2] < -0.5 else 'down' if axis[2] > 0.5 else 'side'} "
                 f"collapsed={int(collapsed)} "
                 f"rmse={result.per_match_rmse_px.get(match_id, float('nan')):.1f}px"
+            )
+
+        log()
+        log("=== RESIDUAL vs RADIUS (inner r<0.35, outer r>=0.55) ===")
+        for match_id, similarity in sorted(result.similarities.items()):
+            item = match_map[match_id]
+            calibration = item.calibration
+            inner: list[float] = []
+            outer: list[float] = []
+            all_err: list[tuple[float, float, str]] = []
+            for observation in obs_by_match.get(match_id, []):
+                point = result.landmarks.get(observation.landmark_id)
+                if point is None:
+                    continue
+                error = _project_error(
+                    sync_module,
+                    similarity,
+                    calibration,
+                    point,
+                    observation.u,
+                    observation.v,
+                )
+                radius = _radius_norm(sync_module, observation, calibration)
+                all_err.append(
+                    (error, radius, name_by_id.get(observation.landmark_id, observation.landmark_id))
+                )
+                if radius < 0.35:
+                    inner.append(error)
+                elif radius >= 0.55:
+                    outer.append(error)
+            if not all_err:
+                continue
+            rmse = float(np.sqrt(np.mean([error * error for error, _r, _n in all_err])))
+            inner_rmse = (
+                float(np.sqrt(np.mean([error * error for error in inner])))
+                if inner
+                else float("nan")
+            )
+            outer_rmse = (
+                float(np.sqrt(np.mean([error * error for error in outer])))
+                if outer
+                else float("nan")
+            )
+            worst_err, worst_r, worst_name = max(all_err)
+            log(
+                f"{_short_match(match_id):24s} n={len(all_err):3d} rmse={rmse:5.1f} "
+                f"inner n={len(inner):2d} {inner_rmse:5.1f}px "
+                f"outer n={len(outer):2d} {outer_rmse:5.1f}px "
+                f"worst={worst_name} {worst_err:.0f}px r={worst_r:.2f}"
             )
 
         log()

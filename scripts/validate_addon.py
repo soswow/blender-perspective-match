@@ -220,9 +220,30 @@ def main() -> None:
             assert bpy.context.scene.camera == settings_a.camera_object
             assert bpy.context.scene.render.resolution_x == 800
 
+            space = properties.workspace(bpy.context)
+            settings_a.hide_origin_empty = True
+            assert root_a.hide_get()
+            assert not settings_a.camera_object.hide_viewport
+            assert not settings_a.match_collection.hide_viewport
+            assert not root_b.hide_get()
+            scene.set_active_match(bpy.context, root_b)
+            assert root_a.hide_get()
+            assert not root_b.hide_get()
+            assert not settings_b.hide_origin_empty
+            root_b.hide_set(True)
+            scene.set_active_match(bpy.context, root_a)
+            assert settings_a.hide_origin_empty
+            assert root_a.hide_get()
+            scene.set_active_match(bpy.context, root_b)
+            assert settings_b.hide_origin_empty
+            assert root_b.hide_get()
+            settings_b.hide_origin_empty = False
+            assert not root_b.hide_get()
+            assert root_a.hide_get()
+            scene.set_active_match(bpy.context, root_a)
+
             # Dynamic Anchor enum can disagree with the pointer (saved index).
             # Getters and operator poll must not write Scene RNA to repair it.
-            space = properties.workspace(bpy.context)
             space.anchor_root = root_a
             properties.sync_anchor_match_enum(space, root_b.name)
             assert space.anchor_match == root_b.name

@@ -680,6 +680,9 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
         size_row = empties_row.row(align=True)
         size_row.enabled = workspace.show_landmark_empties
         size_row.prop(workspace, "landmark_empty_size", text="Size")
+        origin_hide_row = sync_body.row(align=True)
+        origin_hide_row.use_property_split = False
+        origin_hide_row.prop(settings, "hide_origin_empty", text="Hide Origin Empty")
         if workspace.sync_status:
             status_column = sync_body.column(align=True)
             # Blender labels do not wrap — split so the full message is readable.

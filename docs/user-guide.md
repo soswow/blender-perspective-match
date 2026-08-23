@@ -4,7 +4,7 @@ The extension lives in the 3D View sidebar under the **Perspective Match** tab.
 
 ## Match cameras
 
-Each match is a collection with a root Empty that owns the session data, plus a child camera:
+Each match is a collection with a root Empty that owns the session data, plus a child camera. **Hide Origin Empty** (Sync section, under Landmark Empties) is stored per match: it hides that Origin Empty in the viewport while the camera and collection stay visible. Hiding the Origin in the Outliner checks the box the next time you open that match.
 
 ```text
 PM_<image>

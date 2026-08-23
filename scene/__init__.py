@@ -395,6 +395,43 @@ def bulk_create_match_cameras(
     return created, skipped
 
 
+def origin_empty_is_hidden(root: bpy.types.Object) -> bool:
+    """True if this match Origin is hidden in the Outliner or disabled in viewports."""
+    try:
+        if root.hide_get():
+            return True
+    except Exception:
+        pass
+    return bool(root.hide_viewport)
+
+
+def apply_origin_empty_hidden(root: bpy.types.Object, hidden: bool) -> None:
+    """Hide or show one match Origin Empty. Camera and collection stay visible."""
+    hidden = bool(hidden)
+    root.hide_set(hidden)
+    if not hidden:
+        root.hide_viewport = False
+    session = root.pm_session
+    camera = session.camera_object
+    if camera is not None:
+        camera.hide_viewport = False
+        try:
+            camera.hide_set(False)
+        except Exception:
+            pass
+    collection = session.match_collection
+    if collection is not None:
+        collection.hide_viewport = False
+
+
+def pull_origin_empty_hidden(root: bpy.types.Object) -> None:
+    """Copy Origin Empty visibility into this match's Hide Origin Empty checkbox."""
+    session = root.pm_session
+    hidden = origin_empty_is_hidden(root)
+    if session.hide_origin_empty != hidden:
+        session.hide_origin_empty = hidden
+
+
 def set_active_match(context: bpy.types.Context, root: bpy.types.Object) -> None:
     """Activate a match root and switch the viewport to its camera."""
     if not properties.is_match_root(root):
@@ -437,6 +474,7 @@ def set_active_match(context: bpy.types.Context, root: bpy.types.Object) -> None
         )
         context.scene.render.resolution_percentage = 100
     enter_camera_view(context, restore_framing=not same_match)
+    pull_origin_empty_hidden(root)
     properties.tag_viewport_redraw(context)
 
 

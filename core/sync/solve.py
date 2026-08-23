@@ -8,6 +8,7 @@ import numpy as np
 
 from .ba import (
     _auto_downweight_outlier_observations,
+    _balance_observation_weights,
     _bundle_adjust_registration,
     _collect_ba_line_constraints,
     _pack_params,
@@ -16,7 +17,11 @@ from .ba import (
     _residual_vector,
     _triangulate_landmarks,
 )
-from .constants import ACCEPT_RMSE_PX, GROUND_PLANE_Z_FRACTION
+from .constants import (
+    ACCEPT_RMSE_PX,
+    BA_FREE_LANDMARK_LIMIT,
+    GROUND_PLANE_Z_FRACTION,
+)
 from .lines import (
     _enforce_parallel_line_segments,
     _finite_segment_from_line_observations,
@@ -951,17 +956,18 @@ def solve_landmark_sync(
         usable_observations,
         seed_rmse,
     )
+    ba_observations = _balance_observation_weights(ba_observations, match_map)
     fixed_landmark_ids = set(known_world) | set(consistent_metric)
     free_landmark_ids = [
         landmark_id
         for landmark_id in landmark_ids
         if landmark_id in landmarks and landmark_id not in fixed_landmark_ids
     ]
-    # Large graphs: refine poses against fixed triangulated points first so
-    # numeric Jacobians stay tractable inside Refine Lenses.
+    # Large graphs: refine poses against triangulated 3D so cameras move
+    # instead of a few landmarks absorbing peripheral error.
     ba_free_landmark_ids = free_landmark_ids
     ba_iterations = 20
-    if len(free_landmark_ids) > 40:
+    if len(free_landmark_ids) > BA_FREE_LANDMARK_LIMIT:
         ba_free_landmark_ids = []
         ba_iterations = 12
     fixed_landmarks = {

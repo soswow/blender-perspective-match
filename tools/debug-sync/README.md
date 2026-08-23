@@ -40,3 +40,4 @@ Recovered-still overlay (ground vs off-plane RMSE after `solve_landmark_sync`):
 - **H_rmse** — DLT homography residual between the two stills. Low H_rmse with high mixed_rmse means the correspondence is planar (homography fits; metric PnP does not).
 - **center_vs_z_deg** — stored ray through the image center (differs from stored nadir_deg when PP is off-center).
 - **Pairwise vs anchor** — `2d_rmse` ignores On Ground metric; `mixed_rmse` includes ground raycasts. A huge mixed error with a modest 2D error is that degeneracy, not “too few landmarks” and not mis-tagged ground.
+- **Residual vs radius** (`probe_graph.py`) — per-match inner (r<0.35) vs outer (r≥0.55) RMSE. Outer much larger than inner means a central cluster is winning and edge picks that pin camera distance are being ignored.

@@ -162,3 +162,228 @@ class BundleAdjustSyncTests(unittest.TestCase):
             msg=f"max abs diff {np.max(np.abs(analytic - numeric)):.4g}",
         )
 
+
+    def test_spatial_balance_upweights_isolated_cell(self) -> None:
+        """A lone corner pick should outweigh each tag in a central cluster."""
+        intrinsics = core.CameraIntrinsics(
+            fx=800.0,
+            fy=800.0,
+            cx=400.0,
+            cy=300.0,
+            image_width=800,
+            image_height=600,
+        )
+        calibration = core.Calibration(
+            intrinsics=intrinsics,
+            rotation_w2c=np.eye(3, dtype=np.float64),
+            camera_center=np.zeros(3, dtype=np.float64),
+        )
+        matches = {"cam": sync.SyncMatchInput("cam", calibration)}
+        observations = [
+            sync.SyncObservation("cam", f"c{index}", 400.0 + index, 300.0, weight=1.0)
+            for index in range(8)
+        ]
+        observations.append(
+            sync.SyncObservation("cam", "edge", 40.0, 30.0, weight=1.0)
+        )
+        balanced = sync._balance_observation_weights(
+            observations, matches, radial_gain=0.0
+        )
+        by_id = {item.landmark_id: item.weight for item in balanced}
+        self.assertGreater(by_id["edge"] / by_id["c0"], 3.0)
+        self.assertAlmostEqual(
+            float(np.mean([item.weight for item in balanced])),
+            1.0,
+            places=6,
+        )
+
+
+    def test_spatial_balance_preserves_confidence_ratio(self) -> None:
+        """High vs Normal in the same cell should keep their 4:1 ratio."""
+        intrinsics = core.CameraIntrinsics(
+            fx=800.0,
+            fy=800.0,
+            cx=400.0,
+            cy=300.0,
+            image_width=800,
+            image_height=600,
+        )
+        calibration = core.Calibration(
+            intrinsics=intrinsics,
+            rotation_w2c=np.eye(3, dtype=np.float64),
+            camera_center=np.zeros(3, dtype=np.float64),
+        )
+        matches = {"cam": sync.SyncMatchInput("cam", calibration)}
+        observations = [
+            sync.SyncObservation("cam", "high", 410.0, 305.0, weight=4.0),
+            sync.SyncObservation("cam", "normal", 390.0, 295.0, weight=1.0),
+        ]
+        balanced = sync._balance_observation_weights(observations, matches)
+        by_id = {item.landmark_id: item.weight for item in balanced}
+        self.assertAlmostEqual(by_id["high"] / by_id["normal"], 4.0, places=6)
+
+
+    def test_edge_landmarks_keep_camera_depth_with_cluster(self) -> None:
+        """Many central tags plus a few edge picks should still recover depth."""
+        matches, observations, true_sim, _center, shared_center = (
+            _cluster_and_edge_scene()
+        )
+        result = sync.solve_landmark_sync(
+            matches, observations, anchor_id="anchor"
+        )
+        self.assertTrue(result.success, result.message)
+        recovered = result.similarities["other"].transform_point(
+            matches[1].calibration.camera_center
+        )
+        true_depth = float(np.linalg.norm(shared_center))
+        recovered_depth = float(np.linalg.norm(recovered))
+        self.assertLess(
+            abs(recovered_depth - true_depth) / true_depth,
+            0.12,
+            msg=(
+                f"depth {recovered_depth:.3f} vs true {true_depth:.3f} "
+                f"({result.message})"
+            ),
+        )
+        other_cal = matches[1].calibration
+        inner: list[float] = []
+        outer: list[float] = []
+        similarity = result.similarities["other"]
+        for observation in observations:
+            if observation.match_id != "other":
+                continue
+            point = result.landmarks.get(observation.landmark_id)
+            if point is None:
+                continue
+            projected = sync.project_private_point(
+                similarity.inverse_point(point), other_cal
+            )
+            if projected is None:
+                continue
+            error = float(
+                np.hypot(projected[0] - observation.u, projected[1] - observation.v)
+            )
+            radius = sync._image_radius_norm(
+                observation.u, observation.v, other_cal
+            )
+            if radius < 0.35:
+                inner.append(error)
+            elif radius >= 0.55:
+                outer.append(error)
+        self.assertTrue(inner and outer, "need both inner and outer picks")
+        inner_rmse = float(np.sqrt(np.mean(np.square(inner))))
+        outer_rmse = float(np.sqrt(np.mean(np.square(outer))))
+        self.assertLess(
+            outer_rmse,
+            inner_rmse * 3.0 + 4.0,
+            msg=f"outer {outer_rmse:.1f}px vs inner {inner_rmse:.1f}px",
+        )
+
+
+def _cluster_and_edge_scene() -> tuple:
+    """Many central ground tags, few elevated edge tags, slightly long fx."""
+    true_fx = 900.0
+    stored_fx = 900.0 * 1.06
+    true_intrinsics = core.CameraIntrinsics(
+        fx=true_fx,
+        fy=true_fx,
+        cx=400.0,
+        cy=300.0,
+        image_width=800,
+        image_height=600,
+    )
+    stored_intrinsics = core.CameraIntrinsics(
+        fx=stored_fx,
+        fy=stored_fx,
+        cx=400.0,
+        cy=300.0,
+        image_width=800,
+        image_height=600,
+    )
+    true_landmarks: dict[str, np.ndarray] = {}
+    ground_ids: set[str] = set()
+    rng = np.random.default_rng(0)
+    for index in range(12):
+        landmark_id = f"c{index}"
+        true_landmarks[landmark_id] = np.array(
+            (
+                rng.uniform(-0.22, 0.22),
+                rng.uniform(-0.16, 0.16),
+                0.0,
+            ),
+            dtype=np.float64,
+        )
+        ground_ids.add(landmark_id)
+    for index, (x_coord, y_coord, z_coord) in enumerate(
+        (
+            (-1.6, -1.1, 0.0),
+            (1.6, -1.1, 0.0),
+            (-1.6, 1.1, 1.05),
+            (1.6, 1.1, 1.05),
+        )
+    ):
+        landmark_id = f"e{index}"
+        true_landmarks[landmark_id] = np.array(
+            (x_coord, y_coord, z_coord), dtype=np.float64
+        )
+        if z_coord <= 1.0e-6:
+            ground_ids.add(landmark_id)
+
+    true_sim = sync.SimilarityTransform(
+        scale=1.0,
+        rotation=_rodrigues_z(0.28),
+        translation=np.array((2.4, -1.1, 0.35), dtype=np.float64),
+    )
+    anchor_center = np.array((-3.2, -3.6, 2.4), dtype=np.float64)
+    anchor_rotation = _look_at_rotation(
+        anchor_center, np.array((0.0, 0.0, 0.4), dtype=np.float64)
+    )
+    anchor_calibration = core.Calibration(
+        intrinsics=true_intrinsics,
+        rotation_w2c=anchor_rotation,
+        camera_center=anchor_center,
+    )
+    shared_center = np.array((3.4, -0.4, 1.55), dtype=np.float64)
+    shared_rotation = _look_at_rotation(
+        shared_center, np.array((0.0, 0.0, 0.45), dtype=np.float64)
+    )
+    rotation_private = shared_rotation @ true_sim.rotation
+    center_private = true_sim.rotation.T @ (shared_center - true_sim.translation)
+    other_true = core.Calibration(
+        intrinsics=true_intrinsics,
+        rotation_w2c=rotation_private,
+        camera_center=center_private,
+    )
+    other_calibration = core.Calibration(
+        intrinsics=stored_intrinsics,
+        rotation_w2c=rotation_private,
+        camera_center=center_private,
+    )
+    private_landmarks = {
+        key: true_sim.inverse_point(point) for key, point in true_landmarks.items()
+    }
+    matches = [
+        sync.SyncMatchInput("anchor", anchor_calibration),
+        sync.SyncMatchInput("other", other_calibration),
+    ]
+    observations: list[sync.SyncObservation] = []
+    for landmark_id, shared_point in true_landmarks.items():
+        observations.append(
+            sync.SyncObservation(
+                "anchor",
+                landmark_id,
+                *_project(shared_point, anchor_calibration),
+                on_ground=landmark_id in ground_ids,
+            )
+        )
+        observations.append(
+            sync.SyncObservation(
+                "other",
+                landmark_id,
+                *_project(private_landmarks[landmark_id], other_true),
+                on_ground=landmark_id in ground_ids,
+            )
+        )
+    return matches, observations, true_sim, center_private, shared_center
+
+

@@ -5,7 +5,12 @@ from __future__ import annotations
 import numpy as np
 
 from .. import geometry as core
-from .constants import OUTLIER_WEIGHT_FACTOR
+from .constants import (
+    OUTLIER_WEIGHT_FACTOR,
+    RADIAL_WEIGHT_GAIN,
+    SPATIAL_GRID_SIZE,
+    SPATIAL_WEIGHT_CLIP,
+)
 from .projection import (
     _known_line_reprojection_errors,
     _line_observation_reprojection_errors,
@@ -25,6 +30,108 @@ from .types import (
     SyncObservation,
     _observation_scale,
 )
+
+def _image_radius_norm(
+    u_coord: float, v_coord: float, calibration: core.Calibration
+) -> float:
+    """Distance from the principal point, 1 at the farthest image corner."""
+    intrinsics = calibration.intrinsics
+    cx_coord = float(intrinsics.cx)
+    cy_coord = float(intrinsics.cy)
+    width = float(intrinsics.image_width)
+    height = float(intrinsics.image_height)
+    max_radius = 0.0
+    for corner_u, corner_v in (
+        (0.0, 0.0),
+        (width, 0.0),
+        (0.0, height),
+        (width, height),
+    ):
+        max_radius = max(
+            max_radius,
+            float(np.hypot(corner_u - cx_coord, corner_v - cy_coord)),
+        )
+    return float(
+        np.hypot(float(u_coord) - cx_coord, float(v_coord) - cy_coord)
+    ) / max(max_radius, 1.0)
+
+
+def _image_grid_cell(
+    u_coord: float,
+    v_coord: float,
+    calibration: core.Calibration,
+    grid: int,
+) -> tuple[int, int]:
+    """Row/column in a uniform image grid, clipped to the plate."""
+    width = max(float(calibration.intrinsics.image_width), 1.0)
+    height = max(float(calibration.intrinsics.image_height), 1.0)
+    column = min(grid - 1, max(0, int(float(u_coord) / width * grid)))
+    row = min(grid - 1, max(0, int(float(v_coord) / height * grid)))
+    return row, column
+
+
+def _balance_observation_weights(
+    observations: list[SyncObservation],
+    matches: dict[str, SyncMatchInput],
+    *,
+    grid: int = SPATIAL_GRID_SIZE,
+    clip: float = SPATIAL_WEIGHT_CLIP,
+    radial_gain: float = RADIAL_WEIGHT_GAIN,
+) -> list[SyncObservation]:
+    """Reweight picks so occupied image-grid cells share influence per camera.
+
+    Confidence ratios stay (mean spatial boost is 1). Isolated cells clip so
+    one mismatched pick cannot dominate.
+    """
+    if grid < 1 or not observations:
+        return observations
+    by_match: dict[str, list[int]] = {}
+    for index, observation in enumerate(observations):
+        by_match.setdefault(observation.match_id, []).append(index)
+    balanced = list(observations)
+    clip = max(float(clip), 1.0)
+    min_boost = 1.0 / clip
+    for match_id, indices in by_match.items():
+        match = matches.get(match_id)
+        if match is None or len(indices) < 2:
+            continue
+        calibration = match.calibration
+        counts: dict[tuple[int, int], int] = {}
+        cells: list[tuple[int, int]] = []
+        radii: list[float] = []
+        for index in indices:
+            observation = observations[index]
+            cell = _image_grid_cell(
+                observation.u, observation.v, calibration, grid
+            )
+            cells.append(cell)
+            counts[cell] = counts.get(cell, 0) + 1
+            radii.append(
+                _image_radius_norm(observation.u, observation.v, calibration)
+            )
+        occupied = len(counts)
+        count = len(indices)
+        boosts: list[float] = []
+        for cell, radius in zip(cells, radii):
+            spatial = float(count) / (float(counts[cell]) * float(occupied))
+            radial = 1.0 + float(radial_gain) * radius * radius
+            boosts.append(min(max(spatial * radial, min_boost), clip))
+        mean_boost = float(np.mean(boosts))
+        if mean_boost <= 1.0e-12:
+            continue
+        for index, boost in zip(indices, boosts):
+            observation = observations[index]
+            balanced[index] = SyncObservation(
+                match_id=observation.match_id,
+                landmark_id=observation.landmark_id,
+                u=observation.u,
+                v=observation.v,
+                on_ground=observation.on_ground,
+                landmark_name=observation.landmark_name,
+                weight=float(observation.weight) * (boost / mean_boost),
+            )
+    return balanced
+
 
 def _pack_params(
     match_ids: list[str],
@@ -301,12 +408,12 @@ def _robust_weights(
     residuals: np.ndarray,
     delta: float,
     *,
-    kind: str = "cauchy",
+    kind: str = "huber",
 ) -> np.ndarray:
     """IRLS residual scales for the joint BA robust kernel."""
-    if kind == "huber":
-        return _huber_weights(residuals, delta)
-    return _cauchy_weights(residuals, delta)
+    if kind == "cauchy":
+        return _cauchy_weights(residuals, delta)
+    return _huber_weights(residuals, delta)
 
 
 def _similarity_param_stride(
@@ -863,7 +970,7 @@ def _bundle_adjust_registration(
     """Joint LM over free Empty poses, landmarks, and free-line midpoints.
 
     Pairwise registration seeds the solve; this pass couples every match and
-    landmark into one reprojection objective (Cauchy-weighted). Free line
+    landmark into one reprojection objective (Huber-weighted). Free line
     midpoints move; directions stay fixed from the seed (parallel enforcement
     can still lock families afterward).
     """

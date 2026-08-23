@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Hide Origin Empty (per match) hides that Origin Empty; Outliner hide/show stays in sync, camera and collection stay visible
 - Ctrl+Cmd+A (Ctrl+Win+A on Windows/Linux) starts Pick in Active Match while the Perspective Match sidebar is open in that match's camera view
 - Snap to AprilTag under Pick in Active Match recenters a point pick on a nearby dark tag-like quadrilateral (hidden when OpenCV is missing)
 - Click a landmark pick on the plate to select it in the Sync list (Perspective Match sidebar tab open)
@@ -19,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Diagnose / Solve Sync name a mismatched landmark pick when that still is skipped because one correspondence disagrees with the other views
 
 ### Changed
+- Solve Sync balances landmarks across the frame so a cluster of well-fitting central picks cannot ignore a few near the edge that pin camera distance
 - Pick Confidence and per-match confidence dropdowns sit in a collapsed section under Pick in Active Match
 - On Ground landmark picks draw in magenta on the plate (selected stays red)
 - Manual PP Offset marker is light blue (was violet)
