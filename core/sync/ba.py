@@ -1320,6 +1320,9 @@ def leave_one_out_landmark_report(
     Returns ``(landmark_name, with_rmse, without_rmse)`` sorted by how much
     removing the landmark helps (largest improvement first).
     """
+    # Deferred: solve.py imports this module.
+    from .solve import solve_landmark_sync
+
     if baseline is None:
         baseline = solve_landmark_sync(
             matches,
@@ -1371,8 +1374,6 @@ def leave_one_out_landmark_report(
             for pair in (parallel_pairs or [])
             if landmark_id not in pair
         ]
-        from .solve import solve_landmark_sync
-
         without = solve_landmark_sync(
             matches,
             filtered,

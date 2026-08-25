@@ -45,6 +45,22 @@ class BundleAdjustSyncTests(unittest.TestCase):
         best = min(report, key=lambda item: item[2])
         self.assertLess(best[2], baseline.mean_reprojection_px + 1.0)
 
+    def test_leave_one_out_computes_baseline_when_omitted(self) -> None:
+        """Diagnose must import the solver before using it with no baseline."""
+        matches, observations, _true_sim, _center, _shared = _synthetic_scene(
+            with_ground=True
+        )
+        report = sync.leave_one_out_landmark_report(
+            matches,
+            observations,
+            anchor_id="anchor",
+            top_k=1,
+        )
+        self.assertTrue(report)
+        name, with_rmse, without_rmse = report[0]
+        self.assertTrue(name)
+        self.assertGreater(with_rmse, 0.0)
+        self.assertGreaterEqual(without_rmse, 0.0)
 
     def test_auto_downweight_marks_severe_outlier(self) -> None:
         """Severe landmark RMSE should soft-downweight that landmark for BA."""

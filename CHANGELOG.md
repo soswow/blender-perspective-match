@@ -40,6 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Original Plate keeps imported Brown–Conrady D and only switches the background; estimated λ is still cleared
 
 ### Fixed
+- Diagnose / Solve Sync no longer error when Is-Parallel-To lines are in the graph
+- Diagnose no longer errors when leave-one-out has to re-solve without a previous per-landmark RMSE
 - Snap to AprilTag recenters on the full inner black body of small blurry tags instead of a dark fragment
 - Refine Lenses no longer drops the undistorted plate, which made a pinhole 3D view sit on the original barrel still and look like a horizon at infinity
 - Solve Sync triangulates landmarks that only appear on recovered stills and poses hanging cameras from that 3D, so their Empties match the picks instead of keeping a stale 1px RMSE

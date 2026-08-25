@@ -30,6 +30,7 @@ from .ground import (
     _plane_tangent_basis,
 )
 from .lines import (
+    _parallel_pair_rotation_error,
     _parallel_vp_specs_for_match_pair,
     _reconstruct_line_from_observations,
 )

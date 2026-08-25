@@ -251,3 +251,71 @@ class LineSyncTests(unittest.TestCase):
         )
         self.assertLess(after, 0.05)
 
+    def test_pose_refine_with_parallel_pairs_runs(self) -> None:
+        """Is-Parallel-To pose refine must import the rotation-error helper."""
+        matches, _observations, true_sim, _center, _shared = _synthetic_scene(
+            with_ground=False
+        )
+        other = matches[1].calibration
+        edge_a = (
+            np.array((0.0, 0.0, 0.0), dtype=np.float64),
+            np.array((2.0, 0.0, 0.0), dtype=np.float64),
+        )
+        edge_b = (
+            np.array((0.0, 1.0, 0.5), dtype=np.float64),
+            np.array((2.0, 1.0, 0.5), dtype=np.float64),
+        )
+        line_observations: list[sync.SyncLineObservation] = []
+        for landmark_id, (point_a, point_b) in (
+            ("edge_a", edge_a),
+            ("edge_b", edge_b),
+        ):
+            for match_id, calibration, sim in (
+                ("anchor", matches[0].calibration, sync.SimilarityTransform()),
+                ("other", other, true_sim),
+            ):
+                if match_id == "anchor":
+                    private_a, private_b = point_a, point_b
+                else:
+                    private_a = sim.inverse_point(point_a)
+                    private_b = sim.inverse_point(point_b)
+                ua, va = _project(private_a, calibration)
+                ub, vb = _project(private_b, calibration)
+                line_observations.append(
+                    sync.SyncLineObservation(
+                        match_id=match_id,
+                        landmark_id=landmark_id,
+                        u1=ua,
+                        v1=va,
+                        u2=ub,
+                        v2=vb,
+                        landmark_name=landmark_id,
+                    )
+                )
+
+        def _line(match_id: str, landmark_id: str) -> sync.SyncLineObservation:
+            return next(
+                item
+                for item in line_observations
+                if item.match_id == match_id and item.landmark_id == landmark_id
+            )
+
+        refined = sync._refine_rigid_mixed(
+            true_sim,
+            [],
+            [],
+            [],
+            matches[0].calibration,
+            other,
+            parallel_vp_constraints=[
+                (
+                    _line("anchor", "edge_a"),
+                    _line("anchor", "edge_b"),
+                    _line("other", "edge_a"),
+                    _line("other", "edge_b"),
+                )
+            ],
+            parallel_weight=12.0,
+        )
+        self.assertEqual(tuple(refined.rotation.shape), (3, 3))
+
