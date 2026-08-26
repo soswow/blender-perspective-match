@@ -48,7 +48,7 @@ Model or place Empties in the anchor world → select them → Sync list **Landm
 
 ### Line landmarks
 
-Add with the mesh icon next to +. Drag the same physical edge in each still — endpoints do **not** need to be the same 3D points, only the same infinite edge. Optional: assign two Empties as **Known 3D** / **Known 3D B** so the edge is metric. Mark **Is Parallel To** another Line landmark when two edges share a 3D direction.
+Add with the mesh icon next to +. Drag the same physical edge in each still — endpoints do **not** need to be the same 3D points, only the same infinite edge. Optional: assign two Empties as **Known 3D** / **Known 3D B** so the edge is metric. **Is Parallel To** can constrain the edge to shared-world **X Axis**, **Y Axis**, or **Z Axis**, or to another Line landmark that shares its 3D direction.
 
 Without Known 3D ends, a free line needs **three or more** stills — two views alone cannot constrain relative pose from lines. Ordinary point landmarks must be picked in **both** stills when Known 3D sit on one line. Expand **Pick Confidence** (collapsed by default, under **Pick in Active Match**) to set the next-pick default or per-still confidence.
 
@@ -81,4 +81,4 @@ The eye icon on **Sync Matches** toggles landmark picks on the plate; **Landmark
 - **Sync broke after adding one landmark** — turn off **Use in Sync** on the new one and Diagnose again.
 - **Known 3D warn (Empty vs anchor pick)** — the Empty moved or the anchor camera changed; re-run **Landmarks from Selected**.
 - **Landmarks jump on the plate when panning one still** — that match Empty was shrunk to a point (typical for a below-ground camera). Switch to the match or re-run **Solve Sync**; the camera should stay below-ground, but overlay picks stay on the photo.
-- **One free line looks skewed vs another that should be parallel** — tag **Is Parallel To**. Prefer linking the bad free line to a better-fitting free line or a Known 3D edge.
+- **A free line should follow a world axis** — set **Is Parallel To** to X Axis, Y Axis, or Z Axis. For two arbitrary parallel edges, link the bad free line to a better-fitting free line or a Known 3D edge.

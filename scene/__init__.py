@@ -2385,6 +2385,7 @@ def clear_landmark_observation_for_active(context: bpy.types.Context) -> bool:
 def build_sync_problem(context: bpy.types.Context):
     """Collect frozen match calibrations, landmark observations, and known 3D."""
     from ..core import sync as sync_module
+    from ..core.sync.constants import WORLD_AXIS_DIRECTIONS
 
     roots = properties.iter_match_roots()
     matches = []
@@ -2420,8 +2421,9 @@ def build_sync_problem(context: bpy.types.Context):
             if other_id and other_id != "NONE" and other_id != landmark.item_id:
                 pair = tuple(sorted((landmark.item_id, other_id)))
                 if pair not in seen_pairs:
-                    # Confirm the target still exists as an enabled Line landmark.
-                    target = next(
+                    is_world_axis = other_id in WORLD_AXIS_DIRECTIONS
+                    # Non-axis targets must still exist as enabled Lines.
+                    target = None if is_world_axis else next(
                         (
                             item
                             for item in space.landmarks
@@ -2431,7 +2433,7 @@ def build_sync_problem(context: bpy.types.Context):
                         ),
                         None,
                     )
-                    if target is not None:
+                    if is_world_axis or target is not None:
                         seen_pairs.add(pair)
                         parallel_pairs.append(pair)
             if (

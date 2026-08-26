@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 from .. import geometry as core
+from .constants import WORLD_AXIS_DIRECTIONS
 from .projection import (
     _image_line_homogeneous,
     _intersect_planes_to_line,
@@ -189,6 +190,57 @@ def _parallel_direction_error(
     )
 
 
+def _world_axis_in_group(group: list[str]) -> np.ndarray | None:
+    """Fixed shared-world direction named by a parallel-family graph node."""
+    for item_id in group:
+        direction = WORLD_AXIS_DIRECTIONS.get(item_id)
+        if direction is not None:
+            return direction
+    return None
+
+
+def _axis_line_constraints_for_match(
+    match_id: str,
+    parallel_pairs: list[tuple[str, str]] | None,
+    line_observations_by_landmark: dict[str, list[SyncLineObservation]] | None,
+) -> list[tuple[np.ndarray, SyncLineObservation]]:
+    """Observed Lines whose parallel family is fixed to a shared-world axis."""
+    constraints: list[tuple[np.ndarray, SyncLineObservation]] = []
+    line_by_lm = line_observations_by_landmark or {}
+    for group in _parallel_landmark_groups(parallel_pairs):
+        axis = _world_axis_in_group(group)
+        if axis is None:
+            continue
+        for landmark_id in group:
+            if landmark_id in WORLD_AXIS_DIRECTIONS:
+                continue
+            observation = next(
+                (
+                    item
+                    for item in line_by_lm.get(landmark_id, [])
+                    if item.match_id == match_id
+                ),
+                None,
+            )
+            if observation is not None:
+                constraints.append((axis, observation))
+    return constraints
+
+
+def _axis_line_rotation_error(
+    direction: np.ndarray,
+    observation: SyncLineObservation,
+    calibration: core.Calibration,
+    similarity: SimilarityTransform,
+) -> float | None:
+    """Sine of angle by which a world direction misses an observed image line."""
+    plane = _plane_from_line_observation(observation, calibration, similarity)
+    if plane is None:
+        return None
+    unit = direction / max(float(np.linalg.norm(direction)), 1.0e-12)
+    return abs(float(np.dot(plane[:3], unit)))
+
+
 def _parallel_landmark_groups(
     parallel_pairs: list[tuple[str, str]] | None,
 ) -> list[list[str]]:
@@ -312,11 +364,12 @@ def _enforce_parallel_line_segments(
     """
     for group in _parallel_landmark_groups(parallel_pairs):
         members = [landmark_id for landmark_id in group if landmark_id in line_segments]
-        if len(members) < 2:
+        axis_direction = _world_axis_in_group(group)
+        if len(members) < 1 or (len(members) < 2 and axis_direction is None):
             continue
         directions: list[np.ndarray] = []
         weights: list[float] = []
-        known_direction: np.ndarray | None = None
+        known_direction: np.ndarray | None = axis_direction
         for landmark_id in members:
             point_a, point_b = line_segments[landmark_id]
             direction = point_b - point_a
@@ -416,4 +469,3 @@ def _parallel_vp_specs_for_match_pair(
                 )
             )
     return specs
-

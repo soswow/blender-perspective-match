@@ -6,6 +6,17 @@ do not drift apart. Update AGENTS.md if a stage or constant changes.
 
 from __future__ import annotations
 
+import numpy as np
+
+# Stable EnumProperty identifiers for Line > Is Parallel To world-axis targets.
+# These are graph nodes, not landmark IDs; their values must remain stable so
+# saved .blend files keep their selection across add-on upgrades.
+WORLD_AXIS_DIRECTIONS = {
+    "WORLD_AXIS_X": np.array((1.0, 0.0, 0.0), dtype=np.float64),
+    "WORLD_AXIS_Y": np.array((0.0, 1.0, 0.0), dtype=np.float64),
+    "WORLD_AXIS_Z": np.array((0.0, 0.0, 1.0), dtype=np.float64),
+}
+
 # Pixel RMSE above which a camera is peeled from the joint graph, and
 # below which a pairwise or resected pose is accepted.
 ACCEPT_RMSE_PX = 40.0

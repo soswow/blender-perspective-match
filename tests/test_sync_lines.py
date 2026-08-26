@@ -251,6 +251,91 @@ class LineSyncTests(unittest.TestCase):
         )
         self.assertLess(after, 0.05)
 
+    def test_world_axis_enforcement_locks_single_free_line(self) -> None:
+        """An axis target should fix one free line without a second landmark."""
+        skewed = (
+            np.array((1.0, 2.0, 3.0), dtype=np.float64),
+            np.array((2.0, 3.0, 4.0), dtype=np.float64),
+        )
+        line_segments = {"edge": skewed}
+        landmarks = {"edge": 0.5 * (skewed[0] + skewed[1])}
+
+        sync._enforce_parallel_line_segments(
+            line_segments,
+            landmarks,
+            [("edge", "WORLD_AXIS_Z")],
+            {"edge": []},
+            {},
+            {},
+            known_lines={},
+        )
+
+        direction = line_segments["edge"][1] - line_segments["edge"][0]
+        self.assertLess(
+            sync._parallel_direction_error(
+                direction,
+                np.array((0.0, 0.0, 1.0), dtype=np.float64),
+            ),
+            1.0e-9,
+        )
+
+    def test_world_axis_constraint_measures_pose_rotation(self) -> None:
+        """An axis-linked image line should penalize a rotated match Empty."""
+        matches, _observations, true_sim, _center, _shared = _synthetic_scene(
+            with_ground=False
+        )
+        point_a = np.array((0.0, 1.0, 0.5), dtype=np.float64)
+        point_b = np.array((2.0, 1.0, 0.5), dtype=np.float64)
+        private_a = true_sim.inverse_point(point_a)
+        private_b = true_sim.inverse_point(point_b)
+        ua, va = _project(private_a, matches[1].calibration)
+        ub, vb = _project(private_b, matches[1].calibration)
+        observation = sync.SyncLineObservation(
+            match_id="other",
+            landmark_id="edge",
+            u1=ua,
+            v1=va,
+            u2=ub,
+            v2=vb,
+        )
+        constraints = sync._axis_line_constraints_for_match(
+            "other",
+            [("edge", "WORLD_AXIS_X")],
+            {"edge": [observation]},
+        )
+        self.assertEqual(len(constraints), 1)
+        good = sync._axis_line_rotation_error(
+            constraints[0][0], observation, matches[1].calibration, true_sim
+        )
+        bad_sim = sync.SimilarityTransform(
+            scale=true_sim.scale,
+            rotation=_rodrigues_z(1.0) @ true_sim.rotation,
+            translation=true_sim.translation.copy(),
+        )
+        bad = sync._axis_line_rotation_error(
+            constraints[0][0], observation, matches[1].calibration, bad_sim
+        )
+        self.assertIsNotNone(good)
+        self.assertIsNotNone(bad)
+        self.assertLess(good, 1.0e-6)
+        self.assertGreater(bad, 0.2)
+
+        refined = sync._refine_rigid_mixed(
+            bad_sim,
+            [],
+            [],
+            [],
+            matches[0].calibration,
+            matches[1].calibration,
+            axis_line_constraints=constraints,
+            parallel_weight=12.0,
+        )
+        refined_error = sync._axis_line_rotation_error(
+            constraints[0][0], observation, matches[1].calibration, refined
+        )
+        self.assertIsNotNone(refined_error)
+        self.assertLess(refined_error, bad)
+
     def test_pose_refine_with_parallel_pairs_runs(self) -> None:
         """Is-Parallel-To pose refine must import the rotation-error helper."""
         matches, _observations, true_sim, _center, _shared = _synthetic_scene(
@@ -318,4 +403,3 @@ class LineSyncTests(unittest.TestCase):
             parallel_weight=12.0,
         )
         self.assertEqual(tuple(refined.rotation.shape), (3, 3))
-

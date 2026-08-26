@@ -22,6 +22,12 @@ LANDMARK_KIND_ITEMS = (
     ("LINE", "Line", "Correspond the same 3D edge as a 2D segment in each still"),
 )
 
+WORLD_AXIS_PARALLEL_ITEMS = (
+    ("WORLD_AXIS_X", "X Axis", "Parallel to the shared-world X axis"),
+    ("WORLD_AXIS_Y", "Y Axis", "Parallel to the shared-world Y axis"),
+    ("WORLD_AXIS_Z", "Z Axis", "Parallel to the shared-world Z axis"),
+)
+
 
 def tag_viewport_redraw(context: bpy.types.Context | None = None) -> None:
     """Request redraw in every 3D View."""
@@ -101,8 +107,11 @@ def _update_landmark_kind(self, context: bpy.types.Context) -> None:
 
 
 def _parallel_to_items(self, context):
-    """Dropdown of other Line landmarks for the parallel constraint."""
-    items = [("NONE", "None", "Not marked parallel to another line landmark")]
+    """Dropdown of world axes and other Lines for the parallel constraint."""
+    items = [
+        ("NONE", "None", "No parallel direction constraint"),
+        *WORLD_AXIS_PARALLEL_ITEMS,
+    ]
     if context is None:
         return items
     space = workspace(context)
@@ -457,8 +466,8 @@ class PMLandmark(bpy.types.PropertyGroup):
     parallel_to: bpy.props.EnumProperty(
         name="Is Parallel To",
         description=(
-            "Another Line landmark that shares the same 3D direction. "
-            "Constrains relative orientation during sync"
+            "A shared-world axis or another Line landmark that shares the same "
+            "3D direction. Constrains relative orientation during sync"
         ),
         items=_parallel_to_items,
         update=_redraw,

@@ -30,6 +30,8 @@ from .ground import (
     _plane_tangent_basis,
 )
 from .lines import (
+    _axis_line_constraints_for_match,
+    _axis_line_rotation_error,
     _parallel_pair_rotation_error,
     _parallel_vp_specs_for_match_pair,
     _reconstruct_line_from_observations,
@@ -1971,6 +1973,8 @@ def _refine_rigid_mixed(
         ]
     ]
     | None = None,
+    axis_line_constraints: list[tuple[np.ndarray, SyncLineObservation]]
+    | None = None,
     parallel_weight: float = 0.0,
     lock_scale: bool = True,
     lock_rotation: bool = False,
@@ -2004,6 +2008,7 @@ def _refine_rigid_mixed(
             known_weights = [1.0] * len(points_shared)
     line_constraints = known_line_constraints or []
     parallel_constraints = parallel_vp_constraints or []
+    axis_constraints = axis_line_constraints or []
     anchor_directions: list[np.ndarray] = []
     other_directions: list[np.ndarray] = []
     pair_scales: list[float] = []
@@ -2098,6 +2103,12 @@ def _refine_rigid_mixed(
                 )
                 if parallel_error is not None:
                     errors.append(float(parallel_weight) * parallel_error)
+            for direction, observation in axis_constraints:
+                axis_error = _axis_line_rotation_error(
+                    direction, observation, other, similarity
+                )
+                if axis_error is not None:
+                    errors.append(float(parallel_weight) * axis_error)
         return np.asarray(errors, dtype=np.float64)
 
     damping = 1.0e-2
@@ -2770,7 +2781,12 @@ def _compute_relative_pose_from_correspondences(
         parallel_pairs,
         line_observations_by_landmark,
     )
-    if parallel_specs and not lock_rotation and not lock_translation:
+    axis_specs = _axis_line_constraints_for_match(
+        other_id,
+        parallel_pairs,
+        line_observations_by_landmark,
+    )
+    if (parallel_specs or axis_specs) and not lock_rotation and not lock_translation:
         refined = _refine_rigid_mixed(
             best,
             free_pairs,
@@ -2781,6 +2797,7 @@ def _compute_relative_pose_from_correspondences(
             point_weights=known_weights,
             known_line_constraints=known_line_constraints,
             parallel_vp_constraints=parallel_specs,
+            axis_line_constraints=axis_specs,
             parallel_weight=12.0,
         )
         refined_errors = _reprojection_errors_for_similarity(
