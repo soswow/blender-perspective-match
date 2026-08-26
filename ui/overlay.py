@@ -906,7 +906,17 @@ def _draw_placement(context: bpy.types.Context, fill_shader, settings) -> None:
     show_pp = scene.principal_point_is_off_center(settings) or (
         workspace.is_modal and workspace.work_mode == "PP"
     )
-    if show_pp and settings.image_width > 0 and settings.image_height > 0:
+    previewing_pp = (
+        _preview["kind"] == "PP"
+        and context.area is not None
+        and context.area.as_pointer() == _preview["area_pointer"]
+    )
+    if (
+        show_pp
+        and not previewing_pp
+        and settings.image_width > 0
+        and settings.image_height > 0
+    ):
         principal = scene.image_to_region(context, settings.cx, settings.cy)
         _draw_crosshair(
             fill_shader,
@@ -1121,17 +1131,27 @@ def _draw_interact_mode_chrome(context: bpy.types.Context, workspace) -> None:
     gpu.state.blend_set("ALPHA")
 
 
-def _draw_preview(context: bpy.types.Context, settings) -> None:
+def _draw_preview(context: bpy.types.Context, fill_shader, settings) -> None:
     if (
         context.area is None
         or context.area.as_pointer() != _preview["area_pointer"]
         or _preview["start"] is None
         or _preview["end"] is None
-        or _preview["kind"] != "LINE"
     ):
         return
     start = _preview["start"]
     end = _preview["end"]
+    if _preview["kind"] == "PP":
+        point = scene.image_to_region(context, end[0], end[1])
+        _draw_crosshair(
+            fill_shader,
+            point,
+            _with_alpha(_PP_COLOR, settings.overlay_opacity),
+            9.0,
+        )
+        return
+    if _preview["kind"] != "LINE":
+        return
     calibration = scene.calibration_from_settings(settings)
     ideal = core.undistort_points(
         np.asarray([start, end], dtype=np.float64),
@@ -1175,7 +1195,7 @@ def _draw_callback() -> None:
         _draw_vp_geometry(context, fill_shader, settings)
         _draw_placement(context, fill_shader, settings)
         _draw_landmarks(context, fill_shader, settings)
-        _draw_preview(context, settings)
+        _draw_preview(context, fill_shader, settings)
         # After GPU geometry so blf cannot wipe landmark / preview alpha blending.
         _draw_landmark_labels(context, settings)
         _draw_vp_error_labels(context, settings)

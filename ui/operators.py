@@ -5,7 +5,6 @@ from __future__ import annotations
 import math
 import sys
 import threading
-import time
 from pathlib import Path
 from uuid import uuid4
 
@@ -1610,9 +1609,6 @@ class PM_OT_interact(bpy.types.Operator):
     _edit_endpoint: int = 0
     # Last cursor id applied during hover (avoids redundant cursor_set calls).
     _hover_cursor: str = ""
-    # Throttle full VP re-orient while dragging the principal point.
-    _pp_last_reorient: float = 0.0
-    _PP_REORIENT_INTERVAL = 0.08
 
     @classmethod
     def description(cls, context: bpy.types.Context, properties) -> str:
@@ -1958,18 +1954,10 @@ class PM_OT_interact(bpy.types.Operator):
                 observation.x2, observation.y2 = image_point
             properties.tag_viewport_redraw(context)
         elif self._drag_kind == "PP":
-            # Shift every move; rebuild orientation on a throttle so geometry
-            # tracks the release "snap" without refining on every mouse event.
-            now = time.monotonic()
-            reorient = (now - self._pp_last_reorient) >= self._PP_REORIENT_INTERVAL
-            try:
-                scene.set_principal_point(
-                    context, image_point, finalize=reorient
-                )
-                if reorient:
-                    self._pp_last_reorient = now
-            except Exception as error:
-                self.report({"ERROR"}, str(error))
+            # Keep the current plate and remap stable during the gesture. PP is
+            # applied once on release, when an active undistorted view can be
+            # rebuilt once instead of falling back to the source on every move.
+            overlay.set_preview(context, "PP", image_point, image_point)
 
     def _complete_landmark_line_drag(
         self,
@@ -2050,6 +2038,7 @@ class PM_OT_interact(bpy.types.Operator):
         elif drag_kind == "PP":
             try:
                 scene.set_principal_point(context, image_point, finalize=True)
+                distortion.sync_undistorted_plate_after_refine(context)
             except Exception as error:
                 self.report({"ERROR"}, str(error))
             if settings is not None:
@@ -2084,17 +2073,6 @@ class PM_OT_interact(bpy.types.Operator):
                     observation.x2,
                     observation.y2,
                 ) = self._original
-        if self._original is not None and self._drag_kind == "PP":
-            # Restore pre-drag PP without a second orientation solve yet —
-            # finalize=False keeps R; Esc then exits the tool.
-            try:
-                scene.set_principal_point(
-                    context,
-                    (float(self._original[0]), float(self._original[1])),
-                    finalize=False,
-                )
-            except Exception:
-                pass
         self._drag_kind = ""
         self._original = None
         self._start = None
@@ -2188,17 +2166,7 @@ class PM_OT_interact(bpy.types.Operator):
                         float(settings_local.cx),
                         float(settings_local.cy),
                     )
-                    self._pp_last_reorient = 0.0
-                    try:
-                        # First sample reorients immediately (interval gate open).
-                        scene.set_principal_point(
-                            context, image_point, finalize=True
-                        )
-                        self._pp_last_reorient = time.monotonic()
-                    except Exception as error:
-                        self._drag_kind = ""
-                        self._original = None
-                        self.report({"ERROR"}, str(error))
+                    overlay.set_preview(context, "PP", image_point, image_point)
                     return {"RUNNING_MODAL"}
                 if self.mode == "LANDMARK":
                     mouse = Vector(

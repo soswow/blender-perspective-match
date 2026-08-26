@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+from types import SimpleNamespace
 import sys
 import tempfile
 import traceback
@@ -426,6 +427,44 @@ def main() -> None:
             saved.pixels.foreach_get(saved_pixels)
             assert float(saved_pixels[0::4].max()) > 0.05
             assert float(saved_pixels[3::4].mean()) > 0.2
+
+            # PP drag previews on the active undistorted plate, then applies and
+            # rebuilds it once on release. Mouse moves must not expose the source.
+            ui_operators = sys.modules["match_perspective.ui.operators"]
+            ui_overlay = sys.modules["match_perspective.ui.overlay"]
+            original_cx = float(reloaded.cx)
+            original_cy = float(reloaded.cy)
+            pp_drag = SimpleNamespace(
+                _drag_kind="PP",
+                _start=None,
+                _original=(original_cx, original_cy),
+                _edit_index=-1,
+                report=lambda *_args: None,
+                _status_prompt=lambda: "Drag the principal point",
+            )
+            preview_point = (original_cx + 12.0, original_cy + 8.0)
+            ui_operators.PM_OT_interact._update_drag(
+                pp_drag,
+                bpy.context,
+                preview_point,
+            )
+            assert abs(float(reloaded.cx) - original_cx) < 1.0e-6
+            assert abs(float(reloaded.cy) - original_cy) < 1.0e-6
+            assert reloaded.camera_object.data.background_images[0].image == undistorted
+            ui_operators.PM_OT_interact._complete_drag(
+                pp_drag,
+                bpy.context,
+                preview_point,
+            )
+            assert abs(float(reloaded.cx) - preview_point[0]) < 1.0e-6
+            assert abs(float(reloaded.cy) - preview_point[1]) < 1.0e-6
+            assert reloaded.view_undistorted
+            assert reloaded.undistorted_image is not None
+            assert (
+                reloaded.camera_object.data.background_images[0].image
+                == reloaded.undistorted_image
+            )
+            ui_overlay.clear_preview(bpy.context)
 
             # Re-apply lighting while undistorted is active must keep lit→undistorted chain.
             reloaded.view_exposure = 0.5
