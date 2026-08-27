@@ -31,6 +31,11 @@ def _workspace(context: bpy.types.Context):
     return properties.workspace(context)
 
 
+def _pm_controls_camera(context: bpy.types.Context) -> bool:
+    settings = _session(context)
+    return settings is not None and not scene.uses_adjusted_camera(settings)
+
+
 def _report_exception(operator: bpy.types.Operator, error: Exception) -> set[str]:
     if isinstance(error, KeyError):
         message = f"Sync internal error (missing {error})"
@@ -92,6 +97,14 @@ def _refine_if_ready(context: bpy.types.Context) -> None:
     settings = _session(context)
     if settings is None:
         return
+    if scene.uses_adjusted_camera(settings):
+        line_bundles = scene.line_bundles_from_settings(settings)
+        if any(line_bundles.values()):
+            calibration = scene.calibration_from_settings(settings)
+            scene._update_diagnostics(settings, line_bundles, calibration)
+        settings.status = "Adjusted Camera kept · VP lines are diagnostic only"
+        properties.tag_viewport_redraw(context)
+        return
     if _required_lines_ready(settings):
         scene.refine_match(context)
         distortion.sync_undistorted_plate_after_refine(context)
@@ -105,6 +118,11 @@ def _refine_after_vp_detect(context: bpy.types.Context) -> str:
     settings = _session(context)
     if settings is None:
         return "No active match"
+    if scene.uses_adjusted_camera(settings):
+        line_bundles = scene.line_bundles_from_settings(settings)
+        calibration = scene.calibration_from_settings(settings)
+        scene._update_diagnostics(settings, line_bundles, calibration)
+        return "Adjusted Camera kept · detected VP lines are diagnostic only"
     if not _required_lines_ready(settings):
         return _lines_needed_message(settings)
     calibration = scene.refine_match(context)
@@ -655,7 +673,11 @@ class PM_OT_import_ros_yaml(bpy.types.Operator, ImportHelper):
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
         settings = _session(context)
-        return settings is not None and settings.image is not None
+        return (
+            settings is not None
+            and settings.image is not None
+            and not scene.uses_adjusted_camera(settings)
+        )
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         try:
@@ -681,7 +703,11 @@ class PM_OT_refine(bpy.types.Operator):
     def poll(cls, context: bpy.types.Context) -> bool:
         # Stay clickable with a still loaded so a disabled button is not a silent dead-end.
         settings = _session(context)
-        return settings is not None and settings.image is not None
+        return (
+            settings is not None
+            and settings.image is not None
+            and not scene.uses_adjusted_camera(settings)
+        )
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         settings = _session(context)
@@ -738,6 +764,10 @@ class PM_OT_apply_manual_fov(bpy.types.Operator):
     bl_description = "Apply horizontal FOV and keep it locked during camera refinement"
     bl_options = {"REGISTER", "UNDO"}
 
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        return _pm_controls_camera(context)
+
     def execute(self, context: bpy.types.Context) -> set[str]:
         settings = _session(context)
         if settings is None:
@@ -763,6 +793,10 @@ class PM_OT_reset_camera(bpy.types.Operator):
     bl_label = "Reset Camera"
     bl_description = "Reset principal point and distortion, then solve orientation at manual FOV"
     bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        return _pm_controls_camera(context)
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         settings = _session(context)
@@ -818,7 +852,11 @@ class PM_OT_edit_pp_offset(bpy.types.Operator):
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
         settings = _session(context)
-        return settings is not None and settings.image is not None
+        return (
+            settings is not None
+            and settings.image is not None
+            and not scene.uses_adjusted_camera(settings)
+        )
 
     def invoke(self, context: bpy.types.Context, _event) -> set[str]:
         settings = _session(context)
@@ -1357,6 +1395,10 @@ class PM_OT_clear_placement(bpy.types.Operator):
     bl_description = "Clear the picked ground origin"
     bl_options = {"REGISTER", "UNDO"}
 
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        return _pm_controls_camera(context)
+
     def execute(self, context: bpy.types.Context) -> set[str]:
         settings = _session(context)
         if settings is None:
@@ -1414,7 +1456,11 @@ class PM_OT_estimate_distortion(bpy.types.Operator):
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
         settings = _session(context)
-        return settings is not None and settings.image is not None
+        return (
+            settings is not None
+            and settings.image is not None
+            and not scene.uses_adjusted_camera(settings)
+        )
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         settings = _session(context)
@@ -1648,6 +1694,12 @@ class PM_OT_interact(bpy.types.Operator):
         settings = _session(context)
         workspace = _workspace(context)
         if settings is None:
+            return {"CANCELLED"}
+        if scene.uses_adjusted_camera(settings) and self.mode in {"ORIGIN", "PP"}:
+            self.report(
+                {"WARNING"},
+                "Adjusted Camera controls placement and projection for this match",
+            )
             return {"CANCELLED"}
 
         # Re-click while a live tool runs: switch mode / refresh instead of stacking.

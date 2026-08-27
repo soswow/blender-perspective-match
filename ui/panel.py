@@ -293,10 +293,13 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             line_body.prop(settings, "snap_vp_lines_to_edges")
             line_body.prop(settings, "show_vp_error_labels")
 
+        adjusted_camera = scene.uses_adjusted_camera(settings)
+
         _header, origin = _section(
             layout, "PM_origin", "Origin", "PIVOT_CURSOR", default_closed=True
         )
         if origin is not None:
+            origin.enabled = not adjusted_camera
             row = origin.row(align=True)
             pick_row = row.row(align=True)
             pick_row.operator_context = "INVOKE_REGION_WIN"
@@ -318,9 +321,16 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             layout, "PM_camera", "Camera", "CAMERA_DATA", default_closed=True
         )
         if camera is not None:
+            camera.prop(settings, "camera_control", expand=True)
+            if adjusted_camera:
+                camera.label(
+                    text="Live camera transform and FOV are preserved",
+                    icon="LOCKED",
+                )
             # Full-width toolbar: property_split would shrink buttons to the value column.
             camera_actions = camera.column(align=True)
             camera_actions.use_property_split = False
+            camera_actions.enabled = not adjusted_camera
             focal_row = camera_actions.row(align=True)
             focal_row.prop(settings, "lock_focal", text="Manual FOV", toggle=True)
             focal_row.operator(
@@ -332,12 +342,17 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
                 icon="IMPORT",
             )
             manual_column = camera.column(align=True)
-            manual_column.enabled = settings.lock_focal or settings.vp_mode == "1"
+            manual_column.enabled = (
+                not adjusted_camera
+                and (settings.lock_focal or settings.vp_mode == "1")
+            )
             manual_column.prop(settings, "hfov_degrees")
             manual_column.operator(
                 "perspective_match.apply_manual_fov", icon="CHECKMARK"
             )
-            camera.operator("perspective_match.reset_camera", icon="LOOP_BACK")
+            reset_row = camera.row()
+            reset_row.enabled = not adjusted_camera
+            reset_row.operator("perspective_match.reset_camera", icon="LOOP_BACK")
 
             if settings.fov_xy > 0.0 or settings.fov_zy > 0.0 or settings.fov_zx > 0.0:
                 diagnostics = camera.column(align=True)
@@ -362,6 +377,7 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
                 camera.label(
                     text=f"VP line RMSE: {settings.vp_line_rms_px:.2f} px"
                 )
+            effective = scene.calibration_from_settings(settings)
             if (
                 settings.camera_object is not None
                 and settings.camera_object.data is not None
@@ -369,23 +385,25 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
                 camera.label(
                     text=(
                         f"Lens: {settings.camera_object.data.lens:.2f} mm · "
-                        f"HFOV {settings.hfov_degrees:.2f}°"
+                        f"HFOV {effective.hfov_degrees:.2f}°"
                     ),
                     icon="CAMERA_DATA",
                 )
-            if abs(settings.cx - settings.image_width * 0.5) > 0.5 or abs(
-                settings.cy - settings.image_height * 0.5
+            intrinsics = effective.intrinsics
+            if abs(intrinsics.cx - settings.image_width * 0.5) > 0.5 or abs(
+                intrinsics.cy - settings.image_height * 0.5
             ) > 0.5:
                 camera.label(
                     text=(
                         f"PP offset: "
-                        f"{settings.cx - settings.image_width * 0.5:+.1f}, "
-                        f"{settings.cy - settings.image_height * 0.5:+.1f} px"
+                        f"{intrinsics.cx - settings.image_width * 0.5:+.1f}, "
+                        f"{intrinsics.cy - settings.image_height * 0.5:+.1f} px"
                     ),
                     icon="PIVOT_CURSOR",
                 )
 
             pp_row = camera.row(align=True)
+            pp_row.enabled = not adjusted_camera
             drag_row = pp_row.row(align=True)
             drag_row.operator_context = "INVOKE_REGION_WIN"
             pp_operator = drag_row.operator(
@@ -404,7 +422,9 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
                 icon="GREASEPENCIL",
             )
 
-            camera.operator(
+            distortion_row = camera.row()
+            distortion_row.enabled = not adjusted_camera
+            distortion_row.operator(
                 "perspective_match.estimate_distortion",
                 text="Estimate Distortion",
                 icon="MOD_SIMPLEDEFORM",
@@ -425,6 +445,7 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
                 tuple(settings.brown_conrady),
             ):
                 plates = camera.row(align=True)
+                plates.enabled = not adjusted_camera
                 plates.operator(
                     "perspective_match.use_undistorted_plate",
                     text="Undistorted Plate",
@@ -683,6 +704,10 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             )
         else:
             refine_row.operator_context = "INVOKE_DEFAULT"
+            refine_row.enabled = not any(
+                scene.uses_adjusted_camera(root.pm_session)
+                for root in properties.iter_sync_enabled_roots()
+            )
             refine_row.operator(
                 "perspective_match.refine_lenses",
                 icon="CAMERA_DATA",

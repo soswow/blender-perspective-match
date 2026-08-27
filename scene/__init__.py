@@ -50,7 +50,24 @@ def line_bundles_from_settings(
 
 
 def calibration_from_settings(settings: properties.PMSession) -> core.Calibration:
-    """Build an immutable solver calibration from session settings."""
+    """Build the effective calibration from stored state or the live camera."""
+    if uses_adjusted_camera(settings):
+        return calibration_from_adjusted_camera(settings)
+    return _stored_calibration_from_settings(settings)
+
+
+def uses_adjusted_camera(settings: properties.PMSession | None) -> bool:
+    """Return whether the live Blender camera owns this match's pose and FOV."""
+    return bool(
+        settings is not None
+        and getattr(settings, "camera_control", "MATCHED") == "ADJUSTED"
+    )
+
+
+def _stored_calibration_from_settings(
+    settings: properties.PMSession,
+) -> core.Calibration:
+    """Build a calibration from the session's persisted solver values."""
     intrinsics = core.CameraIntrinsics(
         fx=max(settings.fx, 1.0),
         fy=max(settings.fy, 1.0),
@@ -67,6 +84,64 @@ def calibration_from_settings(settings: properties.PMSession) -> core.Calibratio
         camera_center=center,
         division_lambda=settings.division_lambda,
         lambda_saturated=settings.lambda_saturated,
+        brown_conrady=core.pad_brown_conrady(tuple(settings.brown_conrady)),
+    )
+
+
+def calibration_from_adjusted_camera(
+    settings: properties.PMSession,
+) -> core.Calibration:
+    """Read pose and pinhole intrinsics from the current Blender camera."""
+    camera_object = settings.camera_object
+    if camera_object is None or camera_object.type != "CAMERA":
+        raise ValueError("Adjusted Camera needs a valid perspective camera")
+    camera_data = camera_object.data
+    if camera_data.type != "PERSP":
+        raise ValueError("Adjusted Camera only supports perspective cameras")
+
+    use_undistorted = (
+        settings.view_undistorted
+        and settings.undistorted_image is not None
+        and settings.undistorted_width > 0
+        and settings.undistorted_height > 0
+    )
+    plate_width = float(
+        settings.undistorted_width if use_undistorted else max(settings.image_width, 1)
+    )
+    plate_height = float(
+        settings.undistorted_height if use_undistorted else max(settings.image_height, 1)
+    )
+    hfov_degrees = float(np.degrees(float(camera_data.angle_x)))
+    focal = core.focal_from_hfov(hfov_degrees, max(int(round(plate_width)), 1))
+    plate_cx = plate_width * (0.5 - float(camera_data.shift_x))
+    plate_cy = plate_height * 0.5 + float(camera_data.shift_y) * plate_width
+    cx = plate_cx + (float(settings.undistorted_offset_x) if use_undistorted else 0.0)
+    cy = plate_cy + (float(settings.undistorted_offset_y) if use_undistorted else 0.0)
+
+    root = camera_object.parent
+    if root is not None:
+        private_matrix = root.matrix_world.inverted_safe() @ camera_object.matrix_world
+    else:
+        private_matrix = camera_object.matrix_world.copy()
+    camera_to_world_blender = np.asarray(
+        private_matrix.to_quaternion().to_matrix(),
+        dtype=np.float64,
+    )
+    rotation_w2c = (camera_to_world_blender @ CV_CAMERA_TO_BLENDER_CAMERA).T
+    center = private_matrix.to_translation()
+    return core.Calibration(
+        intrinsics=core.CameraIntrinsics(
+            fx=focal,
+            fy=focal,
+            cx=cx,
+            cy=cy,
+            image_width=max(int(settings.image_width), 1),
+            image_height=max(int(settings.image_height), 1),
+        ),
+        rotation_w2c=rotation_w2c,
+        camera_center=np.array((center.x, center.y, center.z), dtype=np.float64),
+        division_lambda=float(settings.division_lambda),
+        lambda_saturated=bool(settings.lambda_saturated),
         brown_conrady=core.pad_brown_conrady(tuple(settings.brown_conrady)),
     )
 
@@ -133,6 +208,9 @@ def _default_calibration(hfov_degrees: float, width: int = 1920, height: int = 1
 
 def _session_has_manual_k(session: properties.PMSession) -> bool:
     """True when FOV/K are user-locked (Manual FOV, YAML import, or 1-point)."""
+    if uses_adjusted_camera(session):
+        camera = session.camera_object
+        return bool(camera is not None and camera.type == "CAMERA")
     return bool(session.lock_focal or session.vp_mode == "1") and float(session.fx) > 1.0
 
 
@@ -202,11 +280,13 @@ def _copy_manual_k_from_session(
     height: int,
 ) -> core.Calibration:
     """Copy locked K and distortion, scaling K to the target plate size."""
+    source_calibration = calibration_from_settings(source)
+    source_intrinsics = source_calibration.intrinsics
     fx, fy, cx, cy = _scale_intrinsics_pixels(
-        float(source.fx),
-        float(source.fy),
-        float(source.cx),
-        float(source.cy),
+        float(source_intrinsics.fx),
+        float(source_intrinsics.fy),
+        float(source_intrinsics.cx),
+        float(source_intrinsics.cy),
         int(source.image_width),
         int(source.image_height),
         width,
@@ -220,7 +300,7 @@ def _copy_manual_k_from_session(
         cy,
         width,
         height,
-        hfov_fallback=float(source.hfov_degrees),
+        hfov_fallback=float(source_calibration.hfov_degrees),
         division_lambda=float(source.division_lambda),
         lambda_saturated=bool(source.lambda_saturated),
         brown_conrady=tuple(source.brown_conrady),
@@ -718,13 +798,15 @@ def bind_reference_image(context: bpy.types.Context, image_path: str) -> bpy.typ
     # Capture the reusable camera model before plate size is overwritten (a new
     # match may have inherited Manual FOV / YAML / 1-point intrinsics).
     keep_manual_k = _session_has_manual_k(session)
+    source_calibration = calibration_from_settings(session)
+    source_intrinsics = source_calibration.intrinsics
     source_width = int(session.image_width)
     source_height = int(session.image_height)
-    source_fx = float(session.fx)
-    source_fy = float(session.fy)
-    source_cx = float(session.cx)
-    source_cy = float(session.cy)
-    source_hfov = float(session.hfov_degrees)
+    source_fx = float(source_intrinsics.fx)
+    source_fy = float(source_intrinsics.fy)
+    source_cx = float(source_intrinsics.cx)
+    source_cy = float(source_intrinsics.cy)
+    source_hfov = float(source_calibration.hfov_degrees)
     source_division_lambda = float(session.division_lambda)
     source_lambda_saturated = bool(session.lambda_saturated)
     source_brown_conrady = tuple(session.brown_conrady)
@@ -915,11 +997,44 @@ def apply_camera(
         else intrinsics.cy
     )
     camera_data = camera_object.data
+    _apply_camera_background(settings)
+    if uses_adjusted_camera(settings):
+        # The Blender camera is authoritative in this mode. Keep PM's plate and
+        # scene-camera bookkeeping current without touching lens, shift, or pose.
+        if update_scene_camera:
+            blender_scene.camera = camera_object
+            blender_scene.render.resolution_x = int(plate_width)
+            blender_scene.render.resolution_y = plate_height
+            blender_scene.render.resolution_percentage = 100
+        return
+
     camera_data.sensor_fit = "HORIZONTAL"
     camera_data.sensor_width = 36.0 * plate_width / source_width
     camera_data.lens = intrinsics.fx * 36.0 / source_width
     camera_data.shift_x = (plate_width * 0.5 - plate_cx) / plate_width
     camera_data.shift_y = (plate_cy - plate_height * 0.5) / plate_width
+    _apply_camera_pose_and_store(
+        blender_scene,
+        settings,
+        calibration,
+        update_scene_camera=update_scene_camera,
+        plate_width=plate_width,
+        plate_height=plate_height,
+    )
+
+
+def _apply_camera_background(settings: properties.PMSession) -> None:
+    """Select the session's current source or derived camera background."""
+    camera_object = settings.camera_object
+    if camera_object is None or camera_object.type != "CAMERA":
+        return
+    camera_data = camera_object.data
+    use_undistorted = (
+        settings.view_undistorted
+        and settings.undistorted_image is not None
+        and settings.undistorted_width > 0
+        and settings.undistorted_height > 0
+    )
     if len(camera_data.background_images) > 0 and settings.image is not None:
         if (
             settings.view_vp_detect_debug
@@ -935,6 +1050,21 @@ def apply_camera(
             camera_data.background_images[0].image = settings.view_image
         else:
             camera_data.background_images[0].image = settings.image
+
+
+def _apply_camera_pose_and_store(
+    blender_scene: bpy.types.Scene,
+    settings: properties.PMSession,
+    calibration: core.Calibration,
+    *,
+    update_scene_camera: bool,
+    plate_width: float,
+    plate_height: int,
+) -> None:
+    """Write a matched camera pose after its projection has been configured."""
+    camera_object = settings.camera_object
+    if camera_object is None or camera_object.type != "CAMERA":
+        raise ValueError("Active match has no camera")
 
     # Private pose as local; root Empty carries optional sync similarity.
     # Write loc/rot/scale explicitly — assigning matrix_local alone can leave the
@@ -986,6 +1116,8 @@ def refine_match(
     settings = properties.active_session(context)
     if settings is None:
         raise ValueError("Create or activate a match camera first")
+    if uses_adjusted_camera(settings):
+        raise ValueError("Adjusted Camera controls pose and FOV for this match")
     if settings.image is None:
         raise ValueError("Load a reference image first")
     line_bundles = line_bundles_from_settings(settings)
@@ -1099,6 +1231,8 @@ def apply_manual_fov(context: bpy.types.Context) -> None:
     settings = properties.active_session(context)
     if settings is None:
         raise ValueError("Create or activate a match camera first")
+    if uses_adjusted_camera(settings):
+        raise ValueError("Adjusted Camera controls pose and FOV for this match")
     settings.lock_focal = True
     line_bundles = line_bundles_from_settings(settings)
     # With enough lines, re-orient at the locked FOV (keeps stored λ; no re-fit).
@@ -1147,6 +1281,8 @@ def apply_ros_camera_info_yaml(context: bpy.types.Context, filepath: str) -> str
     settings = properties.active_session(context)
     if settings is None:
         raise ValueError("Create or activate a match camera first")
+    if uses_adjusted_camera(settings):
+        raise ValueError("Adjusted Camera controls pose and FOV for this match")
     if settings.image is None:
         raise ValueError("Load a reference image first")
 
@@ -1292,6 +1428,8 @@ def apply_origin_placement(
     update_scene_camera: bool = True,
 ) -> None:
     """Recompute private camera_center from the stored ground origin pick."""
+    if uses_adjusted_camera(settings):
+        return
     if not settings.origin_is_set:
         return
     calibration = calibration_from_settings(settings)
@@ -1317,6 +1455,8 @@ def set_origin_for_session(
     status_message: str = "Origin set on the ground plane",
 ) -> None:
     """Store a ground origin on one match and reapply private camera placement."""
+    if uses_adjusted_camera(settings):
+        raise ValueError("Adjusted Camera controls placement for this match")
     settings.origin_image = (float(image_point[0]), float(image_point[1]))
     settings.origin_is_set = True
     settings.status = status_message
@@ -1388,6 +1528,8 @@ def ensure_origins_from_ground_landmarks(
         session = root.pm_session
         if not getattr(session, "sync_enabled", True):
             continue
+        if uses_adjusted_camera(session):
+            continue
         if session.origin_is_set:
             continue
         if session.image is None or float(session.fx) <= 0.0:
@@ -1414,9 +1556,10 @@ def principal_point_is_off_center(settings: properties.PMSession) -> bool:
     """True when cx/cy differ from the plate center by more than half a pixel."""
     if settings.image_width <= 0 or settings.image_height <= 0:
         return False
+    intrinsics = calibration_from_settings(settings).intrinsics
     return (
-        abs(settings.cx - settings.image_width * 0.5) > 0.5
-        or abs(settings.cy - settings.image_height * 0.5) > 0.5
+        abs(intrinsics.cx - settings.image_width * 0.5) > 0.5
+        or abs(intrinsics.cy - settings.image_height * 0.5) > 0.5
     )
 
 
@@ -1435,6 +1578,8 @@ def set_principal_point(
     settings = properties.active_session(context)
     if settings is None:
         raise ValueError("Create or activate a match camera first")
+    if uses_adjusted_camera(settings):
+        raise ValueError("Adjusted Camera controls projection for this match")
     if settings.image is None:
         raise ValueError("Load a reference image first")
 
@@ -1770,7 +1915,9 @@ def ensure_match_ready(context: bpy.types.Context) -> bool:
     if settings.image_width <= 0 or settings.image_height <= 0:
         settings.image_width = max(int(settings.image.size[0]), 1)
         settings.image_height = max(int(settings.image.size[1]), 1)
-    if settings.fx <= 0.0 or settings.fy <= 0.0:
+    if not uses_adjusted_camera(settings) and (
+        settings.fx <= 0.0 or settings.fy <= 0.0
+    ):
         calibration = _default_calibration(
             settings.hfov_degrees,
             settings.image_width,
@@ -1888,12 +2035,13 @@ def ideal_to_region(
                 top - display_y / display_height * (top - bottom),
             )
         )
+    intrinsics = calibration_from_settings(settings).intrinsics
     storage = core.distort_points(
         np.array([[ideal_x, ideal_y]], dtype=np.float64),
-        max(float(settings.fx), 1.0e-6),
-        max(float(settings.fy), 1.0e-6),
-        settings.cx,
-        settings.cy,
+        max(float(intrinsics.fx), 1.0e-6),
+        max(float(intrinsics.fy), 1.0e-6),
+        intrinsics.cx,
+        intrinsics.cy,
         settings.division_lambda,
         tuple(settings.brown_conrady),
     )[0]
@@ -1957,12 +2105,13 @@ def _storage_to_display(
         threshold=1.0e-12,
     ):
         return image_x, image_y, display_width, display_height
+    intrinsics = calibration_from_settings(settings).intrinsics
     mapped = core.undistort_points(
         np.array([[image_x, image_y]], dtype=np.float64),
-        settings.fx,
-        settings.fy,
-        settings.cx,
-        settings.cy,
+        intrinsics.fx,
+        intrinsics.fy,
+        intrinsics.cx,
+        intrinsics.cy,
         settings.division_lambda,
         tuple(settings.brown_conrady),
     )[0]
@@ -1993,12 +2142,13 @@ def _display_to_storage(
         ]],
         dtype=np.float64,
     )
+    intrinsics = calibration_from_settings(settings).intrinsics
     mapped = core.distort_points(
         ideal,
-        settings.fx,
-        settings.fy,
-        settings.cx,
-        settings.cy,
+        intrinsics.fx,
+        intrinsics.fy,
+        intrinsics.cx,
+        intrinsics.cy,
         settings.division_lambda,
         tuple(settings.brown_conrady),
     )[0]
@@ -2056,7 +2206,9 @@ def _similarity_from_session(session: properties.PMSession):
 def apply_similarity_to_root(root: bpy.types.Object, similarity) -> None:
     """Write a similarity onto a match root Empty."""
     session = root.pm_session
-    if session is not None and float(session.fx) > 0.0:
+    if session is not None and (
+        uses_adjusted_camera(session) or float(session.fx) > 0.0
+    ):
         from ..core import sync as sync_module
 
         similarity = sync_module._metric_scale_similarity(
@@ -2257,7 +2409,9 @@ def project_known_object_into_match(landmark, root: bpy.types.Object) -> bool:
     if known_object is None or known_object.name not in bpy.data.objects:
         return False
     session = root.pm_session
-    if session.image is None or session.fx <= 0.0:
+    if session.image is None or (
+        not uses_adjusted_camera(session) and session.fx <= 0.0
+    ):
         return False
     calibration = calibration_from_settings(session)
 
@@ -2393,12 +2547,15 @@ def build_sync_problem(context: bpy.types.Context):
         session = root.pm_session
         if not getattr(session, "sync_enabled", True):
             continue
-        if session.image is None or session.fx <= 0.0:
+        if session.image is None or (
+            not uses_adjusted_camera(session) and session.fx <= 0.0
+        ):
             continue
+        calibration = calibration_from_settings(session)
         matches.append(
             sync_module.SyncMatchInput(
                 match_id=root.name,
-                calibration=calibration_from_settings(session),
+                calibration=calibration,
             )
         )
     match_ids = {item.match_id for item in matches}
@@ -2514,6 +2671,8 @@ def ensure_ground_frame_from_landmarks(
     if anchor is None:
         return ""
     anchor_session = anchor.pm_session
+    if uses_adjusted_camera(anchor_session):
+        return ""
     anchor_lines = line_bundles_from_settings(anchor_session)
     anchor_lock_focal = bool(
         anchor_session.lock_focal or anchor_session.vp_mode == "1"
@@ -2657,7 +2816,9 @@ def known_anchor_pick_warnings(context: bpy.types.Context) -> list[str]:
     session = anchor.pm_session
     if not getattr(session, "sync_enabled", True):
         return []
-    if session.image is None or session.fx <= 0.0:
+    if session.image is None or (
+        not uses_adjusted_camera(session) and session.fx <= 0.0
+    ):
         return []
     calibration = calibration_from_settings(session)
     warnings: list[str] = []
@@ -2896,7 +3057,7 @@ def solve_and_apply_sync(context: bpy.types.Context):
             result.per_match_rmse_px.get(match_id, 0.0)
         )
         item = next((match for match in matches if match.match_id == match_id), None)
-        if item is not None:
+        if item is not None and not uses_adjusted_camera(root.pm_session):
             new_fx = float(item.calibration.intrinsics.fx)
             new_fy = float(item.calibration.intrinsics.fy)
             if (
@@ -3011,6 +3172,16 @@ def prepare_lens_refine(context: bpy.types.Context) -> LensRefinePrep:
     anchor = properties.anchor_root(context)
     if anchor is None:
         raise ValueError("Choose an anchor match first")
+    adjusted_roots = [
+        root
+        for root in properties.iter_sync_enabled_roots()
+        if uses_adjusted_camera(root.pm_session)
+    ]
+    if adjusted_roots:
+        names = ", ".join(root.name for root in adjusted_roots[:3])
+        raise ValueError(
+            f"Refine Lenses is disabled while Adjusted Camera controls {names}"
+        )
 
     ensure_origins_from_ground_landmarks(context)
     matches_pack, observations, known_world, line_observations, known_lines, parallel_pairs = (
@@ -3100,6 +3271,8 @@ def apply_lens_refine_result(context: bpy.types.Context, refine_result, root_by_
         if root is None:
             continue
         settings = root.pm_session
+        if uses_adjusted_camera(settings):
+            continue
         previous = calibration_from_settings(settings)
         if _intrinsics_or_distortion_changed(previous, calibration):
             invalidate_undistorted_cache(settings)

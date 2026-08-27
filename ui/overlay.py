@@ -679,12 +679,13 @@ def _draw_vp_error_labels(context: bpy.types.Context, settings) -> None:
 
 def _vp_overlay_cache_key(settings) -> tuple:
     """Fingerprint line geometry + intrinsics that affect overlay VP solves."""
+    intrinsics = scene.calibration_from_settings(settings).intrinsics
     parts: list = [
         settings.vp_mode,
-        float(settings.fx),
-        float(settings.fy),
-        float(settings.cx),
-        float(settings.cy),
+        float(intrinsics.fx),
+        float(intrinsics.fy),
+        float(intrinsics.cx),
+        float(intrinsics.cy),
         float(settings.division_lambda),
         tuple(float(value) for value in settings.brown_conrady),
         int(settings.image_width),
@@ -917,7 +918,8 @@ def _draw_placement(context: bpy.types.Context, fill_shader, settings) -> None:
         and settings.image_width > 0
         and settings.image_height > 0
     ):
-        principal = scene.image_to_region(context, settings.cx, settings.cy)
+        intrinsics = scene.calibration_from_settings(settings).intrinsics
+        principal = scene.image_to_region(context, intrinsics.cx, intrinsics.cy)
         _draw_crosshair(
             fill_shader,
             principal,

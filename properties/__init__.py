@@ -509,6 +509,29 @@ class PMSession(bpy.types.PropertyGroup):
     camera_object: bpy.props.PointerProperty(type=bpy.types.Object)
     match_collection: bpy.props.PointerProperty(type=bpy.types.Collection)
 
+    camera_control: bpy.props.EnumProperty(
+        name="Camera Control",
+        description=(
+            "Choose whether Perspective Match or the live Blender camera "
+            "owns pose and FOV"
+        ),
+        items=(
+            (
+                "MATCHED",
+                "Perspective Match",
+                "Apply the stored VP/origin camera whenever this match is activated",
+            ),
+            (
+                "ADJUSTED",
+                "Adjusted Camera",
+                "Keep reading the camera's current transform and FOV; "
+                "match activation will not replace them",
+            ),
+        ),
+        default="MATCHED",
+        update=_redraw,
+    )
+
     vp_mode: bpy.props.EnumProperty(
         name="Perspective",
         description="Vanishing-point mode for this match",

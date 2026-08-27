@@ -221,6 +221,71 @@ def main() -> None:
             assert bpy.context.scene.camera == settings_a.camera_object
             assert bpy.context.scene.render.resolution_x == 800
 
+            # Adjusted Camera is a live source, not a one-time snapshot. Changes
+            # made after enabling it must survive View Match rehydration and a
+            # switch away/back, including a later second pose/lens adjustment.
+            camera_a = settings_a.camera_object
+            settings_a.camera_control = "ADJUSTED"
+            adjusted_matrix = camera_a.matrix_world.copy()
+            adjusted_matrix.translation.x += 0.75
+            adjusted_matrix.translation.z -= 0.25
+            camera_a.matrix_world = adjusted_matrix
+            camera_a.data.lens = 61.0
+            first_live = scene.calibration_from_settings(settings_a)
+            assert abs(first_live.hfov_degrees - np.degrees(camera_a.data.angle_x)) < 1.0e-5
+            rebuilt_private = scene.private_camera_matrix(first_live)
+            expected_private = root_a.matrix_world.inverted_safe() @ adjusted_matrix
+            assert np.allclose(
+                np.asarray(rebuilt_private),
+                np.asarray(expected_private),
+                atol=1.0e-6,
+            )
+            scene.set_active_match(bpy.context, root_b)
+            scene.set_active_match(bpy.context, root_a)
+            assert np.allclose(
+                np.asarray(camera_a.matrix_world),
+                np.asarray(adjusted_matrix),
+                atol=1.0e-6,
+            ), (camera_a.matrix_world, adjusted_matrix, camera_a.matrix_local)
+            assert abs(camera_a.data.lens - 61.0) < 1.0e-6
+
+            later_matrix = camera_a.matrix_world.copy()
+            later_matrix.translation.y -= 0.5
+            camera_a.matrix_world = later_matrix
+            camera_a.data.lens = 73.0
+            private_before_root_move = (
+                root_a.matrix_world.inverted_safe() @ camera_a.matrix_world
+            )
+            root_matrix_before = root_a.matrix_world.copy()
+            root_a.location.x += 2.0
+            root_a.location.z += 1.0
+            root_a.scale = (1.25, 1.25, 1.25)
+            bpy.context.view_layer.update()
+            live_under_moved_root = scene.calibration_from_settings(settings_a)
+            assert np.allclose(
+                np.asarray(scene.private_camera_matrix(live_under_moved_root)),
+                np.asarray(private_before_root_move),
+                atol=1.0e-6,
+            )
+            root_a.matrix_world = root_matrix_before
+            bpy.context.view_layer.update()
+            assert scene.ensure_match_ready(bpy.context)
+            second_live = scene.calibration_from_settings(settings_a)
+            assert not np.allclose(first_live.camera_center, second_live.camera_center)
+            assert abs(second_live.hfov_degrees - np.degrees(camera_a.data.angle_x)) < 1.0e-5
+            scene.set_active_match(bpy.context, root_b)
+            scene.set_active_match(bpy.context, root_a)
+            assert np.allclose(
+                np.asarray(camera_a.matrix_world),
+                np.asarray(later_matrix),
+                atol=1.0e-6,
+            )
+            assert abs(camera_a.data.lens - 73.0) < 1.0e-6
+
+            settings_a.camera_control = "MATCHED"
+            assert scene.ensure_match_ready(bpy.context)
+            assert abs(camera_a.data.lens - 73.0) > 1.0
+
             space = properties.workspace(bpy.context)
             settings_a.hide_origin_empty = True
             assert root_a.hide_get()

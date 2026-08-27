@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Adjusted Camera control keeps reading the live Blender camera so external pose and FOV edits survive match switching and View Match Camera
 - Line landmarks can be constrained parallel to the shared-world X, Y, or Z axis from the Is Parallel To dropdown
 - Hide Origin Empty (per match) hides that Origin Empty; Outliner hide/show stays in sync, camera and collection stay visible
 - Ctrl+Cmd+A (Ctrl+Win+A on Windows/Linux) starts Pick in Active Match while the Perspective Match sidebar is open in that match's camera view
