@@ -10,6 +10,29 @@ AXIS_ITEMS = (
     ("y", "Z (Blue)", "Vertical edges parallel to Blender Z"),
 )
 
+# Blender requires dynamic enum strings to remain referenced. Cache each count
+# combination so active_axis can keep its original expanded-list UI safely.
+_COUNTED_AXIS_ITEMS: dict[tuple[int, int, int], tuple] = {}
+
+
+def _counted_axis_items(self, _context):
+    counts = {"x": 0, "y": 0, "z": 0}
+    for line in self.lines:
+        counts[line.axis] += 1
+    key = (counts["x"], counts["z"], counts["y"])
+    if key not in _COUNTED_AXIS_ITEMS:
+        _COUNTED_AXIS_ITEMS[key] = tuple(
+            (
+                identifier,
+                f"{label} · {counts[identifier]}",
+                description,
+                index,
+            )
+            for index, (identifier, label, description) in enumerate(AXIS_ITEMS)
+        )
+    return _COUNTED_AXIS_ITEMS[key]
+
+
 # Per-pick sync weights: High pulls harder; Low may drift in the solve.
 LANDMARK_CONFIDENCE_ITEMS = (
     ("HIGH", "High", "Strong constraint — clear, precise pick"),
@@ -70,6 +93,14 @@ def _update_vp_detect_sensitivity(self, context: bpy.types.Context) -> None:
 
 
 def _redraw(_self, context: bpy.types.Context) -> None:
+    tag_viewport_redraw(context)
+
+
+def _update_xy_vp_polarity(self, context: bpy.types.Context) -> None:
+    """Apply a changed horizontal VP sign choice to the stored camera pose."""
+    from .. import scene
+
+    scene.apply_xy_vp_polarity(context, self)
     tag_viewport_redraw(context)
 
 
@@ -549,9 +580,18 @@ class PMSession(bpy.types.PropertyGroup):
     )
     active_axis: bpy.props.EnumProperty(
         name="Axis",
-        items=AXIS_ITEMS,
-        default="x",
+        items=_counted_axis_items,
+        default=0,
         update=_redraw,
+    )
+    flip_xy_vp_polarity: bpy.props.BoolProperty(
+        name="Flip X / Y Polarity",
+        description=(
+            "Off treats the red and green vanishing points as +X and +Y; "
+            "on treats them as -X and -Y; Blender Z stays unchanged"
+        ),
+        default=False,
+        update=_update_xy_vp_polarity,
     )
 
     lines: bpy.props.CollectionProperty(type=PMLineSegment)

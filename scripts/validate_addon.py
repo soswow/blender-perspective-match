@@ -136,6 +136,16 @@ def main() -> None:
                 np.array((900.0, 300.0)),
                 ((620.0, 100.0), (610.0, 520.0)),
             )
+            counted_axis_items = properties._counted_axis_items(settings, bpy.context)
+            counted_axes = {
+                identifier: label
+                for identifier, label, _description, _number in counted_axis_items
+            }
+            assert counted_axes == {
+                "x": "X (Red) · 2",
+                "z": "Y (Green) · 2",
+                "y": "Z (Blue) · 0",
+            }
             calibration = scene.refine_match(bpy.context)
             expected_focal = np.sqrt(500000.0)
             assert abs(calibration.intrinsics.fx - expected_focal) < 2.0
@@ -165,8 +175,44 @@ def main() -> None:
 
             settings.origin_image = (400.0, 420.0)
             settings.origin_is_set = True
-            scene.refine_match(bpy.context)
+            normal_polarity = scene.refine_match(bpy.context)
             assert settings.origin_is_set
+
+            # Horizontal VP polarity flips X/Y together, immediately and after refine.
+            settings.flip_xy_vp_polarity = True
+            flipped = scene.calibration_from_settings(settings)
+            assert np.allclose(
+                flipped.rotation_w2c[:, :2],
+                -normal_polarity.rotation_w2c[:, :2],
+                atol=1.0e-7,
+            )
+            assert np.allclose(
+                flipped.rotation_w2c[:, 2],
+                normal_polarity.rotation_w2c[:, 2],
+                atol=1.0e-7,
+            )
+            assert np.allclose(
+                flipped.camera_center,
+                (
+                    -normal_polarity.camera_center[0],
+                    -normal_polarity.camera_center[1],
+                    normal_polarity.camera_center[2],
+                ),
+                atol=1.0e-7,
+            )
+            refined_flipped = scene.refine_match(bpy.context)
+            assert np.allclose(
+                refined_flipped.rotation_w2c,
+                flipped.rotation_w2c,
+                atol=1.0e-7,
+            )
+            settings.flip_xy_vp_polarity = False
+            restored = scene.calibration_from_settings(settings)
+            assert np.allclose(
+                restored.rotation_w2c,
+                normal_polarity.rotation_w2c,
+                atol=1.0e-7,
+            )
 
             # Replace Image keeps lines/origin when dimensions match.
             replacement_path = _write_png(

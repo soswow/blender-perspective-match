@@ -1103,6 +1103,42 @@ def private_camera_matrix(calibration: core.Calibration) -> Matrix:
     return matrix_world
 
 
+def apply_xy_vp_polarity(
+    context: bpy.types.Context,
+    settings: properties.PMSession,
+) -> None:
+    """Flip the matched private pose 180° around world Z without a new VP solve."""
+    if uses_adjusted_camera(settings):
+        return
+    camera_object = settings.camera_object
+    if camera_object is None or camera_object.type != "CAMERA":
+        return
+    calibration = calibration_from_settings(settings)
+    calibration.rotation_w2c = core.flip_horizontal_axis_polarity(
+        calibration.rotation_w2c
+    )
+    calibration.camera_center = np.array(
+        (
+            -float(calibration.camera_center[0]),
+            -float(calibration.camera_center[1]),
+            float(calibration.camera_center[2]),
+        ),
+        dtype=np.float64,
+    )
+    active_root = properties.active_root(context)
+    apply_camera(
+        context.scene,
+        settings,
+        calibration,
+        update_scene_camera=active_root == getattr(settings, "id_data", None),
+    )
+    settings.status = (
+        "X / Y VP polarity flipped"
+        if settings.flip_xy_vp_polarity
+        else "X / Y VP polarity restored"
+    )
+
+
 def refine_match(
     context: bpy.types.Context,
     *,
@@ -1152,6 +1188,7 @@ def refine_match(
         initial_division_lambda=previous_calibration.division_lambda,
         initial_brown_conrady=previous_calibration.brown_conrady,
         initial_rotation=previous_calibration.rotation_w2c,
+        flip_xy_polarity=bool(settings.flip_xy_vp_polarity),
     )
 
     if settings.origin_is_set:
@@ -1612,6 +1649,7 @@ def set_principal_point(
             initial_division_lambda=previous.division_lambda,
             initial_brown_conrady=previous.brown_conrady,
             initial_rotation=previous.rotation_w2c,
+            flip_xy_polarity=bool(settings.flip_xy_vp_polarity),
         )
         calibration.division_lambda = previous.division_lambda
         calibration.lambda_saturated = previous.lambda_saturated

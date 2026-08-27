@@ -1001,6 +1001,13 @@ def orthonormalize_axes(directions: dict[AxisId, np.ndarray]) -> np.ndarray:
     return np.eye(3, dtype=np.float64)
 
 
+def flip_horizontal_axis_polarity(rotation_w2c: np.ndarray) -> np.ndarray:
+    """Reverse world X/Y infinity while preserving Z and handedness."""
+    flipped = np.asarray(rotation_w2c, dtype=np.float64).copy()
+    flipped[:, :2] *= -1.0
+    return flipped
+
+
 def refine_camera(
     line_bundles: dict[AxisId, list[LineSegment]],
     intrinsics: CameraIntrinsics,
@@ -1011,6 +1018,7 @@ def refine_camera(
     initial_division_lambda: float = 0.0,
     initial_brown_conrady: tuple[float, ...] = (),
     initial_rotation: np.ndarray | None = None,
+    flip_xy_polarity: bool = False,
 ) -> Calibration:
     """Refine focal, principal point, radial λ, and orientation from line bundles.
 
@@ -1026,6 +1034,11 @@ def refine_camera(
     lambda_saturated = False
     vanishing_points: dict[AxisId, np.ndarray] = {}
     known_k_rotation: np.ndarray | None = None
+    solve_initial_rotation = (
+        flip_horizontal_axis_polarity(initial_rotation)
+        if flip_xy_polarity and initial_rotation is not None
+        else initial_rotation
+    )
 
     for _pass_index in range(1 if lock_focal else 8):
         previous = (
@@ -1054,7 +1067,11 @@ def refine_camera(
             known_k_rotation = rotation_from_orthogonal_lines(
                 working,
                 current,
-                initial_rotation=initial_rotation if known_k_rotation is None else known_k_rotation,
+                initial_rotation=(
+                    solve_initial_rotation
+                    if known_k_rotation is None
+                    else known_k_rotation
+                ),
             )
             if known_k_rotation is not None:
                 vanishing_points = {
@@ -1099,6 +1116,8 @@ def refine_camera(
             for axis, vanishing in vanishing_points.items()
         }
         rotation = orthonormalize_axes(directions)
+    if flip_xy_polarity:
+        rotation = flip_horizontal_axis_polarity(rotation)
     return Calibration(
         intrinsics=current,
         rotation_w2c=rotation,

@@ -41,9 +41,11 @@ At the top of this section, choose perspective mode:
 
 Axis mapping matches Blender’s gizmos:
 
-- Red → Blender X
-- Green → Blender Y
-- Blue → Blender Z (up)
+- Red → Blender X (the axis button also shows its current line count)
+- Green → Blender Y (the axis button also shows its current line count)
+- Blue → Blender Z (up; the axis button also shows its current line count)
+
+VP lines determine an axis but cannot distinguish its two infinity directions. **Flip X / Y Polarity**, below the axis buttons, reverses the red X and green Y directions together while keeping blue Z unchanged. Use it when the matched camera faces the right way vertically but Blender’s horizontal axes point the wrong way.
 
 Then draw lines (or auto-detect in 3-point mode):
 

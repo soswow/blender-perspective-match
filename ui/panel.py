@@ -11,13 +11,6 @@ from ..detect import opencv as opencv_support
 from . import icons, operators
 
 
-def _axis_counts(settings) -> dict[str, int]:
-    counts = {"x": 0, "y": 0, "z": 0}
-    for line in settings.lines:
-        counts[line.axis] += 1
-    return counts
-
-
 def _observation_count(landmark) -> int:
     return sum(1 for observation in landmark.observations if observation.is_set)
 
@@ -252,9 +245,9 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
         if line_body is not None:
             line_body.prop(settings, "vp_mode", expand=True)
             line_body.prop(settings, "active_axis", expand=True)
-            counts = _axis_counts(settings)
-            required = f"X {counts['x']} · Y {counts['z']} · Z {counts['y']}"
-            line_body.label(text=required, icon="DRIVER_DISTANCE")
+            polarity_row = line_body.row()
+            polarity_row.enabled = not scene.uses_adjusted_camera(settings)
+            polarity_row.prop(settings, "flip_xy_vp_polarity")
             row = line_body.row(align=True)
             draw_row = row.row(align=True)
             draw_row.operator_context = "INVOKE_REGION_WIN"

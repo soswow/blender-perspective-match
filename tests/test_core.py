@@ -185,6 +185,54 @@ class CoreGeometryTests(unittest.TestCase):
         expected = direction / np.linalg.norm(direction)
         self.assertTrue(np.allclose(recovered, expected, atol=1.0e-9))
 
+    def test_refine_camera_can_flip_only_horizontal_axis_polarity(self) -> None:
+        """The user polarity choice reverses X/Y together and preserves Z."""
+        intrinsics = core.CameraIntrinsics(
+            fx=800.0,
+            fy=800.0,
+            cx=640.0,
+            cy=360.0,
+            image_width=1280,
+            image_height=720,
+        )
+        bundles = {
+            "x": [
+                core.LineSegment(100.0, 250.0, 800.0, 300.0),
+                core.LineSegment(100.0, 450.0, 800.0, 400.0),
+            ],
+            "z": [
+                core.LineSegment(300.0, 100.0, 350.0, 650.0),
+                core.LineSegment(900.0, 100.0, 850.0, 650.0),
+            ],
+            "y": [],
+        }
+        normal = core.refine_camera(
+            bundles,
+            intrinsics,
+            lock_focal=True,
+            estimate_principal_point=False,
+        )
+        flipped = core.refine_camera(
+            bundles,
+            intrinsics,
+            lock_focal=True,
+            estimate_principal_point=False,
+            initial_rotation=normal.rotation_w2c,
+            flip_xy_polarity=True,
+        )
+
+        self.assertTrue(
+            np.allclose(flipped.rotation_w2c[:, :2], -normal.rotation_w2c[:, :2])
+        )
+        self.assertTrue(
+            np.allclose(flipped.rotation_w2c[:, 2], normal.rotation_w2c[:, 2])
+        )
+        self.assertAlmostEqual(
+            float(np.linalg.det(flipped.rotation_w2c)),
+            1.0,
+            places=9,
+        )
+
     def test_perspective_rectangle_rejects_degenerate_quad(self) -> None:
         corners = core.perspective_rectangle_corners(
             (10.0, 10.0),
