@@ -703,7 +703,7 @@ def _draw_overlay_label(
 
 def _draw_vp_error_labels(context: bpy.types.Context, settings) -> None:
     """Per-segment local direction-error labels against the camera's ideal VPs."""
-    if not settings.show_vp_error_labels:
+    if not settings.show_vp_overlay or not settings.show_vp_error_labels:
         return
     region_bounds = _region_bounds(context)
     if region_bounds is None:

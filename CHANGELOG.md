@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Use Known 3D** (Camera) polishes FOV, principal point, and camera position from landmark picks after Auto from VPs, Estimate Distortion, or VP-line edits, without locking Manual FOV; orientation is rebuilt from the VP strokes at the new K
 
 ### Changed
+- Hiding Vanishing Point Lines also hides Show Error Label numbers on the plate
 - Viewport overlays now show only while the Perspective Match sidebar panel is expanded, except while a Draw / Pick tool is active
 - Solve Sync balances landmarks across the frame so a cluster of well-fitting central picks cannot ignore a few near the edge that pin camera distance
 - Pick Confidence and per-match confidence dropdowns sit in a collapsed section under Pick in Active Match
