@@ -154,6 +154,7 @@ def main(argv: list[str]) -> int:
         log(
             f"{_short_match(root.name):24s} sync={int(session.sync_enabled)} "
             f"applied={int(session.sync_is_applied)} "
+            f"last_ok={int(session.sync_last_ok)} "
             f"fx={calibration.intrinsics.fx:7.1f} fy={calibration.intrinsics.fy:7.1f} "
             f"origin={int(session.origin_is_set)} "
             f"nadir={_angle_from_vertical_deg(optical):5.1f} "

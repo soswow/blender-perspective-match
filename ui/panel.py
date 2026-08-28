@@ -493,7 +493,16 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             return
 
         # Opt-in for this match — when off, hide the rest of the sync UI.
-        sync_body.prop(settings, "sync_enabled", text="Enable sync for current match")
+        # Last-run badge sits on the same row (check vs X after Solve Sync).
+        enable_row = sync_body.row(align=True)
+        enable_row.use_property_split = False
+        enable_row.prop(settings, "sync_enabled", text="Enable sync for current match")
+        status = enable_row.row(align=True)
+        status.alignment = "RIGHT"
+        if settings.sync_last_ok:
+            status.label(text="Synced", icon="CHECKMARK")
+        else:
+            status.label(text="Not synced", icon="X")
         if not settings.sync_enabled:
             return
 
@@ -756,7 +765,7 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             while text:
                 status_column.label(text=text[:wrap_width])
                 text = text[wrap_width:]
-        if settings is not None and settings.sync_is_applied:
+        if settings is not None and settings.sync_last_ok and settings.sync_is_applied:
             sync_body.label(
                 text=(
                     f"This match sync RMSE {settings.sync_rmse_px:.2f} px · "

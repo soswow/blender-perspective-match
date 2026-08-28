@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Sync Matches shows whether the current match was registered in the last Solve Sync
 - Origin and Camera section eye toggles hide the origin pick and principal-point marker on the plate
 - Diagnose now runs in the background with progress plus Esc / Cancel support
 - The landmark list can be filtered to picks defined in the active match

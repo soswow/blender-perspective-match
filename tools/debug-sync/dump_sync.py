@@ -216,6 +216,7 @@ def main(argv: list[str]) -> int:
         if session.image is None or float(session.fx) <= 0.0:
             log(
                 f"{root.name:32s} sync={int(session.sync_enabled)} "
+                f"last_ok={int(getattr(session, 'sync_last_ok', 0))} "
                 f"fx={session.fx:.1f} (no plate / unsolved)"
             )
             continue
@@ -231,6 +232,7 @@ def main(argv: list[str]) -> int:
         n_lines = sum(len(bundles.get(axis, [])) for axis in ("X", "Y", "Z"))
         log(
             f"{root.name:32s} sync={int(session.sync_enabled)} "
+            f"last_ok={int(getattr(session, 'sync_last_ok', 0))} "
             f"fx={calibration.intrinsics.fx:8.1f} origin={int(session.origin_is_set)} "
             f"vp_lines={n_lines} can_orient={int(can_orient)} "
             f"nadir_deg={_angle_from_vertical_deg(optical):5.1f} "

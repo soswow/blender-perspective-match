@@ -2312,9 +2312,19 @@ def store_similarity_on_session(session: properties.PMSession, similarity) -> No
     session.sync_translation = tuple(float(value) for value in similarity.translation)
 
 
+def record_sync_last_ok(synced_ids: set[str]) -> None:
+    """Mark which matches were registered in the last successful Solve Sync."""
+    for root in properties.iter_match_roots():
+        session = root.pm_session
+        if session is None:
+            continue
+        session.sync_last_ok = root.name in synced_ids
+
+
 def clear_similarity_on_session(session: properties.PMSession) -> None:
     """Reset stored sync transform RNA to identity."""
     session.sync_is_applied = False
+    session.sync_last_ok = False
     session.sync_scale = 1.0
     session.sync_rotation = (1.0, 0.0, 0.0, 0.0)
     session.sync_translation = (0.0, 0.0, 0.0)
@@ -3260,6 +3270,7 @@ def solve_and_apply_sync(context: bpy.types.Context):
         raise ValueError(message)
 
     root_by_name = {root.name: root for root in properties.iter_match_roots()}
+    record_sync_last_ok(set(result.similarities))
     for match_id, similarity in result.similarities.items():
         root = root_by_name.get(match_id)
         if root is None:

@@ -836,6 +836,16 @@ class PMSession(bpy.types.PropertyGroup):
         update=_redraw,
     )
     sync_is_applied: bpy.props.BoolProperty(default=False, options={"HIDDEN"})
+    # True only if this match was registered in the last successful Solve Sync.
+    sync_last_ok: bpy.props.BoolProperty(
+        name="Last Sync",
+        description=(
+            "Whether Solve Sync registered this match on the last run. "
+            "Cleared when a later run skips it, or when you press Clear"
+        ),
+        default=False,
+        options={"HIDDEN"},
+    )
     sync_scale: bpy.props.FloatProperty(default=1.0, options={"HIDDEN"})
     sync_rotation: bpy.props.FloatVectorProperty(
         size=4,

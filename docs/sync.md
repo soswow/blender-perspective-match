@@ -5,7 +5,7 @@ When several matches show the same scene, register them into one Blender world.
 ## Overview
 
 1. Match each still on its own (VP lines; Origin optional). Origins do **not** need to match across stills. If every still has locked/imported full K, you can instead omit VP lines and use the calibrated ground-only workflow below.
-2. Choose an **Anchor** match — that world is shared space. Each match has **Enable sync for current match** (on by default); turn it off to exclude that still from Solve Sync / Diagnose / Refine Lenses.
+2. Choose an **Anchor** match — that world is shared space. Each match has **Enable sync for current match** (on by default); turn it off to exclude that still from Solve Sync / Diagnose / Refine Lenses. After **Solve Sync**, that same row shows **Synced** or **Not synced** for the active match: whether this still was registered in the last run. A later run that skips it (or **Clear**) removes the check.
 3. Add landmarks for features visible in two or more stills (≥5 shared 2D picks), **or** link **Known 3D** Blender objects (≥3) and pick them in the other stills.
 4. Pick each landmark in every still where it is visible. With the **Perspective Match** sidebar tab open and the view through the active match camera, **Ctrl+Cmd+A** (macOS; **Ctrl+Win+A** on Windows/Linux) starts **Pick in Active Match**. Optional: enable **Snap to AprilTag** (under **Pick in Active Match**) so a point click on a small or blurry marker snaps to the tag centre — the intersection of the dark quadrilateral's diagonals — without needing the marker to decode.
 5. Optional: tag **On Ground** on point landmarks in the anchor, or rely on Known 3D, to pin absolute scale.
