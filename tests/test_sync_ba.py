@@ -431,11 +431,11 @@ class BundleAdjustSyncTests(unittest.TestCase):
                     *_project(true_sim.inverse_point(point), other_calibration),
                 )
             )
-        return matches, observations, true_landmarks
+        return matches, observations, true_landmarks, true_sim
 
     def test_known_3d_slack_zero_keeps_empty_pin(self) -> None:
         """Slack 0 leaves a biased Known 3D point on its Empty."""
-        matches, observations, true_landmarks = self._known_3d_two_view_scene()
+        matches, observations, true_landmarks, _true_sim = self._known_3d_two_view_scene()
         known_world = {key: point.copy() for key, point in true_landmarks.items()}
         known_world["k3"] = true_landmarks["k3"] + np.array(
             (0.12, 0.0, 0.0), dtype=np.float64
@@ -455,7 +455,7 @@ class BundleAdjustSyncTests(unittest.TestCase):
 
     def test_known_3d_slack_eases_biased_pin_toward_picks(self) -> None:
         """Positive slack lets 2D picks pull a biased Known 3D point toward truth."""
-        matches, observations, true_landmarks = self._known_3d_two_view_scene()
+        matches, observations, true_landmarks, _true_sim = self._known_3d_two_view_scene()
         known_world = {key: point.copy() for key, point in true_landmarks.items()}
         known_world["k3"] = true_landmarks["k3"] + np.array(
             (0.12, 0.0, 0.0), dtype=np.float64
@@ -490,6 +490,61 @@ class BundleAdjustSyncTests(unittest.TestCase):
         )
         self.assertLess(dist_from_empty, 0.4)
         self.assertLess(eased.mean_reprojection_px, frozen.mean_reprojection_px)
+
+    def test_effective_ground_z_slack_uses_tighter_of_two(self) -> None:
+        """On Ground Known 3D Z slack is min(ground, known); others keep ground."""
+        known = {"k0"}
+        self.assertEqual(
+            sync._effective_ground_z_slack(
+                "k0", ground_slack=0.01, known_3d_slack=0.05, known_ids=known
+            ),
+            0.01,
+        )
+        self.assertEqual(
+            sync._effective_ground_z_slack(
+                "k0", ground_slack=0.05, known_3d_slack=0.01, known_ids=known
+            ),
+            0.01,
+        )
+        self.assertEqual(
+            sync._effective_ground_z_slack(
+                "g", ground_slack=0.02, known_3d_slack=0.05, known_ids=known
+            ),
+            0.02,
+        )
+
+    def test_on_ground_known_3d_z_follows_tighter_ground_slack(self) -> None:
+        """A floor Known 3D pick must not sink by the looser Known 3D slack."""
+        matches, observations, true_landmarks, true_sim = (
+            self._known_3d_two_view_scene()
+        )
+        for observation in observations:
+            if observation.landmark_id in {"k0", "k1", "k2"}:
+                observation.on_ground = True
+        low = true_landmarks["k0"] + np.array((0.0, 0.0, -0.05), dtype=np.float64)
+        anchor_calibration = matches[0].calibration
+        other_calibration = matches[1].calibration
+        for observation in observations:
+            if observation.landmark_id != "k0":
+                continue
+            if observation.match_id == "anchor":
+                observation.u, observation.v = _project(low, anchor_calibration)
+            else:
+                observation.u, observation.v = _project(
+                    true_sim.inverse_point(low), other_calibration
+                )
+        known_world = {key: point.copy() for key, point in true_landmarks.items()}
+        result = sync.solve_landmark_sync(
+            matches,
+            observations,
+            anchor_id="anchor",
+            known_world=known_world,
+            ground_slack=0.01,
+            known_3d_slack=0.05,
+        )
+        self.assertTrue(result.success, result.message)
+        height = abs(float(result.landmarks["k0"][2]))
+        self.assertLess(height, 0.02, msg=f"Z={result.landmarks['k0'][2]:.4f}")
 
     def test_thaw_pass_still_converges_when_structure_starts_frozen(self) -> None:
         """Pass B (thaw 3D) must still lock a well-observed synthetic scene."""

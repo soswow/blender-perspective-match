@@ -994,7 +994,9 @@ class PMWorkspace(bpy.types.PropertyGroup):
         description=(
             "How far On Ground landmarks may sit off Z=0 (scene units). "
             "0 pins them to the floor raycast. A small value (plank cup / "
-            "tag thickness) lets a boarded floor flex without bending cameras"
+            "tag thickness) lets a boarded floor flex without bending cameras. "
+            "A Known 3D point that is also On Ground uses the tighter of "
+            "this and Known 3D Slack for Z"
         ),
         default=0.02,
         min=0.0,
@@ -1012,7 +1014,8 @@ class PMWorkspace(bpy.types.PropertyGroup):
             "(scene units) during Solve Sync. 0 pins them. A small value "
             "lets CAD / mesh error ease toward the 2D picks without "
             "stretching the cameras. Does not move the linked Empty — "
-            "Landmark Empties show the eased position"
+            "Landmark Empties show the eased position. On Ground Known 3D "
+            "uses the tighter of this and Ground Slack for Z"
         ),
         default=0.0,
         min=0.0,

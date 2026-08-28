@@ -43,6 +43,10 @@ KNOWN_3D_SLACK_DEFAULT = 0.0
 # Soft XYZ residual at |offset| = slack equals this many pixels before Huber.
 KNOWN_3D_RESIDUAL_PX = 6.0
 
+# When On Ground is a hard Z=0 pin (slack 0) but Known 3D is thawed, BA still
+# needs a Z spring. This tiny slack is stiff enough to keep |Z| ≈ 0.
+GROUND_Z_HARD_SLACK = 1.0e-4
+
 # LM clips log-scale to ± this. Hitting the floor collapses the match Empty
 # (det ≈ 0) so overlay corners project as noise and jump when the view pans.
 LOG_SCALE_CLIP = 18.0

@@ -51,6 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Original Plate keeps imported Brown–Conrady D and only switches the background; estimated λ is still cleared
 
 ### Fixed
+- On Ground Known 3D points now use the tighter of Ground Slack and Known 3D Slack for Z, so a looser Known 3D leash cannot lift a floor pin
 - Use Known 3D no longer leaves short uprights behind when FOV / principal point move, and no longer keeps a VP-only λ that wrecks an axis just to shave pin RMS
 - Use Known 3D no longer recenters the principal point when λ is already 0, and names swapped/mismatched picks when VP lines block the fit
 - Diagnose no longer spends minutes re-registering rejected cameras during leave-one-out and mismatched-pick checks

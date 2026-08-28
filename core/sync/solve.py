@@ -771,7 +771,8 @@ def solve_landmark_sync(
     aspect-stretched. ``ground_slack`` is how far On Ground landmarks may leave
     Z=0 in joint BA (0 pins them when triangulation agrees with the raycast).
     ``known_3d_slack`` is how far Known 3D points may leave their Empty
-    (0 pins them; pairwise registration still uses the Empty).
+    (0 pins them; pairwise registration still uses the Empty). On Ground
+    Known 3D uses the tighter of the two slacks for Z.
     """
     _check_cancelled(cancel_check)
     _report_progress(progress_callback, "Preparing sync graph")
@@ -1062,7 +1063,7 @@ def solve_landmark_sync(
         {
             observation.landmark_id
             for observation in ba_observations
-            if observation.on_ground and observation.landmark_id not in known_world
+            if observation.on_ground
         }
     )
     # Slack > 0: keep On Ground free so BA can spring Z toward the plane.
@@ -1619,10 +1620,11 @@ def solve_landmark_sync(
                 continue
             if not any(item.on_ground for item in items):
                 continue
-            if landmark_id in known_world:
-                continue
+            z_slack = ground_slack
+            if landmark_id in known_world and known_3d_slack > 1.0e-12:
+                z_slack = min(ground_slack, known_3d_slack)
             height = abs(float(landmarks[landmark_id][2]))
-            if height > ground_slack:
+            if height > z_slack:
                 drifted.append(
                     (names.get(landmark_id, landmark_id[:8]), height)
                 )

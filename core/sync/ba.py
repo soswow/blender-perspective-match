@@ -8,6 +8,7 @@ import numpy as np
 
 from .. import geometry as core
 from .constants import (
+    GROUND_Z_HARD_SLACK,
     GROUND_Z_RESIDUAL_PX,
     KNOWN_3D_RESIDUAL_PX,
     OUTLIER_WEIGHT_FACTOR,
@@ -621,6 +622,28 @@ def _project_private_jacobian(
     return distorted, d_dist_d_ideal @ d_ideal_d_private
 
 
+def _effective_ground_z_slack(
+    landmark_id: str,
+    *,
+    ground_slack: float,
+    known_3d_slack: float,
+    known_ids: set[str],
+) -> float:
+    """Z slack for an On Ground landmark (scene units).
+
+    Known 3D + On Ground uses the tighter of the two slacks so a looser
+    Known 3D leash cannot lift a floor pin off the plane. 0 means a hard
+    Z=0 pin (replaced with ``GROUND_Z_HARD_SLACK`` at residual eval).
+    """
+    slack = max(float(ground_slack), 0.0)
+    if landmark_id not in known_ids:
+        return slack
+    known = max(float(known_3d_slack), 0.0)
+    if slack > 1.0e-12 and known > 1.0e-12:
+        return min(slack, known)
+    return slack
+
+
 def _ba_raw_residuals_and_jacobian(
     params: np.ndarray,
     free_match_ids: list[str],
@@ -760,20 +783,28 @@ def _ba_raw_residuals_and_jacobian(
                 row_v[offset : offset + 3] = block[1]
         jacobian_rows.extend((row_u, row_v))
 
-    slack = max(float(ground_slack), 0.0)
-    if slack > 1.0e-12:
-        spring = GROUND_Z_RESIDUAL_PX / slack
-        for landmark_id in ground_landmark_ids or ():
-            if landmark_id not in landmark_offset:
-                continue
-            point_shared = landmarks.get(landmark_id)
-            if point_shared is None:
-                continue
-            residuals.append(spring * float(point_shared[2]))
-            row_z = np.zeros(column_count, dtype=np.float64)
-            start = landmark_offset[landmark_id]
-            row_z[start + 2] = spring
-            jacobian_rows.append(row_z)
+    known_ids = set(known_world_priors or {})
+    ground_id_set = set(ground_landmark_ids or ())
+    for landmark_id in ground_landmark_ids or ():
+        if landmark_id not in landmark_offset:
+            continue
+        point_shared = landmarks.get(landmark_id)
+        if point_shared is None:
+            continue
+        z_slack = _effective_ground_z_slack(
+            landmark_id,
+            ground_slack=ground_slack,
+            known_3d_slack=known_3d_slack,
+            known_ids=known_ids,
+        )
+        if z_slack <= 1.0e-12:
+            z_slack = GROUND_Z_HARD_SLACK
+        spring = GROUND_Z_RESIDUAL_PX / z_slack
+        residuals.append(spring * float(point_shared[2]))
+        row_z = np.zeros(column_count, dtype=np.float64)
+        start = landmark_offset[landmark_id]
+        row_z[start + 2] = spring
+        jacobian_rows.append(row_z)
 
     known_slack = max(float(known_3d_slack), 0.0)
     if known_slack > 1.0e-12 and known_world_priors:
@@ -786,7 +817,9 @@ def _ba_raw_residuals_and_jacobian(
                 continue
             delta = point_shared - np.asarray(origin, dtype=np.float64).reshape(3)
             start = landmark_offset[landmark_id]
-            for axis in range(3):
+            # On Ground Known 3D: Z is the ground spring, not the looser XYZ leash.
+            axes = (0, 1) if landmark_id in ground_id_set else (0, 1, 2)
+            for axis in axes:
                 residuals.append(spring * float(delta[axis]))
                 row_axis = np.zeros(column_count, dtype=np.float64)
                 row_axis[start + axis] = spring
