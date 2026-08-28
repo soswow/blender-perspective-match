@@ -74,15 +74,38 @@ def main() -> None:
             assert pick_key.type == "A" and pick_key.value == "PRESS"
             assert pick_key.ctrl and pick_key.oskey
             assert not pick_key.shift and not pick_key.alt
+            overlay = sys.modules["match_perspective.ui.overlay"]
+            legacy_sidebar_handle = bpy.types.SpaceView3D.draw_handler_add(
+                lambda: None,
+                (),
+                "UI",
+                "POST_PIXEL",
+            )
+            bpy.app.driver_namespace[
+                overlay._LEGACY_SIDEBAR_DRAW_NAMESPACE_KEY
+            ] = legacy_sidebar_handle
             # Disable/re-enable and wheel extract can call register() twice.
             extension.register()
+            assert (
+                overlay._LEGACY_SIDEBAR_DRAW_NAMESPACE_KEY
+                not in bpy.app.driver_namespace
+            )
             extension.unregister()
+            assert overlay._DRAW_NAMESPACE_KEY not in bpy.app.driver_namespace
+            assert overlay._SIDEBAR_TIMER_NAMESPACE_KEY not in bpy.app.driver_namespace
+            assert not bpy.app.timers.is_registered(overlay._poll_sidebar_visibility)
             extension.register()
             core = sys.modules["match_perspective.core"]
             distortion = sys.modules["match_perspective.scene.distortion"]
             properties = sys.modules["match_perspective.properties"]
             scene = sys.modules["match_perspective.scene"]
             ui_panel = sys.modules["match_perspective.ui.panel"]
+            assert not overlay._perspective_match_sidebar_visible(bpy.context)
+            overlay.note_sidebar_draw(bpy.context)
+            assert not overlay._perspective_match_sidebar_visible(bpy.context)
+            assert overlay._DRAW_NAMESPACE_KEY in bpy.app.driver_namespace
+            assert overlay._SIDEBAR_TIMER_NAMESPACE_KEY in bpy.app.driver_namespace
+            assert bpy.app.timers.is_registered(overlay._poll_sidebar_visibility)
 
             crossing = core.vanishing_point_from_lines(
                 [

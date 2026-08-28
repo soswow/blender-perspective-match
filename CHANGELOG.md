@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Ground Slack** lets On Ground landmarks sit a little off Z=0 so a boarded floor can flex without bending cameras
 
 ### Changed
+- Viewport overlays now show only while the Perspective Match sidebar panel is expanded, except while a Draw / Pick tool is active
 - Solve Sync balances landmarks across the frame so a cluster of well-fitting central picks cannot ignore a few near the edge that pin camera distance
 - Pick Confidence and per-match confidence dropdowns sit in a collapsed section under Pick in Active Match
 - On Ground landmark picks draw in magenta on the plate (selected stays red)

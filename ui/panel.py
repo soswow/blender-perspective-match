@@ -8,7 +8,7 @@ import bpy
 
 from .. import core, properties, scene
 from ..detect import opencv as opencv_support
-from . import icons, operators
+from . import icons, operators, overlay
 
 
 def _observation_count(landmark) -> int:
@@ -145,6 +145,7 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
     bl_category = "Perspective Match"
 
     def draw(self, context: bpy.types.Context) -> None:
+        overlay.note_sidebar_draw(context)
         layout = self.layout
         workspace = properties.workspace(context)
         settings = properties.active_session(context)
