@@ -497,6 +497,25 @@ class PoseSyncTests(unittest.TestCase):
         )
 
 
+    def test_pose_search_honours_cancellation_checkpoint(self) -> None:
+        """Esc must stop a Diagnose already inside relative-pose work."""
+        matches, observations, *_ = _synthetic_scene(with_ground=True)
+        checks = {"count": 0}
+
+        def cancel_after_pose_entry() -> bool:
+            checks["count"] += 1
+            return checks["count"] >= 7
+
+        with self.assertRaises(sync.SyncCancelled):
+            sync.solve_landmark_sync(
+                matches,
+                observations,
+                anchor_id="anchor",
+                cancel_check=cancel_after_pose_entry,
+            )
+        self.assertGreaterEqual(checks["count"], 7)
+
+
     def test_pose_cache_skips_unchanged_pair(self) -> None:
         """Diagnose/Solve can reuse a pair whose picks and cameras did not change."""
         sync.clear_registration_cache()
@@ -848,4 +867,3 @@ class PoseSyncTests(unittest.TestCase):
         )
         self.assertEqual(order[0], "zzz")
         self.assertEqual(order[1], "aaa")
-

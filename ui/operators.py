@@ -265,6 +265,12 @@ _lens_refine_running = False
 _lens_refine_progress = {"step": 0, "total": 1, "label": ""}
 _lens_refine_result_box: dict = {}
 
+_diagnose_sync_lock = threading.Lock()
+_diagnose_sync_cancel: threading.Event | None = None
+_diagnose_sync_running = False
+_diagnose_sync_progress = {"step": 0, "total": 1, "label": ""}
+_diagnose_sync_result_box: dict = {}
+
 _vp_detect_lock = threading.Lock()
 _vp_detect_cancel: threading.Event | None = None
 _vp_detect_running = False
@@ -275,6 +281,11 @@ _vp_detect_result_box: dict = {}
 def lens_refine_is_running() -> bool:
     """True while a Refine Lenses modal/worker is active."""
     return bool(_lens_refine_running)
+
+
+def diagnose_sync_is_running() -> bool:
+    """True while a Diagnose modal/worker is active."""
+    return bool(_diagnose_sync_running)
 
 
 def vp_detect_is_running() -> bool:
@@ -294,6 +305,15 @@ def request_vp_detect_cancel() -> bool:
 def request_lens_refine_cancel() -> bool:
     """Signal the running Refine Lenses worker to stop. True if one was running."""
     event = _lens_refine_cancel
+    if event is None:
+        return False
+    event.set()
+    return True
+
+
+def request_diagnose_sync_cancel() -> bool:
+    """Signal the running Diagnose worker to stop."""
+    event = _diagnose_sync_cancel
     if event is None:
         return False
     event.set()
@@ -2987,6 +3007,8 @@ class PM_OT_solve_sync(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
+        if diagnose_sync_is_running():
+            return False
         anchor = properties.anchor_root(context)
         return (
             anchor is not None
@@ -3024,13 +3046,167 @@ class PM_OT_diagnose_sync(bpy.types.Operator):
         "Run the sync solver and list per-landmark RMSE plus Known 3D "
         "consistency checks without applying a pose. Auto-sets missing "
         "origins and, with locked K plus 4+ shared On Ground picks across 3+ "
-        "images, can initialize orientation like Solve Sync"
+        "images, can initialize orientation like Solve Sync. Runs in the "
+        "background — Esc or Cancel to stop"
     )
     bl_options = {"REGISTER"}
 
+    _timer = None
+    _prep = None
+
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
+        if diagnose_sync_is_running() or lens_refine_is_running():
+            return False
         return PM_OT_solve_sync.poll(context)
+
+    def invoke(self, context: bpy.types.Context, _event) -> set[str]:
+        global _diagnose_sync_cancel, _diagnose_sync_running
+        global _diagnose_sync_progress, _diagnose_sync_result_box
+
+        workspace = _workspace(context)
+        try:
+            prep = scene.prepare_diagnose_sync(context)
+        except Exception as error:
+            workspace.sync_status = str(error)
+            return _report_exception(self, error)
+
+        cancel_event = threading.Event()
+        result_box: dict = {"done": False}
+        progress_state = {"step": 0, "total": 6, "label": "Starting…"}
+        with _diagnose_sync_lock:
+            if _diagnose_sync_running:
+                self.report({"WARNING"}, "Diagnose already running")
+                return {"CANCELLED"}
+            _diagnose_sync_cancel = cancel_event
+            _diagnose_sync_running = True
+            _diagnose_sync_progress = progress_state
+            _diagnose_sync_result_box = result_box
+
+        self._prep = prep
+        workspace.sync_status = "Diagnose running… Esc to cancel"
+        properties.tag_viewport_redraw(context)
+
+        def _on_progress(step: int, total: int, label: str) -> None:
+            progress_state["step"] = int(step)
+            progress_state["total"] = max(int(total), 1)
+            progress_state["label"] = str(label)
+
+        def _worker() -> None:
+            from ..core import sync as sync_module
+
+            try:
+                result_box["result"] = scene.run_diagnose_sync(
+                    prep,
+                    cancel_check=cancel_event.is_set,
+                    progress_callback=_on_progress,
+                )
+            except sync_module.SyncCancelled:
+                result_box["cancelled"] = True
+            except Exception as error:
+                result_box["error"] = error
+            finally:
+                result_box["done"] = True
+
+        threading.Thread(
+            target=_worker,
+            name="PM-DiagnoseSync",
+            daemon=True,
+        ).start()
+
+        window_manager = context.window_manager
+        window_manager.progress_begin(0, 6)
+        self._timer = window_manager.event_timer_add(0.1, window=context.window)
+        window_manager.modal_handler_add(self)
+        return {"RUNNING_MODAL"}
+
+    def _finish_job(self, context: bpy.types.Context, *, cancelled: bool) -> set[str]:
+        global _diagnose_sync_cancel, _diagnose_sync_running
+
+        window_manager = context.window_manager
+        if self._timer is not None:
+            window_manager.event_timer_remove(self._timer)
+            self._timer = None
+        try:
+            window_manager.progress_end()
+        except Exception:
+            pass
+
+        workspace = _workspace(context)
+        result_box = _diagnose_sync_result_box
+        with _diagnose_sync_lock:
+            _diagnose_sync_running = False
+            _diagnose_sync_cancel = None
+
+        if result_box.get("error") is not None:
+            error = result_box["error"]
+            workspace.sync_status = str(error)
+            properties.tag_viewport_redraw(context)
+            return _report_exception(
+                self,
+                error if isinstance(error, Exception) else Exception(str(error)),
+            )
+
+        if cancelled or result_box.get("cancelled"):
+            workspace.sync_status = "Diagnose cancelled"
+            properties.tag_viewport_redraw(context)
+            self.report({"WARNING"}, "Diagnose cancelled")
+            return {"CANCELLED"}
+
+        result = result_box.get("result")
+        if result is None:
+            workspace.sync_status = "Diagnose cancelled"
+            properties.tag_viewport_redraw(context)
+            return {"CANCELLED"}
+
+        try:
+            scene.apply_diagnose_sync_result(context, self._prep, result)
+        except Exception as error:
+            workspace.sync_status = str(error)
+            return _report_exception(self, error)
+        settings = properties.active_session(context)
+        if settings is not None:
+            settings.error = ""
+        self.report({"INFO"} if result.success else {"WARNING"}, workspace.sync_status)
+        return {"FINISHED"}
+
+    def modal(self, context: bpy.types.Context, event) -> set[str]:
+        workspace = _workspace(context)
+        if event.type == "ESC" and event.value == "PRESS":
+            request_diagnose_sync_cancel()
+            workspace.sync_status = "Cancelling Diagnose…"
+            properties.tag_viewport_redraw(context)
+            return {"RUNNING_MODAL"}
+
+        if event.type != "TIMER":
+            return {"PASS_THROUGH"}
+
+        progress = _diagnose_sync_progress
+        total = max(int(progress.get("total", 1)), 1)
+        step = min(int(progress.get("step", 0)), total)
+        label = str(progress.get("label", ""))
+        workspace.sync_status = f"Diagnose {step}/{total} · {label}"
+        try:
+            context.window_manager.progress_update(step)
+        except Exception:
+            pass
+        properties.tag_viewport_redraw(context)
+        if not _diagnose_sync_result_box.get("done"):
+            return {"PASS_THROUGH"}
+        return self._finish_job(
+            context,
+            cancelled=bool(
+                _diagnose_sync_cancel and _diagnose_sync_cancel.is_set()
+            ),
+        )
+
+    def cancel(self, context: bpy.types.Context) -> None:
+        request_diagnose_sync_cancel()
+        for _ in range(50):
+            if _diagnose_sync_result_box.get("done"):
+                break
+            time.sleep(0.02)
+        self._finish_job(context, cancelled=True)
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         workspace = _workspace(context)
@@ -3041,6 +3217,28 @@ class PM_OT_diagnose_sync(bpy.types.Operator):
             return _report_exception(self, error)
         level = {"INFO"} if result.success else {"WARNING"}
         self.report(level, workspace.sync_status)
+        return {"FINISHED"}
+
+
+class PM_OT_cancel_diagnose_sync(bpy.types.Operator):
+    """Stop the running Diagnose background job."""
+
+    bl_idname = "perspective_match.cancel_diagnose_sync"
+    bl_label = "Cancel Diagnose"
+    bl_description = "Cancel the running Diagnose solve (Esc also works)"
+    bl_options = {"REGISTER"}
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        return diagnose_sync_is_running()
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        if not request_diagnose_sync_cancel():
+            return {"CANCELLED"}
+        workspace = _workspace(context)
+        workspace.sync_status = "Cancelling Diagnose…"
+        properties.tag_viewport_redraw(context)
+        self.report({"INFO"}, "Cancelling Diagnose…")
         return {"FINISHED"}
 
 
@@ -3064,7 +3262,7 @@ class PM_OT_refine_lenses(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
-        if lens_refine_is_running():
+        if lens_refine_is_running() or diagnose_sync_is_running():
             return False
         return PM_OT_solve_sync.poll(context)
 
@@ -3308,6 +3506,10 @@ class PM_OT_clear_sync(bpy.types.Operator):
     bl_description = "Reset all match root Empties to identity and clear landmark Empties"
     bl_options = {"REGISTER", "UNDO"}
 
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        return not diagnose_sync_is_running()
+
     def execute(self, context: bpy.types.Context) -> set[str]:
         scene.clear_sync_transforms(context)
         self.report({"INFO"}, "Sync cleared")
@@ -3354,6 +3556,7 @@ CLASSES = (
     PM_OT_select_overlay_landmark,
     PM_OT_solve_sync,
     PM_OT_diagnose_sync,
+    PM_OT_cancel_diagnose_sync,
     PM_OT_refine_lenses,
     PM_OT_cancel_refine_lenses,
     PM_OT_clear_sync,

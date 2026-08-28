@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import unittest
+from unittest import mock
 
 import numpy as np
 
 from match_perspective import core
 from match_perspective.core import sync
+from match_perspective.core.sync import solve as solve_module
 from sync_fixtures import _look_at_rotation, _project, _rodrigues_z, _synthetic_scene
 
 
@@ -19,6 +21,71 @@ class SolveSyncTests(unittest.TestCase):
         self.assertEqual(sync.confidence_weight("NORMAL"), 1.0)
         self.assertEqual(sync.confidence_weight("LOW"), 0.25)
         self.assertEqual(sync.confidence_weight("unknown"), 1.0)
+
+    def test_resect_mismatch_checks_only_worst_picks_with_local_refits(self) -> None:
+        """Mismatch diagnosis must not repeat the global PnP seed grid."""
+        matches, observations, _true, _center, _shared = _synthetic_scene(
+            with_ground=True
+        )
+        other_observations = [
+            observation
+            for observation in observations
+            if observation.match_id == "other"
+        ]
+        observations_by_landmark = {
+            observation.landmark_id: [observation]
+            for observation in other_observations
+        }
+        cloud = {
+            observation.landmark_id: np.array((index, index % 2, 0.5))
+            for index, observation in enumerate(other_observations)
+        }
+        seed = sync.SimilarityTransform()
+        retry_kwargs = {
+            "observations_by_landmark": observations_by_landmark,
+            "matches": {match.match_id: match for match in matches},
+            "anchor_id": "anchor",
+            "known_lines": None,
+            "line_observations_by_landmark": None,
+            "parallel_pairs": None,
+            "lock_rotation": False,
+            "lock_translation": False,
+            "use_pose_cache": False,
+            "cancel_check": lambda: False,
+        }
+        with mock.patch.object(
+            solve_module,
+            "_try_register_against_cloud",
+            return_value=None,
+        ) as register_mock:
+            report = solve_module._resect_mismatch_picks(
+                "other",
+                cloud,
+                retry_kwargs,
+                seed,
+            )
+
+        self.assertEqual(report, [])
+        self.assertEqual(
+            register_mock.call_count,
+            sync.RESECT_MISMATCH_CANDIDATE_LIMIT,
+        )
+        for call in register_mock.call_args_list:
+            self.assertTrue(call.kwargs["initial_only"])
+            self.assertIs(call.kwargs["initial_similarity"], seed)
+
+    def test_solve_honours_cancellation_before_registration(self) -> None:
+        """Background Diagnose cancellation must abort the core solve."""
+        matches, observations, _true, _center, _shared = _synthetic_scene(
+            with_ground=True
+        )
+        with self.assertRaises(sync.SyncCancelled):
+            sync.solve_landmark_sync(
+                matches,
+                observations,
+                anchor_id="anchor",
+                cancel_check=lambda: True,
+            )
 
 
     def test_low_confidence_outlier_softens_pose_pull(self) -> None:
@@ -697,5 +764,4 @@ class SolveSyncTests(unittest.TestCase):
             np.allclose(recovered_center, underside_center, atol=0.35),
             recovered_center,
         )
-
 

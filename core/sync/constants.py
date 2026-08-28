@@ -21,6 +21,9 @@ WORLD_AXIS_DIRECTIONS = {
 # below which a pairwise or resected pose is accepted.
 ACCEPT_RMSE_PX = 40.0
 
+# Only the worst failed-pose picks get a warm leave-one-out resection check.
+RESECT_MISMATCH_CANDIDATE_LIMIT = 5
+
 # |fx-fy| / max(fx, fy) above this: treat K as aspect-stretched and set fy=fx.
 STRETCHED_PIXEL_RATIO = 0.2
 

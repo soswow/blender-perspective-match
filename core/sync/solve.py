@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Callable
 
 import numpy as np
 
@@ -22,6 +23,7 @@ from .constants import (
     BA_FREE_LANDMARK_LIMIT,
     GROUND_PLANE_Z_FRACTION,
     GROUND_SLACK_DEFAULT,
+    RESECT_MISMATCH_CANDIDATE_LIMIT,
 )
 from .lines import (
     _enforce_parallel_line_segments,
@@ -44,11 +46,26 @@ from .pose import (
 from .projection import project_private_point
 from .types import (
     SimilarityTransform,
+    SyncCancelled,
     SyncLineObservation,
     SyncMatchInput,
     SyncObservation,
     SyncSolveResult,
 )
+
+
+def _check_cancelled(cancel_check: Callable[[], bool] | None) -> None:
+    if cancel_check is not None and cancel_check():
+        raise SyncCancelled("Sync cancelled")
+
+
+def _report_progress(
+    progress_callback: Callable[[str], None] | None,
+    label: str,
+) -> None:
+    if progress_callback is not None:
+        progress_callback(label)
+
 
 def _connected_match_ids(
     anchor_id: str,
@@ -168,8 +185,13 @@ def _try_register_against_cloud(
     lock_translation: bool,
     rmse_limit: float = ACCEPT_RMSE_PX,
     use_pose_cache: bool = False,
+    initial_similarity: SimilarityTransform | None = None,
+    initial_only: bool = False,
+    best_candidate_out: list[SimilarityTransform] | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> SimilarityTransform | None:
     """PnP a skipped still against a frozen 3D cloud (no free 2D↔2D pairs)."""
+    _check_cancelled(cancel_check)
     if len(cloud) < 4:
         return None
     subset = _observations_for_landmark_ids(observations_by_landmark, set(cloud))
@@ -182,9 +204,13 @@ def _try_register_against_cloud(
         known_lines=known_lines,
         line_observations_by_landmark=line_observations_by_landmark,
         parallel_pairs=parallel_pairs,
+        initial_similarity=initial_similarity,
         lock_rotation=lock_rotation,
         lock_translation=lock_translation,
         use_pose_cache=use_pose_cache,
+        cancel_check=cancel_check,
+        initial_only=initial_only,
+        best_candidate_out=best_candidate_out,
     )
     if solved is None:
         return None
@@ -272,8 +298,12 @@ def _resect_mismatch_picks(
     match_id: str,
     cloud: dict[str, np.ndarray],
     retry_kwargs: dict,
+    initial_similarity: SimilarityTransform | None,
 ) -> list[tuple[str, str, float]]:
-    """If dropping one pick lets resect lock, that pick is the mismatch."""
+    """Warm-refit without each worst pick; report one-pick pose recoveries."""
+    if initial_similarity is None:
+        return []
+    _check_cancelled(retry_kwargs.get("cancel_check"))
     observations = retry_kwargs["observations_by_landmark"]
     matches = retry_kwargs["matches"]
     seen = [
@@ -284,14 +314,31 @@ def _resect_mismatch_picks(
     ]
     if len(seen) < 5:
         return []
+    calibration = matches[match_id].calibration
+    seen.sort(
+        key=lambda observation: _pick_reprojection_px(
+            initial_similarity,
+            observation,
+            calibration,
+            cloud[observation.landmark_id],
+        ),
+        reverse=True,
+    )
     found: list[tuple[str, str, float]] = []
-    for observation in seen[:12]:
+    for observation in seen[:RESECT_MISMATCH_CANDIDATE_LIMIT]:
+        _check_cancelled(retry_kwargs.get("cancel_check"))
         reduced = {
             landmark_id: point
             for landmark_id, point in cloud.items()
             if landmark_id != observation.landmark_id
         }
-        solved = _try_register_against_cloud(match_id, reduced, **retry_kwargs)
+        solved = _try_register_against_cloud(
+            match_id,
+            reduced,
+            initial_similarity=initial_similarity,
+            initial_only=True,
+            **retry_kwargs,
+        )
         if solved is None:
             continue
         point = cloud[observation.landmark_id]
@@ -318,6 +365,7 @@ class _SolveState:
     lock_rotation: bool
     lock_translation: bool
     use_pose_cache: bool
+    cancel_check: Callable[[], bool] | None
     ground_slack: float
     identity_result: dict[str, SimilarityTransform]
     valid_observations: list[SyncObservation]
@@ -540,6 +588,7 @@ def _expand_landmarks_after_resect(state: _SolveState) -> None:
         "lock_rotation": state.lock_rotation,
         "lock_translation": state.lock_translation,
         "use_pose_cache": state.use_pose_cache,
+        "cancel_check": state.cancel_check,
     }
     weak_ids = [
         match_id
@@ -637,22 +686,40 @@ def _resect_skipped_matches(state: _SolveState) -> None:
         "lock_rotation": state.lock_rotation,
         "lock_translation": state.lock_translation,
         "use_pose_cache": state.use_pose_cache,
+        "cancel_check": state.cancel_check,
     }
     recovered: list[str] = []
     for match_id in list(state.skipped_unregistered):
-        solved = _try_register_against_cloud(match_id, cloud, **retry_kwargs)
+        _check_cancelled(state.cancel_check)
+        failed_candidates: list[SimilarityTransform] = []
+        solved = _try_register_against_cloud(
+            match_id,
+            cloud,
+            best_candidate_out=failed_candidates,
+            **retry_kwargs,
+        )
+        ground_candidates: list[SimilarityTransform] = []
         if solved is None:
             solved = _try_register_against_cloud(
-                match_id, ground_cloud, **retry_kwargs
+                match_id,
+                ground_cloud,
+                best_candidate_out=ground_candidates,
+                **retry_kwargs,
             )
         if solved is None:
             if match_id not in state.inconsistent_picks:
                 mismatches = _resect_mismatch_picks(
-                    match_id, cloud, retry_kwargs
+                    match_id,
+                    cloud,
+                    retry_kwargs,
+                    failed_candidates[-1] if failed_candidates else None,
                 )
                 if not mismatches:
                     mismatches = _resect_mismatch_picks(
-                        match_id, ground_cloud, retry_kwargs
+                        match_id,
+                        ground_cloud,
+                        retry_kwargs,
+                        ground_candidates[-1] if ground_candidates else None,
                     )
                 if mismatches:
                     state.inconsistent_picks[match_id] = mismatches
@@ -689,6 +756,8 @@ def solve_landmark_sync(
     lock_translation: bool = False,
     use_pose_cache: bool = False,
     ground_slack: float | None = None,
+    cancel_check: Callable[[], bool] | None = None,
+    progress_callback: Callable[[str], None] | None = None,
 ) -> SyncSolveResult:
     """Register non-anchor matches from 2D correspondences and/or known 3D.
 
@@ -700,6 +769,8 @@ def solve_landmark_sync(
     aspect-stretched. ``ground_slack`` is how far On Ground landmarks may leave
     Z=0 in joint BA (0 pins them when triangulation agrees with the raycast).
     """
+    _check_cancelled(cancel_check)
+    _report_progress(progress_callback, "Preparing sync graph")
     if ground_slack is None:
         ground_slack = GROUND_SLACK_DEFAULT
     ground_slack = max(float(ground_slack), 0.0)
@@ -863,6 +934,8 @@ def solve_landmark_sync(
     }
     landmark_ids = sorted(observations_by_landmark.keys())
 
+    _check_cancelled(cancel_check)
+    _report_progress(progress_callback, "Registering cameras")
     similarities, failure_detail = _register_from_relative_pose(
         anchor_id,
         free_match_ids,
@@ -876,6 +949,7 @@ def solve_landmark_sync(
         lock_rotation=lock_rotation,
         lock_translation=lock_translation,
         use_pose_cache=use_pose_cache,
+        cancel_check=cancel_check,
     )
     if similarities is None:
         return SyncSolveResult(
@@ -927,6 +1001,7 @@ def solve_landmark_sync(
         lock_rotation=lock_rotation,
         lock_translation=lock_translation,
         use_pose_cache=use_pose_cache,
+        cancel_check=cancel_check,
         ground_slack=ground_slack,
         identity_result=identity_result,
         valid_observations=valid_observations,
@@ -943,6 +1018,8 @@ def solve_landmark_sync(
         connected=connected,
     )
     # 1. register (done)  2. peel weak cameras  3. BA  4. peel  5. resect
+    _check_cancelled(cancel_check)
+    _report_progress(progress_callback, "Triangulating landmarks")
     state.rebuild_landmarks()
     peeled = _peel_cameras_above_rmse(state)
     if peeled is not None:
@@ -1100,6 +1177,7 @@ def solve_landmark_sync(
 
     def _run_ba(free_ids: list[str], iterations: int) -> bool:
         nonlocal similarities, landmarks, line_segments
+        _check_cancelled(cancel_check)
         similarities, landmarks, line_segments, ran = (
             _bundle_adjust_registration(
                 free_match_ids,
@@ -1124,6 +1202,8 @@ def solve_landmark_sync(
             _refresh_free_lines()
         return ran
 
+    _check_cancelled(cancel_check)
+    _report_progress(progress_callback, "Bundle adjustment")
     did_bundle_adjust = _run_ba(ba_free_landmark_ids, ba_iterations)
 
     post_ba_match_rmse = _per_match_rmse_snapshot(
@@ -1247,6 +1327,8 @@ def solve_landmark_sync(
             )
         state.rebuild_landmarks()
 
+    _check_cancelled(cancel_check)
+    _report_progress(progress_callback, "Retrying skipped cameras")
     _resect_skipped_matches(state)
     similarities = state.similarities
     landmarks = state.landmarks
@@ -1260,6 +1342,8 @@ def solve_landmark_sync(
     recovered = state.recovered
     consistent_metric = state.consistent_metric
 
+    _check_cancelled(cancel_check)
+    _report_progress(progress_callback, "Final diagnostics")
     residual_landmark_ids = [
         landmark_id for landmark_id in landmark_ids if landmark_id in landmarks
     ]

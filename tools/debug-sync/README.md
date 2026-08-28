@@ -25,6 +25,10 @@ Landmark overlap, stored Empty vs pick, timed solve, per-observation residuals:
     --blend "/path/to/scene.blend" --out /tmp/pm-graph.txt
 ```
 
+Add `--leave-one-out` to time the accepted-camera leave-one-out report after
+the base solve. The probe also prints each relative-pose call live, including
+its stage and the number/time of PnP and mixed-refinement attempts.
+
 Recovered-still overlay (ground vs off-plane RMSE after `solve_landmark_sync`):
 
 ```sh

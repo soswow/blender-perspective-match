@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Callable
+
 import numpy as np
 
 from .. import geometry as core
@@ -27,6 +29,7 @@ from .projection import (
 )
 from .types import (
     SimilarityTransform,
+    SyncCancelled,
     SyncLineObservation,
     SyncMatchInput,
     SyncObservation,
@@ -1314,6 +1317,8 @@ def leave_one_out_landmark_report(
     lock_rotation: bool = False,
     lock_translation: bool = False,
     ground_slack: float | None = None,
+    cancel_check: Callable[[], bool] | None = None,
+    progress_callback: Callable[[int, int, str], None] | None = None,
 ) -> list[tuple[str, float, float]]:
     """Re-solve without each of the worst landmarks; report RMSE deltas.
 
@@ -1323,6 +1328,8 @@ def leave_one_out_landmark_report(
     # Deferred: solve.py imports this module.
     from .solve import solve_landmark_sync
 
+    if cancel_check is not None and cancel_check():
+        raise SyncCancelled("Sync cancelled")
     if baseline is None:
         baseline = solve_landmark_sync(
             matches,
@@ -1335,6 +1342,8 @@ def leave_one_out_landmark_report(
             lock_rotation=lock_rotation,
             lock_translation=lock_translation,
             ground_slack=ground_slack,
+            use_pose_cache=True,
+            cancel_check=cancel_check,
         )
     if not baseline.per_landmark_rmse_px:
         return []
@@ -1347,16 +1356,41 @@ def leave_one_out_landmark_report(
         baseline.per_landmark_rmse_px.items(),
         key=lambda item: -item[1],
     )[: max(1, int(top_k))]
+    accepted_match_ids = set(baseline.similarities)
+    accepted_matches = [
+        match for match in matches if match.match_id in accepted_match_ids
+    ]
+    accepted_observations = [
+        observation
+        for observation in observations
+        if observation.match_id in accepted_match_ids
+    ]
+    accepted_line_observations = [
+        observation
+        for observation in (line_observations or [])
+        if observation.match_id in accepted_match_ids
+    ]
+    initial_similarities = {
+        match_id: similarity
+        for match_id, similarity in baseline.similarities.items()
+        if match_id in accepted_match_ids
+    }
     report: list[tuple[str, float, float]] = []
-    for landmark_id, with_rmse in ranked:
+    total = len(ranked)
+    for index, (landmark_id, with_rmse) in enumerate(ranked):
+        if cancel_check is not None and cancel_check():
+            raise SyncCancelled("Sync cancelled")
+        name = names.get(landmark_id, landmark_id[:8])
+        if progress_callback is not None:
+            progress_callback(index, total, f"Checking {name}")
         filtered = [
             observation
-            for observation in observations
+            for observation in accepted_observations
             if observation.landmark_id != landmark_id
         ]
         filtered_lines = [
             observation
-            for observation in (line_observations or [])
+            for observation in accepted_line_observations
             if observation.landmark_id != landmark_id
         ]
         filtered_known = {
@@ -1375,17 +1409,19 @@ def leave_one_out_landmark_report(
             if landmark_id not in pair
         ]
         without = solve_landmark_sync(
-            matches,
+            accepted_matches,
             filtered,
             anchor_id=anchor_id,
             known_world=filtered_known,
             line_observations=filtered_lines,
             known_lines=filtered_known_lines,
             parallel_pairs=filtered_parallel,
-            initial_similarities=baseline.similarities,
+            initial_similarities=initial_similarities,
             lock_rotation=lock_rotation,
             lock_translation=lock_translation,
             ground_slack=ground_slack,
+            use_pose_cache=True,
+            cancel_check=cancel_check,
         )
         without_rmse = (
             float(without.mean_reprojection_px)
@@ -1394,15 +1430,16 @@ def leave_one_out_landmark_report(
         )
         report.append(
             (
-                names.get(landmark_id, landmark_id[:8]),
+                name,
                 float(with_rmse),
                 without_rmse,
             )
         )
+        if progress_callback is not None:
+            progress_callback(index + 1, total, f"Checked {name}")
     report.sort(
         key=lambda item: (
             -(item[1] - item[2]) if np.isfinite(item[2]) else -item[1]
         )
     )
     return report
-

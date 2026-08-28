@@ -678,9 +678,24 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
                     confidence_body.label(text=detail, icon="EMPTY_AXIS")
 
         row = sync_body.row(align=True)
-        row.operator("perspective_match.solve_sync", icon="FILE_REFRESH")
-        row.operator("perspective_match.diagnose_sync", text="Diagnose", icon="INFO")
-        row.operator("perspective_match.clear_sync", text="Clear", icon="X")
+        if operators.diagnose_sync_is_running():
+            status = row.row(align=True)
+            status.enabled = False
+            status.label(text="Diagnosing…", icon="INFO")
+            row.operator(
+                "perspective_match.cancel_diagnose_sync",
+                text="Cancel",
+                icon="X",
+            )
+        else:
+            row.operator("perspective_match.solve_sync", icon="FILE_REFRESH")
+            row.operator_context = "INVOKE_DEFAULT"
+            row.operator(
+                "perspective_match.diagnose_sync",
+                text="Diagnose",
+                icon="INFO",
+            )
+            row.operator("perspective_match.clear_sync", text="Clear", icon="X")
         # Full-width rows — avoid property-split pushing controls to mid-panel.
         lock_row = sync_body.row(align=True)
         lock_row.use_property_split = False

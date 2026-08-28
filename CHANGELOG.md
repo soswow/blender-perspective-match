@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Diagnose now runs in the background with progress plus Esc / Cancel support
 - The landmark list can be filtered to picks defined in the active match
 - Vanishing Point Lines can flip X/Y infinity polarity per match, and each axis button shows its line count
 - Adjusted Camera control keeps reading the live Blender camera so external pose and FOV edits survive match switching and View Match Camera
@@ -44,6 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Original Plate keeps imported Brown–Conrady D and only switches the background; estimated λ is still cleared
 
 ### Fixed
+- Diagnose no longer spends minutes re-registering rejected cameras during leave-one-out and mismatched-pick checks
 - VP error labels and lens refinement keep nearly parallel line bundles at local pixel scale instead of exploding for far-away vanishing points
 - Manual PP Offset keeps the undistorted plate visible while dragging and rebuilds it after applying the new principal point
 - Diagnose / Solve Sync no longer error when Is-Parallel-To lines are in the graph

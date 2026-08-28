@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 import bpy
 import numpy as np
@@ -2899,10 +2900,29 @@ def _apply_sync_landmark_diagnostics(context: bpy.types.Context, result) -> None
         landmark.rmse_px = float(rmse) if rmse is not None else 0.0
 
 
-def diagnose_sync(context: bpy.types.Context):
-    """Run sync solve for diagnostics without applying Empty transforms."""
-    from ..core import sync as sync_module
+@dataclass
+class DiagnoseSyncPrep:
+    """bpy-free inputs plus main-thread notes for a Diagnose worker."""
 
+    matches: list
+    observations: list
+    known_world: dict
+    line_observations: list
+    known_lines: dict
+    parallel_pairs: list
+    anchor_id: str
+    ground_frame_note: str
+    auto_origin_notes: list[str]
+    warnings: list[str]
+    skipped_matches: int
+    excluded_landmarks: int
+    lock_rotation: bool
+    lock_translation: bool
+    ground_slack: float
+
+
+def prepare_diagnose_sync(context: bpy.types.Context) -> DiagnoseSyncPrep:
+    """Validate Diagnose and copy all bpy-owned inputs on the main thread."""
     space = properties.workspace(context)
     anchor = properties.anchor_root(context)
     if anchor is None:
@@ -2925,55 +2945,111 @@ def diagnose_sync(context: bpy.types.Context):
     if anchor.name not in {item.match_id for item in matches}:
         raise ValueError("Anchor match needs a solved camera")
 
-    result = sync_module.solve_landmark_sync(
-        matches,
-        observations,
-        anchor_id=anchor.name,
+    return DiagnoseSyncPrep(
+        matches=matches,
+        observations=observations,
         known_world=known_world,
         line_observations=line_observations,
         known_lines=known_lines,
         parallel_pairs=parallel_pairs,
+        anchor_id=anchor.name,
+        ground_frame_note=ground_frame_note,
+        auto_origin_notes=auto_origin_notes,
+        warnings=warnings,
+        skipped_matches=sum(
+            1
+            for root in properties.iter_match_roots()
+            if not getattr(root.pm_session, "sync_enabled", True)
+        ),
+        excluded_landmarks=sum(
+            1
+            for landmark in space.landmarks
+            if not getattr(landmark, "use_in_sync", True)
+        ),
         lock_rotation=bool(space.lock_rotation),
         lock_translation=bool(space.lock_translation),
-        use_pose_cache=True,
         ground_slack=float(getattr(space, "ground_slack", 0.02)),
     )
+
+
+def run_diagnose_sync(
+    prep: DiagnoseSyncPrep,
+    *,
+    cancel_check: Callable[[], bool] | None = None,
+    progress_callback: Callable[[int, int, str], None] | None = None,
+):
+    """Run the bpy-free Diagnose solve; safe for a worker thread."""
+    from ..core import sync as sync_module
+
+    total_steps = 6
+
+    def _base_progress(label: str) -> None:
+        if progress_callback is not None:
+            progress_callback(0, total_steps, label)
+
+    result = sync_module.solve_landmark_sync(
+        prep.matches,
+        prep.observations,
+        anchor_id=prep.anchor_id,
+        known_world=prep.known_world,
+        line_observations=prep.line_observations,
+        known_lines=prep.known_lines,
+        parallel_pairs=prep.parallel_pairs,
+        lock_rotation=prep.lock_rotation,
+        lock_translation=prep.lock_translation,
+        use_pose_cache=True,
+        ground_slack=prep.ground_slack,
+        cancel_check=cancel_check,
+        progress_callback=_base_progress,
+    )
+    if progress_callback is not None:
+        progress_callback(1, total_steps, "Camera graph solved")
     if result.mean_reprojection_px > 8.0 or not result.success:
+        def _leave_one_out_progress(step: int, total: int, label: str) -> None:
+            if progress_callback is not None:
+                progress_callback(1 + step, 1 + total, label)
+
         result.leave_one_out = sync_module.leave_one_out_landmark_report(
-            matches,
-            observations,
-            anchor_id=anchor.name,
-            known_world=known_world,
-            line_observations=line_observations,
-            known_lines=known_lines,
-            parallel_pairs=parallel_pairs,
+            prep.matches,
+            prep.observations,
+            anchor_id=prep.anchor_id,
+            known_world=prep.known_world,
+            line_observations=prep.line_observations,
+            known_lines=prep.known_lines,
+            parallel_pairs=prep.parallel_pairs,
             top_k=5,
             baseline=result if result.per_landmark_rmse_px else None,
-            lock_rotation=bool(space.lock_rotation),
-            lock_translation=bool(space.lock_translation),
-            ground_slack=float(getattr(space, "ground_slack", 0.02)),
+            lock_rotation=prep.lock_rotation,
+            lock_translation=prep.lock_translation,
+            ground_slack=prep.ground_slack,
+            cancel_check=cancel_check,
+            progress_callback=_leave_one_out_progress,
         )
+    if progress_callback is not None:
+        progress_callback(total_steps, total_steps, "Complete")
+    return result
+
+
+def apply_diagnose_sync_result(
+    context: bpy.types.Context,
+    prep: DiagnoseSyncPrep,
+    result,
+):
+    """Write Diagnose RMSE/status onto Blender data on the main thread."""
+    space = properties.workspace(context)
     _apply_sync_landmark_diagnostics(context, result)
 
     parts = []
-    if ground_frame_note:
-        parts.append(ground_frame_note)
-    if auto_origin_notes:
-        parts.append("Auto origin: " + ", ".join(auto_origin_notes))
-    skipped_matches = sum(
-        1
-        for root in properties.iter_match_roots()
-        if not getattr(root.pm_session, "sync_enabled", True)
-    )
-    if skipped_matches:
-        parts.append(f"{skipped_matches} match(es) sync-disabled")
-    excluded = sum(
-        1 for landmark in space.landmarks if not getattr(landmark, "use_in_sync", True)
-    )
-    if excluded:
-        parts.append(f"{excluded} landmark(s) excluded from sync")
-    if warnings:
-        parts.append("Known 3D: " + "; ".join(warnings[:3]))
+    if prep.ground_frame_note:
+        parts.append(prep.ground_frame_note)
+    if prep.auto_origin_notes:
+        parts.append("Auto origin: " + ", ".join(prep.auto_origin_notes))
+    if prep.skipped_matches:
+        parts.append(f"{prep.skipped_matches} match(es) sync-disabled")
+    if prep.excluded_landmarks:
+        parts.append(f"{prep.excluded_landmarks} landmark(s) excluded from sync")
+    if prep.warnings:
+        parts.append("Known 3D: " + "; ".join(prep.warnings[:3]))
     parts.append(result.message)
     if result.per_landmark_rmse_px:
         ranked = sorted(
@@ -3019,6 +3095,13 @@ def diagnose_sync(context: bpy.types.Context):
     space.sync_status = " | ".join(parts)
     properties.tag_viewport_redraw(context)
     return result
+
+
+def diagnose_sync(context: bpy.types.Context):
+    """Blocking Diagnose wrapper for scripts and operator redo."""
+    prep = prepare_diagnose_sync(context)
+    result = run_diagnose_sync(prep)
+    return apply_diagnose_sync_result(context, prep, result)
 
 
 def solve_and_apply_sync(context: bpy.types.Context):

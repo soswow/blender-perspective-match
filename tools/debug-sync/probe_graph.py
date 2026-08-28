@@ -50,6 +50,11 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--out", default="")
     parser.add_argument("--no-solve", action="store_true")
     parser.add_argument(
+        "--leave-one-out",
+        action="store_true",
+        help="Also time Diagnose's accepted-graph leave-one-out report",
+    )
+    parser.add_argument(
         "--focus",
         default="",
         help="Comma-separated landmark name substrings to detail (default: bottom,id325)",
@@ -336,13 +341,22 @@ def main(argv: list[str]) -> int:
     orig_ba = ba_module._bundle_adjust_registration
     orig_resect = solve_module._resect_skipped_matches
     orig_relative = pose_module._relative_pose_from_correspondences
+    orig_pnp = pose_module._pnp_similarity
+    orig_mixed = pose_module._refine_rigid_mixed
     relative_calls = {"n": 0, "s": 0.0}
+    pose_calls = {"pnp_n": 0, "pnp_s": 0.0, "mixed_n": 0, "mixed_s": 0.0}
+    active_stage = {"name": "solve"}
 
     def timed_register(*args, **kwargs):
         started = time.perf_counter()
-        result = orig_register(*args, **kwargs)
-        timings["register"] = time.perf_counter() - started
-        return result
+        previous = active_stage["name"]
+        active_stage["name"] = "register"
+        try:
+            result = orig_register(*args, **kwargs)
+            timings["register"] = time.perf_counter() - started
+            return result
+        finally:
+            active_stage["name"] = previous
 
     def timed_ba(*args, **kwargs):
         started = time.perf_counter()
@@ -352,16 +366,63 @@ def main(argv: list[str]) -> int:
 
     def timed_resect(*args, **kwargs):
         started = time.perf_counter()
-        result = orig_resect(*args, **kwargs)
-        timings["resect"] = time.perf_counter() - started
-        return result
+        previous = active_stage["name"]
+        active_stage["name"] = "resect"
+        try:
+            result = orig_resect(*args, **kwargs)
+            timings["resect"] = time.perf_counter() - started
+            return result
+        finally:
+            active_stage["name"] = previous
+
+    def timed_pnp(*args, **kwargs):
+        started = time.perf_counter()
+        try:
+            return orig_pnp(*args, **kwargs)
+        finally:
+            pose_calls["pnp_n"] += 1
+            pose_calls["pnp_s"] += time.perf_counter() - started
+
+    def timed_mixed(*args, **kwargs):
+        started = time.perf_counter()
+        try:
+            return orig_mixed(*args, **kwargs)
+        finally:
+            pose_calls["mixed_n"] += 1
+            pose_calls["mixed_s"] += time.perf_counter() - started
 
     def timed_relative(*args, **kwargs):
         started = time.perf_counter()
-        result = orig_relative(*args, **kwargs)
-        relative_calls["n"] += 1
-        relative_calls["s"] += time.perf_counter() - started
-        return result
+        call_number = relative_calls["n"] + 1
+        anchor_id = args[0] if len(args) > 0 else kwargs.get("anchor_id", "?")
+        other_id = args[1] if len(args) > 1 else kwargs.get("other_id", "?")
+        observations_by_landmark = (
+            args[2] if len(args) > 2 else kwargs.get("observations_by_landmark", {})
+        )
+        known_world = args[4] if len(args) > 4 else kwargs.get("known_world")
+        before = dict(pose_calls)
+        print(
+            f"[pose {call_number:02d}] {active_stage['name']} "
+            f"{_short_match(anchor_id)} -> {_short_match(other_id)} "
+            f"landmarks={len(observations_by_landmark)} "
+            f"known3d={len(known_world or {})} "
+            f"cache={int(bool(kwargs.get('use_pose_cache', False)))}",
+            flush=True,
+        )
+        try:
+            return orig_relative(*args, **kwargs)
+        finally:
+            elapsed = time.perf_counter() - started
+            relative_calls["n"] += 1
+            relative_calls["s"] += elapsed
+            print(
+                f"[pose {call_number:02d}] done {elapsed:.2f}s "
+                f"pnp={pose_calls['pnp_n'] - before['pnp_n']} "
+                f"({pose_calls['pnp_s'] - before['pnp_s']:.2f}s) "
+                f"mixed={pose_calls['mixed_n'] - before['mixed_n']} "
+                f"({pose_calls['mixed_s'] - before['mixed_s']:.2f}s)",
+                flush=True,
+            )
 
     solve_module._register_from_relative_pose = timed_register
     ba_module._bundle_adjust_registration = timed_ba
@@ -369,6 +430,8 @@ def main(argv: list[str]) -> int:
     solve_module._resect_skipped_matches = timed_resect
     pose_module._relative_pose_from_correspondences = timed_relative
     solve_module._relative_pose_from_correspondences = timed_relative
+    pose_module._pnp_similarity = timed_pnp
+    pose_module._refine_rigid_mixed = timed_mixed
 
     log()
     log("=== solve_landmark_sync ===")
@@ -394,6 +457,32 @@ def main(argv: list[str]) -> int:
             f"resect={timings.get('resect', float('nan')):.2f} "
             f"relative_pose n={relative_calls['n']} {relative_calls['s']:.2f}s"
         )
+        log(
+            f"pose_inner pnp n={pose_calls['pnp_n']} {pose_calls['pnp_s']:.2f}s "
+            f"mixed n={pose_calls['mixed_n']} {pose_calls['mixed_s']:.2f}s"
+        )
+        if args.leave_one_out:
+            leave_t0 = time.perf_counter()
+            leave_report = sync_module.leave_one_out_landmark_report(
+                matches,
+                observations,
+                anchor_id=anchor.name,
+                known_world=known_world,
+                line_observations=line_observations,
+                known_lines=known_lines,
+                parallel_pairs=parallel,
+                top_k=5,
+                baseline=result,
+            )
+            leave_s = time.perf_counter() - leave_t0
+            log(f"leave_one_out_s={leave_s:.2f}")
+            log(
+                "leave_one_out="
+                + ", ".join(
+                    f"{name} {with_rmse:.1f}->{without_rmse:.1f}px"
+                    for name, with_rmse, without_rmse in leave_report
+                )
+            )
         log("per_match=" + ", ".join(
             f"{_short_match(match_id)}={rmse:.1f}"
             for match_id, rmse in sorted(result.per_match_rmse_px.items())

@@ -708,6 +708,23 @@ def main() -> None:
                 result.message,
             )
 
+            # Diagnose copies bpy data on main, solves pure data, then applies on main.
+            diagnose_progress = []
+            diagnose_prep = scene.prepare_diagnose_sync(bpy.context)
+            diagnose_result = scene.run_diagnose_sync(
+                diagnose_prep,
+                progress_callback=lambda step, total, label: diagnose_progress.append(
+                    (step, total, label)
+                ),
+            )
+            assert diagnose_result.success, diagnose_result.message
+            scene.apply_diagnose_sync_result(
+                bpy.context,
+                diagnose_prep,
+                diagnose_result,
+            )
+            assert diagnose_progress[-1][:2] == (6, 6), diagnose_progress[-1]
+
             # Landmark list filter keeps only picks defined in the active match.
             local_landmark = space.landmarks.add()
             local_landmark.item_id = "smoke-local-a"

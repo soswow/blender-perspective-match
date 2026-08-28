@@ -8,6 +8,7 @@ from itertools import combinations
 import math
 import os
 import threading
+from typing import Callable
 
 import numpy as np
 
@@ -50,6 +51,7 @@ from .projection import (
 )
 from .types import (
     SimilarityTransform,
+    SyncCancelled,
     SyncLineObservation,
     SyncMatchInput,
     SyncObservation,
@@ -58,6 +60,13 @@ from .types import (
     _observation_scale,
     _pair_scale,
 )
+
+
+def _check_cancelled(cancel_check: Callable[[], bool] | None) -> None:
+    """Raise at bounded solver checkpoints when cancellation was requested."""
+    if cancel_check is not None and cancel_check():
+        raise SyncCancelled("Sync cancelled")
+
 
 def _estimate_rigid_from_rays(
     anchor_id: str,
@@ -2285,6 +2294,9 @@ def _relative_pose_from_correspondences(
     lock_rotation: bool = False,
     lock_translation: bool = False,
     use_pose_cache: bool = False,
+    cancel_check: Callable[[], bool] | None = None,
+    initial_only: bool = False,
+    best_candidate_out: list[SimilarityTransform] | None = None,
 ) -> tuple[SimilarityTransform | None, str]:
     """Register other from free 2D↔2D and/or Known 3D points/lines.
 
@@ -2294,7 +2306,10 @@ def _relative_pose_from_correspondences(
     lines use 2D segments in the other still. Free 2D↔2D lines need ≥3 stills
     (handled after two matches are registered).
     """
-    if use_pose_cache:
+    _check_cancelled(cancel_check)
+    # An initial-only diagnostic depends on its supplied seed. Failed cached
+    # entries also do not retain the best candidate needed for a local retry.
+    if use_pose_cache and not initial_only and best_candidate_out is None:
         cache_key = (
             "rel",
             _pair_correspondence_key(
@@ -2327,6 +2342,9 @@ def _relative_pose_from_correspondences(
             initial_similarity=initial_similarity,
             lock_rotation=lock_rotation,
             lock_translation=lock_translation,
+            cancel_check=cancel_check,
+            initial_only=initial_only,
+            best_candidate_out=best_candidate_out,
         )
         with _PAIR_CACHE_LOCK:
             _PAIR_CACHE[cache_key] = (_cached_similarity(solved), detail)
@@ -2343,6 +2361,9 @@ def _relative_pose_from_correspondences(
         initial_similarity=initial_similarity,
         lock_rotation=lock_rotation,
         lock_translation=lock_translation,
+        cancel_check=cancel_check,
+        initial_only=initial_only,
+        best_candidate_out=best_candidate_out,
     )
 
 
@@ -2360,8 +2381,12 @@ def _compute_relative_pose_from_correspondences(
     *,
     lock_rotation: bool = False,
     lock_translation: bool = False,
+    cancel_check: Callable[[], bool] | None = None,
+    initial_only: bool = False,
+    best_candidate_out: list[SimilarityTransform] | None = None,
 ) -> tuple[SimilarityTransform | None, str]:
     """Uncached pairwise register (see ``_relative_pose_from_correspondences``)."""
+    _check_cancelled(cancel_check)
     if lock_rotation and lock_translation:
         return SimilarityTransform(), ""
     known_ids = set(known_world or {})
@@ -2459,6 +2484,7 @@ def _compute_relative_pose_from_correspondences(
     if initial_similarity is not None and (
         points_shared or known_line_constraints
     ):
+        _check_cancelled(cancel_check)
         lock_warm_scale = abs(float(initial_similarity.scale) - 1.0) < 1.0e-6
         warm_seed = initial_similarity
         if lock_rotation or lock_translation:
@@ -2503,7 +2529,20 @@ def _compute_relative_pose_from_correspondences(
         if warm_errors:
             warm_rmse = float(np.sqrt(np.mean(np.square(warm_errors))))
             if warm_rmse <= ACCEPT_RMSE_PX:
+                if best_candidate_out is not None:
+                    best_candidate_out.append(_copy_similarity(warm))
                 return warm, ""
+            if initial_only:
+                if best_candidate_out is not None:
+                    best_candidate_out.append(_copy_similarity(warm))
+                return (
+                    None,
+                    f"Local diagnostic pose for '{other_id}' stayed at "
+                    f"{warm_rmse:.0f} px",
+                )
+
+    if initial_only:
+        return None, f"No warm pose is available for '{other_id}'"
 
     candidates: list[SimilarityTransform] = []
     mixed_kwargs = {
@@ -2514,6 +2553,7 @@ def _compute_relative_pose_from_correspondences(
     }
 
     if has_metric_pnp and not (lock_rotation and lock_translation):
+        _check_cancelled(cancel_check)
         for seed in _planar_homography_similarities(
             np.stack(points_shared),
             np.stack(points_image),
@@ -2594,6 +2634,7 @@ def _compute_relative_pose_from_correspondences(
 
     if can_joint:
         for seed in _mixed_pose_seeds(anchor, other, lock_rotation=lock_rotation, lock_translation=lock_translation):
+            _check_cancelled(cancel_check)
             candidates.append(
                 _refine_rigid_mixed(
                     seed,
@@ -2622,6 +2663,7 @@ def _compute_relative_pose_from_correspondences(
         # Multi-start: pure Known 3D has no 2D↔2D essential seed — try yaw grid.
         # Rigid first (s=1); free-scale only if that cannot lock a pose.
         for allow_scale in (False, True):
+            _check_cancelled(cancel_check)
             best_pnp: SimilarityTransform | None = None
             best_pnp_rmse = float("inf")
             seeds = _mixed_pose_seeds(
@@ -2633,6 +2675,7 @@ def _compute_relative_pose_from_correspondences(
                 lock_translation=lock_translation,
             )
             for seed in seeds:
+                _check_cancelled(cancel_check)
                 solved = _pnp_similarity(
                     other_id,
                     np.stack(points_shared),
@@ -2683,6 +2726,7 @@ def _compute_relative_pose_from_correspondences(
 
     if can_pnl_only:
         for seed in _mixed_pose_seeds(anchor, other, lock_rotation=lock_rotation, lock_translation=lock_translation):
+            _check_cancelled(cancel_check)
             candidates.append(
                 _refine_rigid_mixed(
                     seed,
@@ -2704,6 +2748,7 @@ def _compute_relative_pose_from_correspondences(
     best: SimilarityTransform | None = None
     best_rmse = float("inf")
     for candidate in candidates:
+        _check_cancelled(cancel_check)
         errors = _reprojection_errors_for_similarity(
             candidate,
             free_pairs,
@@ -2747,6 +2792,8 @@ def _compute_relative_pose_from_correspondences(
                 best_rmse = pairs_rmse
 
     if best is None or best_rmse > ACCEPT_RMSE_PX:
+        if best is not None and best_candidate_out is not None:
+            best_candidate_out.append(_copy_similarity(best))
         detail = (
             f"Sync for '{other_id}' failed (reproj ~"
             f"{best_rmse if best is not None else float('nan'):.0f} px). "
@@ -2772,6 +2819,9 @@ def _compute_relative_pose_from_correspondences(
             "on each match"
         )
         return None, detail
+
+    if best_candidate_out is not None:
+        best_candidate_out.append(_copy_similarity(best))
 
     # Soft parallel nudge after a geometry-locked pose — never let parallel
     # pick the pose (it was overpowering point RMSE by ~focal scaling).
@@ -3377,8 +3427,10 @@ def _register_from_relative_pose(
     lock_rotation: bool = False,
     lock_translation: bool = False,
     use_pose_cache: bool = False,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> tuple[dict[str, SimilarityTransform] | None, str]:
     """Register free matches vs anchor, then bridge via triangulated landmarks."""
+    _check_cancelled(cancel_check)
     similarities: dict[str, SimilarityTransform] = {
         anchor_id: SimilarityTransform(),
     }
@@ -3440,6 +3492,7 @@ def _register_from_relative_pose(
         )
 
     def solve_vs_anchor(match_id: str) -> tuple[str, SimilarityTransform | None, str]:
+        _check_cancelled(cancel_check)
         solved, detail = _relative_pose_from_correspondences(
             anchor_id,
             match_id,
@@ -3453,6 +3506,7 @@ def _register_from_relative_pose(
             lock_rotation=lock_rotation,
             lock_translation=lock_translation,
             use_pose_cache=use_pose_cache,
+            cancel_check=cancel_check,
         )
         return match_id, solved, detail
 
@@ -3484,6 +3538,7 @@ def _register_from_relative_pose(
 
     max_passes = len(pending) + 1
     for _pass in range(max_passes):
+        _check_cancelled(cancel_check)
         if not pending:
             break
         progressed = False
@@ -3543,6 +3598,7 @@ def _register_from_relative_pose(
             landmarks,
             known_world_ids,
         ):
+            _check_cancelled(cancel_check)
             collected = _collect_pnp_correspondences(
                 match_id,
                 observations_by_landmark,

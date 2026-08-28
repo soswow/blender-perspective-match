@@ -8,6 +8,11 @@ import numpy as np
 
 from .. import geometry as core
 
+
+class SyncCancelled(RuntimeError):
+    """Raised when a cancellable sync/Diagnose solve is stopped."""
+
+
 @dataclass
 class SimilarityTransform:
     """Maps a match private world into shared (anchor) world: ``s R x + t``."""

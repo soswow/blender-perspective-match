@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import unittest
+from unittest import mock
 
 import numpy as np
 
 from match_perspective import core
 from match_perspective.core import sync
+from match_perspective.core.sync import solve as solve_module
 from sync_fixtures import _look_at_rotation, _project, _rodrigues_z, _synthetic_scene
 
 
@@ -61,6 +63,80 @@ class BundleAdjustSyncTests(unittest.TestCase):
         self.assertTrue(name)
         self.assertGreater(with_rmse, 0.0)
         self.assertGreaterEqual(without_rmse, 0.0)
+
+    def test_leave_one_out_keeps_only_baseline_registered_matches(self) -> None:
+        """Rejected cameras must not be globally re-registered per candidate."""
+        matches, observations, _true, _center, _shared = _synthetic_scene(
+            with_ground=True
+        )
+        matches = list(matches) + [matches[1].__class__("rejected", matches[1].calibration)]
+        observations = list(observations) + [
+            sync.SyncObservation("rejected", "p4", 50.0, 60.0),
+        ]
+        baseline = sync.SyncSolveResult(
+            similarities={
+                "anchor": sync.SimilarityTransform(),
+                "other": sync.SimilarityTransform(),
+            },
+            landmarks={"p4": np.zeros(3)},
+            mean_reprojection_px=25.0,
+            per_match_rmse_px={"anchor": 10.0, "other": 30.0},
+            per_landmark_rmse_px={"p4": 50.0},
+            message="partial",
+            success=True,
+        )
+        solved = sync.SyncSolveResult(
+            similarities=baseline.similarities,
+            landmarks=baseline.landmarks,
+            mean_reprojection_px=8.0,
+            per_match_rmse_px={},
+            per_landmark_rmse_px={},
+            message="fast",
+            success=True,
+        )
+        with mock.patch.object(
+            solve_module,
+            "solve_landmark_sync",
+            return_value=solved,
+        ) as solve_mock:
+            report = sync.leave_one_out_landmark_report(
+                matches,
+                observations,
+                anchor_id="anchor",
+                baseline=baseline,
+                top_k=1,
+            )
+
+        self.assertTrue(report)
+        called_matches, called_observations = solve_mock.call_args.args[:2]
+        self.assertEqual(
+            {match.match_id for match in called_matches},
+            {"anchor", "other"},
+        )
+        self.assertNotIn(
+            "rejected",
+            {observation.match_id for observation in called_observations},
+        )
+        self.assertTrue(solve_mock.call_args.kwargs["use_pose_cache"])
+
+    def test_leave_one_out_honours_cancellation(self) -> None:
+        """A queued Diagnose cancellation must stop before another re-solve."""
+        matches, observations, _true, _center, _shared = _synthetic_scene(
+            with_ground=True
+        )
+        baseline = sync.solve_landmark_sync(
+            matches,
+            observations,
+            anchor_id="anchor",
+        )
+        with self.assertRaises(sync.SyncCancelled):
+            sync.leave_one_out_landmark_report(
+                matches,
+                observations,
+                anchor_id="anchor",
+                baseline=baseline,
+                cancel_check=lambda: True,
+            )
 
     def test_auto_downweight_marks_severe_outlier(self) -> None:
         """Severe landmark RMSE should soft-downweight that landmark for BA."""
@@ -577,5 +653,4 @@ def _cluster_and_edge_scene() -> tuple:
             )
         )
     return matches, observations, true_sim, center_private, shared_center
-
 
