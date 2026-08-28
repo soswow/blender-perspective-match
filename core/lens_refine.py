@@ -17,7 +17,7 @@ from . import geometry as core
 from . import sync as sync_module
 
 
-# Soft prior: 1 px VP line RMS ≈ this many sync pixels in the joint cost.
+# Soft prior: 1 px endpoint-equivalent VP line RMS ≈ this many sync pixels.
 DEFAULT_VP_WEIGHT = 4.0
 # Absolute VP ceilings only used when no baseline is available.
 DEFAULT_MAX_VP_LINE_RMS = 40.0

@@ -663,8 +663,8 @@ class PMSession(bpy.types.PropertyGroup):
     show_vp_error_labels: bpy.props.BoolProperty(
         name="Show Error Label",
         description=(
-            "Draw each VP segment's residual to the current camera's ideal "
-            "vanishing point (pixels)"
+            "Draw each VP segment's local direction error against the current "
+            "camera's ideal vanishing point (endpoint-equivalent pixels)"
         ),
         default=False,
         update=_redraw,
@@ -769,7 +769,8 @@ class PMSession(bpy.types.PropertyGroup):
     fov_zy: bpy.props.FloatProperty(default=0.0, options={"HIDDEN"})
     fov_zx: bpy.props.FloatProperty(default=0.0, options={"HIDDEN"})
     residual_degrees: bpy.props.FloatProperty(default=0.0, options={"HIDDEN"})
-    # Length-weighted RMS of VP segments vs ideal VPs from the current camera.
+    # Length-weighted RMS of local VP-segment direction misses from the
+    # current camera.
     vp_line_rms_px: bpy.props.FloatProperty(default=-1.0, options={"HIDDEN"})
     status: bpy.props.StringProperty(default="Load a reference image")
     error: bpy.props.StringProperty(default="")

@@ -50,7 +50,7 @@ VP lines determine an axis but cannot distinguish its two infinity directions. *
 Then draw lines (or auto-detect in 3-point mode):
 
 1. Choose the colored axis.
-2. Click **Draw / Edit Lines**. Optional: enable **Snap to Edges** to refine each stroke on release onto a nearby image edge. Optional: enable **Show Error Label** to see each segment’s residual (px) beside the stroke.
+2. Click **Draw / Edit Lines**. Optional: enable **Snap to Edges** to refine each stroke on release onto a nearby image edge. Optional: enable **Show Error Label** to see each segment’s local direction error beside the stroke. The value is an endpoint-equivalent pixel miss over that stroke, so it remains comparable to pointing accuracy when a vanishing point is far off-screen or at infinity.
 3. Drag over straight edges that belong to that axis (clicks must land inside the camera frame).
 4. Click a line to select it; drag either endpoint handle to edit (release also re-snaps when Snap to Edges is on).
 5. Press **Delete/Backspace** to remove the selected line.

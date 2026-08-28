@@ -1963,9 +1963,13 @@ def ensure_match_ready(context: bpy.types.Context) -> bool:
         )
         store_calibration(settings, calibration)
     try:
-        apply_camera(context.scene, settings, calibration_from_settings(settings))
+        calibration = calibration_from_settings(settings)
+        apply_camera(context.scene, settings, calibration)
     except Exception:
         return False
+    line_bundles = line_bundles_from_settings(settings)
+    if any(line_bundles.values()):
+        _update_diagnostics(settings, line_bundles, calibration)
     root = properties.active_root(context)
     if root is not None and settings.sync_is_applied:
         from ..core import sync as sync_module

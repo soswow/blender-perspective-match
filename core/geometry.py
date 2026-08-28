@@ -1197,24 +1197,60 @@ def vp_ideal_segment_residual_px(
     axis: AxisId,
     ideal_segment: LineSegment,
 ) -> float | None:
-    """Perpendicular distance (px) of an already-undistorted segment to the ideal VP."""
+    """Endpoint-equivalent direction miss (px) of an undistorted VP segment."""
     vanishing = ideal_axis_vanishing_point(calibration, axis)
     if vanishing is None:
         return None
+    return _vp_segment_direction_residual_px(ideal_segment, vanishing)
+
+
+def _vp_segment_direction_residual_px(
+    segment: LineSegment,
+    vanishing: np.ndarray,
+) -> float:
+    """Return segment length × angular sine against a finite or infinite VP."""
+    segment_direction = np.array(
+        [segment.x2 - segment.x1, segment.y2 - segment.y1],
+        dtype=np.float64,
+    )
+    segment_pixel_length = float(np.linalg.norm(segment_direction))
+    if segment_pixel_length < 1.0e-12:
+        return 0.0
+
     point = _homogeneous_image_point(vanishing)
-    return abs(float(_line_homogeneous(ideal_segment) @ point))
+    if abs(float(point[2])) < 1.0e-10:
+        ideal_direction = point[:2]
+    else:
+        midpoint = np.array(
+            [
+                0.5 * (segment.x1 + segment.x2),
+                0.5 * (segment.y1 + segment.y2),
+            ],
+            dtype=np.float64,
+        )
+        ideal_direction = point[:2] - midpoint
+    ideal_length = float(np.linalg.norm(ideal_direction))
+    if ideal_length < 1.0e-12:
+        return 0.0
+
+    cross = (
+        segment_direction[0] * ideal_direction[1]
+        - segment_direction[1] * ideal_direction[0]
+    )
+    return abs(float(cross)) / ideal_length
 
 
 def vp_line_residual_rms(
     calibration: Calibration,
     line_bundles: dict[AxisId, list[LineSegment]],
 ) -> float:
-    """Length-weighted RMS of line-to-VP distances against the solved axes.
+    """Length-weighted RMS of local line-direction misses against solved axes.
 
     Projects each rotation column back to an ideal vanishing point, then
-    measures how far the undistorted VP segments miss those points. Prefer
-    this over the max angular residual when scoring lens trials — it keeps
-    every drawn segment honest, not just the worst axis direction.
+    measures each undistorted segment as length × angular sine to that VP.
+    This endpoint-equivalent pixel error stays local when a VP is far away or
+    at infinity. Prefer it over the max angular residual when scoring lens
+    trials — it keeps every drawn segment honest, not just the worst axis.
     """
     working_lines = undistort_line_bundles(
         line_bundles,
@@ -1230,10 +1266,9 @@ def vp_line_residual_rms(
         vanishing = ideal_axis_vanishing_point(calibration, axis)
         if vanishing is None:
             continue
-        point = _homogeneous_image_point(vanishing)
         for segment in segments:
             weight = max(segment_length(segment), 1.0)
-            residual = float(_line_homogeneous(segment) @ point)
+            residual = _vp_segment_direction_residual_px(segment, vanishing)
             weighted_sse += weight * residual * residual
             weight_sum += weight
     if weight_sum < 1.0e-12:

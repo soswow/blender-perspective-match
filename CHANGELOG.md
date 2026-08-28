@@ -43,6 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Original Plate keeps imported Brown–Conrady D and only switches the background; estimated λ is still cleared
 
 ### Fixed
+- VP error labels and lens refinement keep nearly parallel line bundles at local pixel scale instead of exploding for far-away vanishing points
 - Manual PP Offset keeps the undistorted plate visible while dragging and rebuilds it after applying the new principal point
 - Diagnose / Solve Sync no longer error when Is-Parallel-To lines are in the graph
 - Diagnose no longer errors when leave-one-out has to re-solve without a previous per-landmark RMSE

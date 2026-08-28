@@ -6,6 +6,8 @@ you move **horizontal FOV** and **principal-point offset** (optional **division 
 
 It does **not** touch landmarks or sync — only VP lines → locked-focal
 `refine_camera` → `vp_line_residual_rms` (same metric the lens-refine prior uses).
+The RMS is a local, endpoint-equivalent pixel direction error, so a far-away
+or infinite VP does not magnify sub-pixel stroke imprecision.
 
 ## What you get
 

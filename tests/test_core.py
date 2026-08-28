@@ -22,6 +22,57 @@ class CoreGeometryTests(unittest.TestCase):
         self.assertIsNotNone(vanishing)
         self.assertTrue(np.allclose(vanishing[:2], (50.0, 50.0), atol=1.0e-6))
 
+    def test_vp_segment_residual_stays_local_for_far_finite_vp(self) -> None:
+        """A sub-pixel slope miss must not explode at a distant finite VP."""
+        intrinsics = core.CameraIntrinsics(
+            fx=1000.0,
+            fy=1000.0,
+            cx=400.0,
+            cy=300.0,
+            image_width=800,
+            image_height=600,
+        )
+        direction = np.array([1.0, 0.0, 0.001], dtype=np.float64)
+        direction /= np.linalg.norm(direction)
+        camera_y = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+        rotation = np.column_stack(
+            (direction, camera_y, np.cross(direction, camera_y))
+        )
+        calibration = core.Calibration(
+            intrinsics=intrinsics,
+            rotation_w2c=rotation,
+        )
+        segment = core.LineSegment(100.0, 200.0, 500.0, 201.0)
+
+        residual = core.vp_ideal_segment_residual_px(calibration, "x", segment)
+
+        self.assertIsNotNone(residual)
+        self.assertGreater(residual, 0.8)
+        self.assertLess(residual, 1.2)
+        bundles = {"x": [segment], "y": [], "z": []}
+        self.assertLess(core.vp_line_residual_rms(calibration, bundles), 1.2)
+
+    def test_vp_segment_residual_uses_stroke_scale_at_infinity(self) -> None:
+        """An infinite VP reports endpoint miss, not focal-scaled angle."""
+        intrinsics = core.CameraIntrinsics(
+            fx=1000.0,
+            fy=1000.0,
+            cx=400.0,
+            cy=300.0,
+            image_width=800,
+            image_height=600,
+        )
+        calibration = core.Calibration(
+            intrinsics=intrinsics,
+            rotation_w2c=np.eye(3, dtype=np.float64),
+        )
+        segment = core.LineSegment(100.0, 200.0, 350.0, 202.0)
+
+        residual = core.vp_ideal_segment_residual_px(calibration, "x", segment)
+
+        self.assertIsNotNone(residual)
+        self.assertAlmostEqual(residual, 2.0, places=6)
+
     def test_length_weighting_prefers_long_inliers(self) -> None:
         vanishing = core.vanishing_point_from_lines(
             [
