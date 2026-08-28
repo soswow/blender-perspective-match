@@ -131,6 +131,17 @@ def _section(
     return header, body
 
 
+def _section_eye(header, data, prop: str) -> None:
+    """Eye toggle on a section header; empty label, hide on/off icons."""
+    header.prop(
+        data,
+        prop,
+        text="",
+        icon="HIDE_OFF" if getattr(data, prop) else "HIDE_ON",
+        emboss=False,
+    )
+
+
 def _mode_tool_active(workspace, mode: str) -> bool:
     return bool(workspace.is_modal and workspace.work_mode == mode)
 
@@ -245,13 +256,7 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             icon_value=icons.icon_id("vp_lines"),
             default_closed=True,
         )
-        line_header.prop(
-            settings,
-            "show_vp_overlay",
-            text="",
-            icon="HIDE_OFF" if settings.show_vp_overlay else "HIDE_ON",
-            emboss=False,
-        )
+        _section_eye(line_header, settings, "show_vp_overlay")
         if line_body is not None:
             line_body.prop(settings, "vp_mode", expand=True)
             line_body.prop(settings, "active_axis", expand=True)
@@ -298,9 +303,10 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
 
         adjusted_camera = scene.uses_adjusted_camera(settings)
 
-        _header, origin = _section(
+        origin_header, origin = _section(
             layout, "PM_origin", "Origin", "PIVOT_CURSOR", default_closed=True
         )
+        _section_eye(origin_header, settings, "show_origin_overlay")
         if origin is not None:
             origin.enabled = not adjusted_camera
             row = origin.row(align=True)
@@ -320,9 +326,10 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             )
 
 
-        _header, camera = _section(
+        camera_header, camera = _section(
             layout, "PM_camera", "Camera", "CAMERA_DATA", default_closed=True
         )
+        _section_eye(camera_header, settings, "show_camera_overlay")
         if camera is not None:
             camera.prop(settings, "camera_control", expand=True)
             if adjusted_camera:
@@ -478,13 +485,7 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
         sync_header, sync_body = _section(
             layout, "PM_sync", "Sync Matches", "LINKED", default_closed=True
         )
-        sync_header.prop(
-            workspace,
-            "show_landmark_overlay",
-            text="",
-            icon="HIDE_OFF" if workspace.show_landmark_overlay else "HIDE_ON",
-            emboss=False,
-        )
+        _section_eye(sync_header, workspace, "show_landmark_overlay")
         if sync_body is None:
             return
 

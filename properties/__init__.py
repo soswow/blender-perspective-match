@@ -696,6 +696,18 @@ class PMSession(bpy.types.PropertyGroup):
         default=True,
         update=_redraw,
     )
+    show_origin_overlay: bpy.props.BoolProperty(
+        name="Origin Guide",
+        description="Show the origin pick on the reference plate",
+        default=True,
+        update=_redraw,
+    )
+    show_camera_overlay: bpy.props.BoolProperty(
+        name="Camera Guides",
+        description="Show the principal-point marker on the reference plate",
+        default=True,
+        update=_redraw,
+    )
     show_vp_error_labels: bpy.props.BoolProperty(
         name="Show Error Label",
         description=(

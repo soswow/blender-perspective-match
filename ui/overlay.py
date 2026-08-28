@@ -952,7 +952,11 @@ def _draw_vp_geometry(context: bpy.types.Context, fill_shader, settings) -> None
 
 
 def _draw_placement(context: bpy.types.Context, fill_shader, settings) -> None:
-    if settings.origin_is_set:
+    workspace = properties.workspace(context)
+    origin_visible = settings.show_origin_overlay or (
+        workspace.is_modal and workspace.work_mode == "ORIGIN"
+    )
+    if origin_visible and settings.origin_is_set:
         origin = scene.image_to_region(
             context,
             settings.origin_image[0],
@@ -966,7 +970,11 @@ def _draw_placement(context: bpy.types.Context, fill_shader, settings) -> None:
         )
 
     # Light-blue PP marker when off-center, or while Manual PP Offset tool is active.
-    workspace = properties.workspace(context)
+    camera_visible = settings.show_camera_overlay or (
+        workspace.is_modal and workspace.work_mode == "PP"
+    )
+    if not camera_visible:
+        return
     show_pp = scene.principal_point_is_off_center(settings) or (
         workspace.is_modal and workspace.work_mode == "PP"
     )
@@ -1207,6 +1215,12 @@ def _draw_preview(context: bpy.types.Context, fill_shader, settings) -> None:
     start = _preview["start"]
     end = _preview["end"]
     if _preview["kind"] == "PP":
+        workspace = properties.workspace(context)
+        if not (
+            settings.show_camera_overlay
+            or (workspace.is_modal and workspace.work_mode == "PP")
+        ):
+            return
         point = scene.image_to_region(context, end[0], end[1])
         _draw_crosshair(
             fill_shader,
