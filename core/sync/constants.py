@@ -37,6 +37,12 @@ GROUND_SLACK_DEFAULT = 0.02
 # Soft Z residual at |z| = slack equals this many pixels before Huber.
 GROUND_Z_RESIDUAL_PX = 6.0
 
+# Default Known 3D XYZ slack in Blender units. 0 pins points to the Empty.
+KNOWN_3D_SLACK_DEFAULT = 0.0
+
+# Soft XYZ residual at |offset| = slack equals this many pixels before Huber.
+KNOWN_3D_RESIDUAL_PX = 6.0
+
 # LM clips log-scale to ± this. Hitting the floor collapses the match Empty
 # (det ≈ 0) so overlay corners project as noise and jump when the view pans.
 LOG_SCALE_CLIP = 18.0

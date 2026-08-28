@@ -3016,6 +3016,7 @@ class DiagnoseSyncPrep:
     lock_rotation: bool
     lock_translation: bool
     ground_slack: float
+    known_3d_slack: float
 
 
 def prepare_diagnose_sync(context: bpy.types.Context) -> DiagnoseSyncPrep:
@@ -3066,6 +3067,7 @@ def prepare_diagnose_sync(context: bpy.types.Context) -> DiagnoseSyncPrep:
         lock_rotation=bool(space.lock_rotation),
         lock_translation=bool(space.lock_translation),
         ground_slack=float(getattr(space, "ground_slack", 0.02)),
+        known_3d_slack=float(getattr(space, "known_3d_slack", 0.0)),
     )
 
 
@@ -3096,6 +3098,7 @@ def run_diagnose_sync(
         lock_translation=prep.lock_translation,
         use_pose_cache=True,
         ground_slack=prep.ground_slack,
+        known_3d_slack=prep.known_3d_slack,
         cancel_check=cancel_check,
         progress_callback=_base_progress,
     )
@@ -3119,6 +3122,7 @@ def run_diagnose_sync(
             lock_rotation=prep.lock_rotation,
             lock_translation=prep.lock_translation,
             ground_slack=prep.ground_slack,
+            known_3d_slack=prep.known_3d_slack,
             cancel_check=cancel_check,
             progress_callback=_leave_one_out_progress,
         )
@@ -3243,6 +3247,7 @@ def solve_and_apply_sync(context: bpy.types.Context):
         lock_translation=bool(space.lock_translation),
         use_pose_cache=True,
         ground_slack=float(getattr(space, "ground_slack", 0.02)),
+        known_3d_slack=float(getattr(space, "known_3d_slack", 0.0)),
     )
     _apply_sync_landmark_diagnostics(context, result)
     message = result.message
@@ -3362,6 +3367,7 @@ def refine_lenses_and_sync(context: bpy.types.Context):
         lock_translation=prep.lock_translation,
         share_lens=prep.share_lens,
         ground_slack=prep.ground_slack,
+        known_3d_slack=prep.known_3d_slack,
     )
     return apply_lens_refine_result(context, refine_result, prep.root_by_name)
 
@@ -3383,6 +3389,7 @@ class LensRefinePrep:
     lock_translation: bool = False
     share_lens: bool = True
     ground_slack: float | None = None
+    known_3d_slack: float | None = None
 
 
 def prepare_lens_refine(context: bpy.types.Context) -> LensRefinePrep:
@@ -3392,6 +3399,7 @@ def prepare_lens_refine(context: bpy.types.Context) -> LensRefinePrep:
     space = properties.workspace(context)
     share_lens = bool(getattr(space, "share_lens", True))
     ground_slack = float(getattr(space, "ground_slack", 0.02))
+    known_3d_slack = float(getattr(space, "known_3d_slack", 0.0))
     anchor = properties.anchor_root(context)
     if anchor is None:
         raise ValueError("Choose an anchor match first")
@@ -3475,6 +3483,7 @@ def prepare_lens_refine(context: bpy.types.Context) -> LensRefinePrep:
         lock_translation=bool(space.lock_translation),
         share_lens=share_lens,
         ground_slack=ground_slack,
+        known_3d_slack=known_3d_slack,
     )
 
 

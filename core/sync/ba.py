@@ -9,6 +9,7 @@ import numpy as np
 from .. import geometry as core
 from .constants import (
     GROUND_Z_RESIDUAL_PX,
+    KNOWN_3D_RESIDUAL_PX,
     OUTLIER_WEIGHT_FACTOR,
     RADIAL_WEIGHT_GAIN,
     SPATIAL_GRID_SIZE,
@@ -641,6 +642,8 @@ def _ba_raw_residuals_and_jacobian(
     fixed_line_directions: dict[str, np.ndarray] | None = None,
     ground_landmark_ids: list[str] | None = None,
     ground_slack: float = 0.0,
+    known_world_priors: dict[str, np.ndarray] | None = None,
+    known_3d_slack: float = 0.0,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Unweighted BA residuals and block-analytic Jacobian."""
     free_line_ids = free_line_ids or []
@@ -772,6 +775,23 @@ def _ba_raw_residuals_and_jacobian(
             row_z[start + 2] = spring
             jacobian_rows.append(row_z)
 
+    known_slack = max(float(known_3d_slack), 0.0)
+    if known_slack > 1.0e-12 and known_world_priors:
+        spring = KNOWN_3D_RESIDUAL_PX / known_slack
+        for landmark_id, origin in known_world_priors.items():
+            if landmark_id not in landmark_offset:
+                continue
+            point_shared = landmarks.get(landmark_id)
+            if point_shared is None:
+                continue
+            delta = point_shared - np.asarray(origin, dtype=np.float64).reshape(3)
+            start = landmark_offset[landmark_id]
+            for axis in range(3):
+                residuals.append(spring * float(delta[axis]))
+                row_axis = np.zeros(column_count, dtype=np.float64)
+                row_axis[start + axis] = spring
+                jacobian_rows.append(row_axis)
+
     # Lines: pose FD + free-midpoint FD (directions stay fixed from the seed).
     for landmark_id, _seed_point, direction, observation in line_constraints:
         match_id = observation.match_id
@@ -860,6 +880,8 @@ def _ba_residual_vector(
     fixed_line_directions: dict[str, np.ndarray] | None = None,
     ground_landmark_ids: list[str] | None = None,
     ground_slack: float = 0.0,
+    known_world_priors: dict[str, np.ndarray] | None = None,
+    known_3d_slack: float = 0.0,
 ) -> np.ndarray:
     """Joint reprojection residuals for free poses + free landmarks (+ lines)."""
     residual_array, _jacobian = _ba_raw_residuals_and_jacobian(
@@ -882,6 +904,8 @@ def _ba_residual_vector(
         fixed_line_directions=fixed_line_directions,
         ground_landmark_ids=ground_landmark_ids,
         ground_slack=ground_slack,
+        known_world_priors=known_world_priors,
+        known_3d_slack=known_3d_slack,
     )
     return residual_array * _robust_weights(residual_array, huber_delta)
 
@@ -995,6 +1019,8 @@ def _bundle_adjust_registration(
     max_free_lines: int = 24,
     ground_landmark_ids: list[str] | None = None,
     ground_slack: float = 0.0,
+    known_world_priors: dict[str, np.ndarray] | None = None,
+    known_3d_slack: float = 0.0,
 ) -> tuple[
     dict[str, SimilarityTransform],
     dict[str, np.ndarray],
@@ -1114,6 +1140,8 @@ def _bundle_adjust_registration(
         "fixed_line_directions": fixed_line_directions,
         "ground_landmark_ids": list(ground_landmark_ids or ()),
         "ground_slack": float(ground_slack),
+        "known_world_priors": known_world_priors or {},
+        "known_3d_slack": float(known_3d_slack),
     }
     damping = 1.0e-2
     previous_cost = float("inf")
@@ -1317,6 +1345,7 @@ def leave_one_out_landmark_report(
     lock_rotation: bool = False,
     lock_translation: bool = False,
     ground_slack: float | None = None,
+    known_3d_slack: float | None = None,
     cancel_check: Callable[[], bool] | None = None,
     progress_callback: Callable[[int, int, str], None] | None = None,
 ) -> list[tuple[str, float, float]]:
@@ -1342,6 +1371,7 @@ def leave_one_out_landmark_report(
             lock_rotation=lock_rotation,
             lock_translation=lock_translation,
             ground_slack=ground_slack,
+            known_3d_slack=known_3d_slack,
             use_pose_cache=True,
             cancel_check=cancel_check,
         )
@@ -1420,6 +1450,7 @@ def leave_one_out_landmark_report(
             lock_rotation=lock_rotation,
             lock_translation=lock_translation,
             ground_slack=ground_slack,
+            known_3d_slack=known_3d_slack,
             use_pose_cache=True,
             cancel_check=cancel_check,
         )

@@ -1005,6 +1005,24 @@ class PMWorkspace(bpy.types.PropertyGroup):
         unit="LENGTH",
         update=_redraw,
     )
+    known_3d_slack: bpy.props.FloatProperty(
+        name="Known 3D Slack",
+        description=(
+            "How far Known 3D point landmarks may leave their Empty "
+            "(scene units) during Solve Sync. 0 pins them. A small value "
+            "lets CAD / mesh error ease toward the 2D picks without "
+            "stretching the cameras. Does not move the linked Empty — "
+            "Landmark Empties show the eased position"
+        ),
+        default=0.0,
+        min=0.0,
+        soft_max=0.25,
+        max=2.0,
+        step=1,
+        precision=3,
+        unit="LENGTH",
+        update=_redraw,
+    )
     lens_refine_progress: bpy.props.FloatProperty(
         name="Refine Progress",
         description="Progress of the running Refine Lenses job",

@@ -3331,6 +3331,7 @@ class PM_OT_refine_lenses(bpy.types.Operator):
                     lock_translation=prep.lock_translation,
                     share_lens=prep.share_lens,
                     ground_slack=prep.ground_slack,
+                    known_3d_slack=prep.known_3d_slack,
                     cancel_check=cancel_event.is_set,
                     progress_callback=_on_progress,
                 )

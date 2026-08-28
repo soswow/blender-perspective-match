@@ -45,7 +45,7 @@ When a printed marker is too small or blurry to decode, pick it by hand with **S
 
 ### Known 3D workflow
 
-Model or place Empties in the anchor world → select them → Sync list **Landmarks from Selected** (auto-fills 2D on the anchor still) → in each other match, **Pick** those features in 2D. Add a few off-line 2D↔2D landmarks if the known points lie on one edge (kills spin-around-the-line ambiguity). The same Known 3D links plus picks on **this** still also feed **Use Known 3D** in the Camera section — pick on the photo, not the auto-projected positions, when you want that single-camera polish.
+Model or place Empties in the anchor world → select them → Sync list **Landmarks from Selected** (auto-fills 2D on the anchor still) → in each other match, **Pick** those features in 2D. Add a few off-line 2D↔2D landmarks if the known points lie on one edge (kills spin-around-the-line ambiguity). The same Known 3D links plus picks on **this** still also feed **Use Known 3D** in the Camera section — pick on the photo, not the auto-projected positions, when you want that single-camera polish. If the CAD is a strong guide but not exact, raise **Known 3D Slack** so Solve Sync can ease those points a little toward the picks.
 
 ### Line landmarks
 
@@ -63,6 +63,7 @@ Without Known 3D ends, a free line needs **three or more** stills — two views 
 - **Lock Translation** — keep Empty translation fixed; only solve rotation/scale.
 - Both checked — leave cameras unmoved; only adjust 3D landmark / Empty positions.
 - **Ground Slack** — how far On Ground landmarks may sit off Z=0 (scene units). 0 pins them to the floor raycast. The default (0.02) is enough for plank cup / tag thickness on a boarded floor.
+- **Known 3D Slack** — how far Known 3D point landmarks may sit off their Empty (scene units). 0 (the default) pins them. A small value is a spring toward the Empty while each still's 2D pick pulls the point along that camera's ray, so CAD that is slightly wrong can share the error with the cameras instead of stretching the overlay. Linked Empties stay put; **Landmark Empties** show the eased positions. Known 3D lines stay pinned. **Use Known 3D** (Camera) still treats the Empty as fixed.
 
 **Diagnose** shows per-landmark RMSE without moving cameras; when error is high it also runs leave-one-out checks on the worst landmarks. It runs in the background: the status line shows the current solve stage, and **Esc** or **Cancel** stops it. Leave-one-out keeps the camera graph accepted by the base solve, so a rejected still is not globally re-registered five more times. **Clear** resets sync transforms. Diagnose and Solve Sync cache each still-pair pose so a second run skips the expensive pairwise search when those two cameras' shared picks, Known 3D, and private K/pose are unchanged; **Clear** drops that cache. Independent still pairs on the first run are solved in parallel.
 

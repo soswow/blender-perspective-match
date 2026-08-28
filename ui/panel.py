@@ -716,6 +716,7 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
         slack_row = sync_body.row(align=True)
         slack_row.use_property_split = False
         slack_row.prop(workspace, "ground_slack", text="Ground Slack")
+        slack_row.prop(workspace, "known_3d_slack", text="Known 3D Slack")
         opts_row = sync_body.row(align=True)
         opts_row.use_property_split = False
         opts_row.prop(workspace, "share_lens", text="Same Lens")

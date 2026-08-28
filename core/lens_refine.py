@@ -284,6 +284,7 @@ def _run_sync(
     lock_rotation: bool = False,
     lock_translation: bool = False,
     ground_slack: float | None = None,
+    known_3d_slack: float | None = None,
 ) -> sync_module.SyncSolveResult:
     sync_matches = [
         sync_module.SyncMatchInput(match_id=match_id, calibration=calibrations[match_id])
@@ -301,6 +302,7 @@ def _run_sync(
         lock_rotation=lock_rotation,
         lock_translation=lock_translation,
         ground_slack=ground_slack,
+        known_3d_slack=known_3d_slack,
     )
 
 
@@ -326,6 +328,7 @@ def refine_lenses_from_landmarks(
     lock_translation: bool = False,
     share_lens: bool = False,
     ground_slack: float | None = None,
+    known_3d_slack: float | None = None,
     cancel_check=None,
     progress_callback=None,
 ) -> LensRefineResult:
@@ -406,6 +409,7 @@ def refine_lenses_from_landmarks(
             lock_rotation=lock_rotation,
             lock_translation=lock_translation,
             ground_slack=ground_slack,
+            known_3d_slack=known_3d_slack,
         )
         cost = _joint_cost(
             cals,

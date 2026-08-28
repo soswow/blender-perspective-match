@@ -384,6 +384,113 @@ class BundleAdjustSyncTests(unittest.TestCase):
         )
         self.assertNotIn("g", free)
 
+    def _known_3d_two_view_scene(self):
+        """Two cameras seeing four Known 3D points; picks come from true XYZ."""
+        intrinsics = core.CameraIntrinsics(
+            fx=800.0, fy=800.0, cx=400.0, cy=300.0, image_width=800, image_height=600
+        )
+        true_sim = sync.SimilarityTransform(
+            scale=1.0,
+            rotation=_rodrigues_z(0.35),
+            translation=np.array((3.0, -2.0, 0.5), dtype=np.float64),
+        )
+        true_landmarks = {
+            "k0": np.array((0.0, 0.0, 0.0), dtype=np.float64),
+            "k1": np.array((2.0, 0.0, 0.0), dtype=np.float64),
+            "k2": np.array((0.0, 2.0, 0.0), dtype=np.float64),
+            "k3": np.array((1.0, 1.0, 1.5), dtype=np.float64),
+        }
+        anchor_center = np.array((-3.0, -4.0, 2.0), dtype=np.float64)
+        anchor_calibration = core.Calibration(
+            intrinsics,
+            _look_at_rotation(anchor_center, np.array((0.5, 0.5, 0.0))),
+            anchor_center,
+        )
+        shared_center = np.array((4.0, -3.0, 2.5), dtype=np.float64)
+        shared_rotation = _look_at_rotation(shared_center, np.array((0.5, 0.5, 0.5)))
+        rotation_private = shared_rotation @ true_sim.rotation
+        center_private = true_sim.rotation.T @ (shared_center - true_sim.translation)
+        other_calibration = core.Calibration(
+            intrinsics, rotation_private, center_private
+        )
+        matches = [
+            sync.SyncMatchInput("anchor", anchor_calibration),
+            sync.SyncMatchInput("other", other_calibration),
+        ]
+        observations = []
+        for landmark_id, point in true_landmarks.items():
+            observations.append(
+                sync.SyncObservation(
+                    "anchor", landmark_id, *_project(point, anchor_calibration)
+                )
+            )
+            observations.append(
+                sync.SyncObservation(
+                    "other",
+                    landmark_id,
+                    *_project(true_sim.inverse_point(point), other_calibration),
+                )
+            )
+        return matches, observations, true_landmarks
+
+    def test_known_3d_slack_zero_keeps_empty_pin(self) -> None:
+        """Slack 0 leaves a biased Known 3D point on its Empty."""
+        matches, observations, true_landmarks = self._known_3d_two_view_scene()
+        known_world = {key: point.copy() for key, point in true_landmarks.items()}
+        known_world["k3"] = true_landmarks["k3"] + np.array(
+            (0.12, 0.0, 0.0), dtype=np.float64
+        )
+        result = sync.solve_landmark_sync(
+            matches,
+            observations,
+            anchor_id="anchor",
+            known_world=known_world,
+            ground_slack=0.0,
+            known_3d_slack=0.0,
+        )
+        self.assertTrue(result.success, result.message)
+        self.assertTrue(
+            np.allclose(result.landmarks["k3"], known_world["k3"], atol=1.0e-9)
+        )
+
+    def test_known_3d_slack_eases_biased_pin_toward_picks(self) -> None:
+        """Positive slack lets 2D picks pull a biased Known 3D point toward truth."""
+        matches, observations, true_landmarks = self._known_3d_two_view_scene()
+        known_world = {key: point.copy() for key, point in true_landmarks.items()}
+        known_world["k3"] = true_landmarks["k3"] + np.array(
+            (0.12, 0.0, 0.0), dtype=np.float64
+        )
+        frozen = sync.solve_landmark_sync(
+            matches,
+            observations,
+            anchor_id="anchor",
+            known_world=known_world,
+            ground_slack=0.0,
+            known_3d_slack=0.0,
+        )
+        eased = sync.solve_landmark_sync(
+            matches,
+            observations,
+            anchor_id="anchor",
+            known_world=known_world,
+            ground_slack=0.0,
+            known_3d_slack=0.15,
+        )
+        self.assertTrue(frozen.success, frozen.message)
+        self.assertTrue(eased.success, eased.message)
+        dist_frozen = float(
+            np.linalg.norm(frozen.landmarks["k3"] - true_landmarks["k3"])
+        )
+        dist_eased = float(
+            np.linalg.norm(eased.landmarks["k3"] - true_landmarks["k3"])
+        )
+        self.assertLess(dist_eased, dist_frozen - 0.02)
+        dist_from_empty = float(
+            np.linalg.norm(eased.landmarks["k3"] - known_world["k3"])
+        )
+        self.assertLess(dist_from_empty, 0.4)
+        self.assertLess(eased.mean_reprojection_px, frozen.mean_reprojection_px)
+
     def test_thaw_pass_still_converges_when_structure_starts_frozen(self) -> None:
         """Pass B (thaw 3D) must still lock a well-observed synthetic scene."""
         matches, observations, _true, _center, _shared = _synthetic_scene(

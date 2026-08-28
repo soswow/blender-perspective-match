@@ -23,6 +23,7 @@ from .constants import (
     BA_FREE_LANDMARK_LIMIT,
     GROUND_PLANE_Z_FRACTION,
     GROUND_SLACK_DEFAULT,
+    KNOWN_3D_SLACK_DEFAULT,
     RESECT_MISMATCH_CANDIDATE_LIMIT,
 )
 from .lines import (
@@ -756,6 +757,7 @@ def solve_landmark_sync(
     lock_translation: bool = False,
     use_pose_cache: bool = False,
     ground_slack: float | None = None,
+    known_3d_slack: float | None = None,
     cancel_check: Callable[[], bool] | None = None,
     progress_callback: Callable[[str], None] | None = None,
 ) -> SyncSolveResult:
@@ -768,12 +770,17 @@ def solve_landmark_sync(
     Recovered cameras must not fail the joint RMSE. fy=fx when pixels were
     aspect-stretched. ``ground_slack`` is how far On Ground landmarks may leave
     Z=0 in joint BA (0 pins them when triangulation agrees with the raycast).
+    ``known_3d_slack`` is how far Known 3D points may leave their Empty
+    (0 pins them; pairwise registration still uses the Empty).
     """
     _check_cancelled(cancel_check)
     _report_progress(progress_callback, "Preparing sync graph")
     if ground_slack is None:
         ground_slack = GROUND_SLACK_DEFAULT
     ground_slack = max(float(ground_slack), 0.0)
+    if known_3d_slack is None:
+        known_3d_slack = KNOWN_3D_SLACK_DEFAULT
+    known_3d_slack = max(float(known_3d_slack), 0.0)
     known_world = {
         landmark_id: np.asarray(point, dtype=np.float64).reshape(3)
         for landmark_id, point in (known_world or {}).items()
@@ -1063,6 +1070,10 @@ def solve_landmark_sync(
         fixed_landmark_ids = set(known_world)
     else:
         fixed_landmark_ids = set(known_world) | set(consistent_metric)
+    # Slack > 0: thaw Known 3D so BA can spring XYZ toward the Empty
+    # while 2D picks pull the point along each still's ray.
+    if known_3d_slack > 1.0e-12:
+        fixed_landmark_ids -= set(known_world)
     free_landmark_ids = [
         landmark_id
         for landmark_id in landmark_ids
@@ -1196,6 +1207,8 @@ def solve_landmark_sync(
                 max_iterations=iterations,
                 ground_landmark_ids=ground_landmark_ids,
                 ground_slack=ground_slack,
+                known_world_priors=known_world,
+                known_3d_slack=known_3d_slack,
             )
         )
         if ran:
@@ -1618,6 +1631,24 @@ def solve_landmark_sync(
             bits = [f"{name} Z={height:.3f}" for name, height in drifted[:4]]
             message += (
                 f" · ground slack {ground_slack:g} exceeded: " + ", ".join(bits)
+            )
+    if known_3d_slack > 1.0e-12:
+        drifted = []
+        for landmark_id, origin in known_world.items():
+            point = landmarks.get(landmark_id)
+            if point is None:
+                continue
+            offset = float(np.linalg.norm(point - origin))
+            if offset > known_3d_slack:
+                drifted.append(
+                    (names.get(landmark_id, landmark_id[:8]), offset)
+                )
+        drifted.sort(key=lambda item: -item[1])
+        if drifted:
+            bits = [f"{name} Δ={offset:.3f}" for name, offset in drifted[:4]]
+            message += (
+                f" · known 3D slack {known_3d_slack:g} exceeded: "
+                + ", ".join(bits)
             )
     if recovered:
         recovered_list = ", ".join(f"'{name}'" for name in sorted(recovered))
