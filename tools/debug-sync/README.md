@@ -43,6 +43,13 @@ Per-match K, distortion, Blender lens/FOV, undistorted-plate flags:
     --blend "/path/to/scene.blend" --out /tmp/pm-cameras.txt
 ```
 
+Known 3D camera pin polish (source-image residuals vs VP lines, rotation locked):
+
+```sh
+"$BLENDER_BIN" --factory-startup -b --python tools/debug-sync/probe_pin_refine.py -- \
+    --blend "/path/to/scene.blend" --match PM_some_Origin
+```
+
 ## What to look at
 
 - **Stored nadir_deg** — current Blender camera vs world ±Z. Only meaningful if that match already locked; unsynced cameras often still sit on a leftover default pose.

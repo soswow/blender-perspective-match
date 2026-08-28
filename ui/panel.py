@@ -344,6 +344,7 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
                 text="Import YAML",
                 icon="IMPORT",
             )
+            camera_actions.prop(settings, "use_known_3d_in_camera")
             manual_column = camera.column(align=True)
             manual_column.enabled = (
                 not adjusted_camera

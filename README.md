@@ -8,7 +8,7 @@ Native port of the manual workflow from Perspective Match Studio — no Electron
 
 - Multiple match cameras per scene, each with its own still and calibration (locked `fx`, `fy`, `cx`, `cy`, and distortion copied onto new matches when the previous one used Manual FOV / YAML / 1-point; **Bulk Create** does the same for a folder)
 - 1-, 2-, or 3-point perspective; draw or auto-detect (3-point) axis-colored VP lines
-- Solve orientation and FOV from orthogonal VPs; manual FOV / ROS `camera_info` YAML import (including OpenCV distortion coefficients)
+- Solve orientation and FOV from orthogonal VPs; **Use Known 3D** polishes FOV / principal point / camera position from landmark picks without leaving Auto from VPs; manual FOV / ROS `camera_info` YAML import (including OpenCV distortion coefficients)
 - Adjusted Camera mode keeps live Blender or third-party pose/FOV edits when revisiting a match
 - Principal point from three VPs or manual offset; undistort from imported OpenCV D or estimated Fitzgibbon λ
 - Ground origin pick; multi-match sync via landmarks, Known 3D Empties, and AprilTag 25h9 / 36h10 (locked/imported K plus shared ground landmarks across 3+ images can replace VP lines)

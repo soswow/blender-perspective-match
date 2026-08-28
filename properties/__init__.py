@@ -104,6 +104,31 @@ def _update_xy_vp_polarity(self, context: bpy.types.Context) -> None:
     tag_viewport_redraw(context)
 
 
+def _update_use_known_3d_in_camera(self, context: bpy.types.Context) -> None:
+    """Re-solve so the Known 3D camera polish turns on or off immediately."""
+    from .. import core, scene
+    from ..scene import distortion
+
+    if scene.uses_adjusted_camera(self) or self.image is None:
+        tag_viewport_redraw(context)
+        return
+    try:
+        line_bundles = scene.line_bundles_from_settings(self)
+        lock_focal = bool(self.lock_focal or self.vp_mode == "1")
+        if not core.can_solve_orientation(
+            line_bundles,
+            lock_focal=lock_focal,
+            vp_mode=self.vp_mode,
+        ):
+            tag_viewport_redraw(context)
+            return
+        scene.refine_match(context)
+        distortion.sync_undistorted_plate_after_refine(context)
+    except Exception:
+        pass
+    tag_viewport_redraw(context)
+
+
 def _update_landmark_use_in_sync(_self, context: bpy.types.Context) -> None:
     """Rebuild helpers so disabled landmarks leave PM_Sync_Landmarks."""
     from .. import scene
@@ -601,6 +626,17 @@ class PMSession(bpy.types.PropertyGroup):
         name="Manual FOV",
         description="Keep horizontal FOV fixed while refining orientation",
         default=False,
+    )
+    use_known_3d_in_camera: bpy.props.BoolProperty(
+        name="Use Known 3D",
+        description=(
+            "After Auto from VPs, Estimate Distortion, or VP-line edits, polish "
+            "FOV, principal point, and camera position so Known 3D Empties project "
+            "onto their picks. Orientation stays from VP lines. Needs four or more "
+            "point landmarks with Known 3D and a pick placed on this still"
+        ),
+        default=False,
+        update=_update_use_known_3d_in_camera,
     )
     hfov_degrees: bpy.props.FloatProperty(
         name="Horizontal FOV",

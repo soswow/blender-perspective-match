@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Refine Lenses **Same Lens** checkbox (on by default, left of the % window above the button) searches one shared focal scale for every still, including YAML-only matches with no VP lines
 - **Undistorted Plate** (left of Original Plate) remaps the still with imported D / estimated λ and shows that pinhole plate
 - **Ground Slack** lets On Ground landmarks sit a little off Z=0 so a boarded floor can flex without bending cameras
+- **Use Known 3D** (Camera) polishes FOV, principal point, and camera position from landmark picks after Auto from VPs, Estimate Distortion, or VP-line edits, without locking Manual FOV; orientation is rebuilt from the VP strokes at the new K
 
 ### Changed
 - Viewport overlays now show only while the Perspective Match sidebar panel is expanded, except while a Draw / Pick tool is active
@@ -46,6 +47,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Original Plate keeps imported Brown–Conrady D and only switches the background; estimated λ is still cleared
 
 ### Fixed
+- Use Known 3D no longer leaves short uprights behind when FOV / principal point move, and no longer keeps a VP-only λ that wrecks an axis just to shave pin RMS
+- Use Known 3D no longer recenters the principal point when λ is already 0, and names swapped/mismatched picks when VP lines block the fit
 - Diagnose no longer spends minutes re-registering rejected cameras during leave-one-out and mismatched-pick checks
 - VP error labels and lens refinement keep nearly parallel line bundles at local pixel scale instead of exploding for far-away vanishing points
 - Manual PP Offset keeps the undistorted plate visible while dragging and rebuilds it after applying the new principal point

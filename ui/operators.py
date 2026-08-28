@@ -715,7 +715,9 @@ class PM_OT_refine(bpy.types.Operator):
     bl_label = "Refine Camera"
     bl_description = (
         "Unlock Manual FOV and solve focal / orientation from VP lines. "
-        "Needs two axes with at least two lines each in 3-point mode"
+        "Needs two axes with at least two lines each in 3-point mode. "
+        "When Use Known 3D is on, also polish FOV, principal point, and camera "
+        "position from landmark picks without changing VP orientation"
     )
     bl_options = {"REGISTER", "UNDO"}
 
@@ -1469,7 +1471,9 @@ class PM_OT_estimate_distortion(bpy.types.Operator):
     bl_description = (
         "Estimate division λ from VP lines (≥3 concurrent segments on one axis), "
         "then generate and show an undistorted plate. Does not re-run when lines "
-        "change — press again to re-fit. Works with Manual FOV (λ at the locked focal)"
+        "change — press again to re-fit. Works with Manual FOV (λ at the locked "
+        "focal). When Use Known 3D is on, also polish FOV, principal point, and "
+        "camera position from landmark picks without changing VP orientation"
     )
     bl_options = {"REGISTER", "UNDO"}
 

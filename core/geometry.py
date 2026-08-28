@@ -1240,6 +1240,38 @@ def _vp_segment_direction_residual_px(
     return abs(float(cross)) / ideal_length
 
 
+def vp_line_axis_residuals(
+    calibration: Calibration,
+    line_bundles: dict[AxisId, list[LineSegment]],
+) -> dict[AxisId, float]:
+    """Unweighted RMS per vanishing axis.
+
+    Each axis is scored separately so two short uprights are not drowned
+    by many long ground strokes. Diagnostic ``vp_line_residual_rms`` stays
+    length-weighted; this map is for joint pin / VP costs and guardrails.
+    """
+    working_lines = undistort_line_bundles(
+        line_bundles,
+        calibration.intrinsics,
+        calibration.division_lambda,
+        calibration.brown_conrady,
+    )
+    residuals: dict[AxisId, float] = {}
+    for axis, segments in working_lines.items():
+        if not segments or axis not in _AXIS_ROTATION_COLUMNS:
+            continue
+        vanishing = ideal_axis_vanishing_point(calibration, axis)
+        if vanishing is None:
+            continue
+        values = [
+            _vp_segment_direction_residual_px(segment, vanishing)
+            for segment in segments
+        ]
+        if values:
+            residuals[axis] = float(np.sqrt(np.mean(np.square(values))))
+    return residuals
+
+
 def vp_line_residual_rms(
     calibration: Calibration,
     line_bundles: dict[AxisId, list[LineSegment]],

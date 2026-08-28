@@ -45,7 +45,7 @@ When a printed marker is too small or blurry to decode, pick it by hand with **S
 
 ### Known 3D workflow
 
-Model or place Empties in the anchor world → select them → Sync list **Landmarks from Selected** (auto-fills 2D on the anchor still) → in each other match, **Pick** those features in 2D. Add a few off-line 2D↔2D landmarks if the known points lie on one edge (kills spin-around-the-line ambiguity).
+Model or place Empties in the anchor world → select them → Sync list **Landmarks from Selected** (auto-fills 2D on the anchor still) → in each other match, **Pick** those features in 2D. Add a few off-line 2D↔2D landmarks if the known points lie on one edge (kills spin-around-the-line ambiguity). The same Known 3D links plus picks on **this** still also feed **Use Known 3D** in the Camera section — pick on the photo, not the auto-projected positions, when you want that single-camera polish.
 
 ### Line landmarks
 

@@ -1149,6 +1149,9 @@ def refine_match(
 
     Pass ``estimate_distortion=True`` only from the Estimate Distortion button.
     Ordinary VP-line / FOV refines keep the stored λ without re-fitting it.
+    When Use Known 3D is on, a second pass polishes translation / FOV / PP
+    from landmark picks while rebuilding orientation from the VP lines at
+    that K, so verticals stay on the strokes.
     """
     settings = properties.active_session(context)
     if settings is None:
@@ -1201,6 +1204,12 @@ def refine_match(
     else:
         calibration.camera_center = core.default_camera_center(calibration.rotation_w2c)
 
+    pin_note = ""
+    if bool(getattr(settings, "use_known_3d_in_camera", False)):
+        calibration, pin_note = _polish_known_3d_after_vp(
+            context, calibration, line_bundles
+        )
+
     if _intrinsics_or_distortion_changed(previous_calibration, calibration):
         invalidate_undistorted_cache(settings)
     apply_camera(context.scene, settings, calibration)
@@ -1213,10 +1222,88 @@ def refine_match(
             and not calibration.uses_brown_conrady
             else ""
         )
+        + pin_note
     )
     settings.error = ""
     properties.tag_viewport_redraw(context)
     return calibration
+
+
+def collect_known_pins(context: bpy.types.Context):
+    """Known 3D point landmarks with a source-image pick on the active match."""
+    from ..core import pin_refine
+    from ..core import sync as sync_module
+
+    root = properties.active_root(context)
+    space = properties.workspace(context)
+    pins: list = []
+    if root is None:
+        return pins
+    for landmark in space.landmarks:
+        if getattr(landmark, "kind", "POINT") != "POINT":
+            continue
+        known_object = landmark.known_object
+        if known_object is None or known_object.name not in bpy.data.objects:
+            continue
+        observation = observation_for_match(landmark, root)
+        if observation is None or not observation.is_set:
+            continue
+        world = known_object.matrix_world.to_translation()
+        pins.append(
+            pin_refine.KnownPin(
+                landmark_id=str(landmark.item_id or landmark.name),
+                point_private=_private_point_from_world(root, world),
+                u=float(observation.x),
+                v=float(observation.y),
+                weight=sync_module.confidence_weight(observation.confidence),
+                landmark_name=str(landmark.name or landmark.item_id),
+            )
+        )
+    return pins
+
+
+def _polish_known_3d_after_vp(
+    context: bpy.types.Context,
+    calibration: core.Calibration,
+    line_bundles: dict[core.AxisId, list[core.LineSegment]],
+) -> tuple[core.Calibration, str]:
+    """Optional Known 3D polish after a VP solve. Failure keeps the VP camera."""
+    from ..core import pin_refine
+
+    settings = properties.active_session(context)
+    pins = collect_known_pins(context)
+    if len(pins) < pin_refine.MIN_PIN_COUNT:
+        return (
+            calibration,
+            f" · Known 3D skipped (need {pin_refine.MIN_PIN_COUNT} picks)",
+        )
+    lock_focal = bool(
+        settings is not None
+        and (settings.lock_focal or settings.vp_mode == "1")
+    )
+    can_follow_vp = all(
+        len(line_bundles.get(axis, [])) >= 1 for axis in ("x", "y", "z")
+    )
+    result = pin_refine.refine_from_known_pins(
+        calibration,
+        pins,
+        line_bundles,
+        lock_rotation=not can_follow_vp,
+        orient_from_vp=can_follow_vp,
+        lock_focal=lock_focal,
+    )
+    if not result.success:
+        return calibration, f" · Known 3D skipped ({_short_pin_skip_reason(result)})"
+    return result.calibration, f" · Known 3D pin RMS {result.pin_rms_px:.2f} px"
+
+
+def _short_pin_skip_reason(result) -> str:
+    message = str(getattr(result, "message", "") or "")
+    if "Need at least" in message:
+        return "need 4 picks"
+    if "VP" in message:
+        return "VP lines blocked the pin fit"
+    return "pin fit rejected"
 
 
 def _update_diagnostics(
