@@ -856,6 +856,12 @@ class PMWorkspace(bpy.types.PropertyGroup):
         default=False,
         options={"SKIP_SAVE"},
     )
+    landmarks_filter_current_match: bpy.props.BoolProperty(
+        name="Filter to Current Match",
+        description="Show only landmarks with a pick in the active match",
+        default=False,
+        options={"SKIP_SAVE"},
+    )
     show_landmark_labels: bpy.props.BoolProperty(
         name="Landmark Labels",
         description="Show each landmark's name next to its pick on the reference plate",

@@ -77,7 +77,7 @@ class PM_UL_landmarks(bpy.types.UIList):
             meta.label(text=f"{count}")
 
     def filter_items(self, context, data, propname):
-        """Alphabetical when Sort A–Z is on; otherwise creation / add order.
+        """Filter to the active match, then apply the selected list order.
 
         Read-only: Blender forbids writing Scene ID data from UIList draw.
         creation_index is assigned on add / file load, not here.
@@ -88,6 +88,15 @@ class PM_UL_landmarks(bpy.types.UIList):
         flt_neworder = []
         if not landmarks:
             return flt_flags, flt_neworder
+        if getattr(data, "landmarks_filter_current_match", False):
+            root = properties.active_root(context)
+            for landmark in landmarks:
+                observation = scene.observation_for_match(landmark, root)
+                flt_flags.append(
+                    self.bitflag_filter_item
+                    if observation is not None and observation.is_set
+                    else 0
+                )
         if getattr(data, "landmarks_sort_alphabetical", False):
             flt_neworder = helper_funcs.sort_items_by_name(landmarks, "name")
         elif any(landmark.creation_index < 0 for landmark in landmarks):
@@ -548,6 +557,13 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             "landmarks_sort_alphabetical",
             text="",
             icon="SORTALPHA",
+            toggle=True,
+        )
+        list_column.prop(
+            workspace,
+            "landmarks_filter_current_match",
+            text="",
+            icon="FILTER",
             toggle=True,
         )
         list_column.prop(

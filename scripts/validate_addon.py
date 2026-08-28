@@ -82,6 +82,7 @@ def main() -> None:
             distortion = sys.modules["match_perspective.scene.distortion"]
             properties = sys.modules["match_perspective.properties"]
             scene = sys.modules["match_perspective.scene"]
+            ui_panel = sys.modules["match_perspective.ui.panel"]
 
             crossing = core.vanishing_point_from_lines(
                 [
@@ -706,6 +707,35 @@ def main() -> None:
                 tuple(session_b.sync_translation),
                 result.message,
             )
+
+            # Landmark list filter keeps only picks defined in the active match.
+            local_landmark = space.landmarks.add()
+            local_landmark.item_id = "smoke-local-a"
+            local_landmark.name = "Only in A"
+            local_observation = local_landmark.observations.add()
+            local_observation.match_root = root_sync_a
+            local_observation.is_set = True
+            space.landmarks_filter_current_match = True
+            scene.set_active_match(bpy.context, root_sync_b)
+            filter_bit = 1 << 30
+            filter_owner = SimpleNamespace(bitflag_filter_item=filter_bit)
+            filter_flags, _filter_order = ui_panel.PM_UL_landmarks.filter_items(
+                filter_owner,
+                bpy.context,
+                space,
+                "landmarks",
+            )
+            assert filter_flags[0] == filter_bit
+            assert filter_flags[len(space.landmarks) - 1] == 0
+            scene.set_active_match(bpy.context, root_sync_a)
+            filter_flags, _filter_order = ui_panel.PM_UL_landmarks.filter_items(
+                filter_owner,
+                bpy.context,
+                space,
+                "landmarks",
+            )
+            assert filter_flags[len(space.landmarks) - 1] == filter_bit
+            space.landmarks_filter_current_match = False
 
             # Full K + shared ground picks can initialize orientation without VPs.
             root_sync_c = scene.create_match_camera(bpy.context)
