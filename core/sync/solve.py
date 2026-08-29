@@ -24,6 +24,7 @@ from .constants import (
     GROUND_PLANE_Z_FRACTION,
     GROUND_SLACK_DEFAULT,
     KNOWN_3D_SLACK_DEFAULT,
+    MIRROR_SLACK_DEFAULT,
     RESECT_MISMATCH_CANDIDATE_LIMIT,
 )
 from .lines import (
@@ -32,6 +33,11 @@ from .lines import (
     _line_observation_reprojection_errors,
     _parallel_direction_error,
     _reconstruct_line_from_observations,
+)
+from .mirrors import (
+    _dedupe_mirror_pairs,
+    mirror_plane_offset,
+    seed_mirror_landmarks,
 )
 from .pose import (
     _consistent_metric_landmarks,
@@ -363,6 +369,9 @@ class _SolveState:
     known_world: dict[str, np.ndarray]
     known_lines: dict[str, tuple[np.ndarray, np.ndarray]]
     parallel_pairs: list[tuple[str, str]] | None
+    mirror_pairs: list[tuple[str, str]] | None
+    mirror_plane: tuple[np.ndarray, np.ndarray] | None
+    mirror_slack: float
     lock_rotation: bool
     lock_translation: bool
     use_pose_cache: bool
@@ -481,6 +490,47 @@ class _SolveState:
         self.landmarks = rebuilt
         self.consistent_metric = consistent
         self.line_segments = segments
+        _attach_mirror_landmarks(self)
+
+
+def _attach_mirror_landmarks(state: _SolveState) -> None:
+    """Seed missing mirror partners and include their picks in the joint graph."""
+    if state.mirror_plane is None or not state.mirror_pairs:
+        return
+    plane_point, plane_normal = state.mirror_plane
+    seed_mirror_landmarks(
+        state.landmarks,
+        state.observations_by_landmark_all,
+        state.similarities,
+        state.match_map,
+        state.mirror_pairs,
+        plane_point,
+        plane_normal,
+    )
+    existing = {
+        (observation.match_id, observation.landmark_id)
+        for observation in state.usable_observations
+    }
+    for landmark_a, landmark_b in _dedupe_mirror_pairs(state.mirror_pairs):
+        for landmark_id in (landmark_a, landmark_b):
+            if landmark_id not in state.landmarks:
+                continue
+            for observation in state.observations_by_landmark_all.get(
+                landmark_id, []
+            ):
+                if observation.match_id not in state.similarities:
+                    continue
+                key = (observation.match_id, observation.landmark_id)
+                if key in existing:
+                    continue
+                state.usable_observations.append(observation)
+                existing.add(key)
+    state.observations_by_landmark = {}
+    for observation in state.usable_observations:
+        state.observations_by_landmark.setdefault(
+            observation.landmark_id, []
+        ).append(observation)
+    state.landmark_ids = sorted(state.observations_by_landmark.keys())
 
 
 def _peel_cameras_above_rmse(state: _SolveState) -> SyncSolveResult | None:
@@ -635,6 +685,7 @@ def _expand_landmarks_after_resect(state: _SolveState) -> None:
     for landmark_id, point in refined.items():
         if landmark_id not in state.landmarks or landmark_id in added_ids:
             state.landmarks[landmark_id] = point
+    _attach_mirror_landmarks(state)
 
 
 def _rebuild_usable_observations(state: _SolveState) -> None:
@@ -758,6 +809,9 @@ def solve_landmark_sync(
     use_pose_cache: bool = False,
     ground_slack: float | None = None,
     known_3d_slack: float | None = None,
+    mirror_pairs: list[tuple[str, str]] | None = None,
+    mirror_plane: tuple[np.ndarray, np.ndarray] | None = None,
+    mirror_slack: float | None = None,
     cancel_check: Callable[[], bool] | None = None,
     progress_callback: Callable[[str], None] | None = None,
 ) -> SyncSolveResult:
@@ -772,7 +826,10 @@ def solve_landmark_sync(
     Z=0 in joint BA (0 pins them when triangulation agrees with the raycast).
     ``known_3d_slack`` is how far Known 3D points may leave their Empty
     (0 pins them; pairwise registration still uses the Empty). On Ground
-    Known 3D uses the tighter of the two slacks for Z.
+    Known 3D uses the tighter of the two slacks for Z. ``mirror_pairs`` are
+    joint-BA only (not pairwise). ``mirror_plane`` is ``(point, normal)``;
+    ``mirror_slack`` is how far that plane may slide along the normal (the
+    Empty is not moved).
     """
     _check_cancelled(cancel_check)
     _report_progress(progress_callback, "Preparing sync graph")
@@ -782,6 +839,21 @@ def solve_landmark_sync(
     if known_3d_slack is None:
         known_3d_slack = KNOWN_3D_SLACK_DEFAULT
     known_3d_slack = max(float(known_3d_slack), 0.0)
+    if mirror_slack is None:
+        mirror_slack = MIRROR_SLACK_DEFAULT
+    mirror_slack = max(float(mirror_slack), 0.0)
+    mirror_pairs = _dedupe_mirror_pairs(mirror_pairs)
+    if mirror_plane is not None:
+        mirror_plane = (
+            np.asarray(mirror_plane[0], dtype=np.float64).reshape(3).copy(),
+            np.asarray(mirror_plane[1], dtype=np.float64).reshape(3).copy(),
+        )
+        if float(np.linalg.norm(mirror_plane[1])) < 1.0e-12:
+            mirror_plane = None
+    ignored_mirror_pairs = 0
+    if mirror_pairs and mirror_plane is None:
+        ignored_mirror_pairs = len(mirror_pairs)
+        mirror_pairs = []
     known_world = {
         landmark_id: np.asarray(point, dtype=np.float64).reshape(3)
         for landmark_id, point in (known_world or {}).items()
@@ -1006,6 +1078,9 @@ def solve_landmark_sync(
         known_world=known_world,
         known_lines=known_lines,
         parallel_pairs=parallel_pairs,
+        mirror_pairs=mirror_pairs,
+        mirror_plane=mirror_plane,
+        mirror_slack=mirror_slack,
         lock_rotation=lock_rotation,
         lock_translation=lock_translation,
         use_pose_cache=use_pose_cache,
@@ -1057,6 +1132,11 @@ def solve_landmark_sync(
     ba_observations, downweighted_ids = _auto_downweight_outlier_observations(
         usable_observations,
         seed_rmse,
+        protected_ids={
+            landmark_id
+            for pair in (mirror_pairs or [])
+            for landmark_id in pair
+        },
     )
     ba_observations = _balance_observation_weights(ba_observations, match_map)
     ground_landmark_ids = sorted(
@@ -1187,7 +1267,12 @@ def solve_landmark_sync(
             known_lines,
         )
 
-    def _run_ba(free_ids: list[str], iterations: int) -> bool:
+    def _run_ba(
+        free_ids: list[str],
+        iterations: int,
+        *,
+        free_plane_offset: bool = False,
+    ) -> bool:
         nonlocal similarities, landmarks, line_segments
         _check_cancelled(cancel_check)
         similarities, landmarks, line_segments, ran = (
@@ -1210,6 +1295,10 @@ def solve_landmark_sync(
                 ground_slack=ground_slack,
                 known_world_priors=known_world,
                 known_3d_slack=known_3d_slack,
+                mirror_pairs=mirror_pairs,
+                mirror_plane=mirror_plane,
+                mirror_slack=mirror_slack,
+                free_plane_offset=free_plane_offset,
             )
         )
         if ran:
@@ -1218,7 +1307,19 @@ def solve_landmark_sync(
 
     _check_cancelled(cancel_check)
     _report_progress(progress_callback, "Bundle adjustment")
-    did_bundle_adjust = _run_ba(ba_free_landmark_ids, ba_iterations)
+    use_plane_offset = (
+        mirror_slack > 1.0e-12
+        and bool(mirror_pairs)
+        and mirror_plane is not None
+    )
+    # Mirror pairs are extra joint-BA pull, not a pairwise seed. Slack > 0
+    # then thaws δ with non-mirror 3D frozen so a biased Empty cannot drag the
+    # cloud.
+    did_bundle_adjust = _run_ba(
+        ba_free_landmark_ids,
+        ba_iterations,
+        free_plane_offset=use_plane_offset,
+    )
 
     post_ba_match_rmse = _per_match_rmse_snapshot(
         free_match_ids,
@@ -1243,7 +1344,11 @@ def solve_landmark_sync(
         pass_a_similarities = _copy_similarities()
         pass_a_landmarks = _copy_landmarks()
         pass_a_segments = _copy_segments()
-        if _run_ba(list(free_landmark_ids), 12):
+        if _run_ba(
+            list(free_landmark_ids),
+            12,
+            free_plane_offset=use_plane_offset,
+        ):
             rmse_b = _mean_rmse(
                 _per_match_rmse_snapshot(
                     free_match_ids,
@@ -1259,7 +1364,7 @@ def solve_landmark_sync(
                 pass_b_similarities = _copy_similarities()
                 pass_b_landmarks = _copy_landmarks()
                 pass_b_segments = _copy_segments()
-                if _run_ba([], 8):
+                if _run_ba([], 8, free_plane_offset=use_plane_offset):
                     rmse_c = _mean_rmse(
                         _per_match_rmse_snapshot(
                             free_match_ids,
@@ -1301,6 +1406,49 @@ def solve_landmark_sync(
                     usable_observations,
                 )
 
+    mirror_free_ids = sorted(
+        {
+            landmark_id
+            for pair in (mirror_pairs or [])
+            for landmark_id in pair
+            if landmark_id in landmarks
+        }
+    )
+    if use_plane_offset and mirror_free_ids:
+        thaw_rmse = _mean_rmse(post_ba_match_rmse)
+        thaw_similarities = _copy_similarities()
+        thaw_landmarks = _copy_landmarks()
+        thaw_segments = _copy_segments()
+        if _run_ba(
+            mirror_free_ids,
+            12,
+            free_plane_offset=True,
+        ):
+            thawed_rmse = _mean_rmse(
+                _per_match_rmse_snapshot(
+                    free_match_ids,
+                    landmark_ids,
+                    similarities,
+                    landmarks,
+                    anchor_id,
+                    match_map,
+                    usable_observations,
+                )
+            )
+            if thawed_rmse > thaw_rmse + 2.0:
+                similarities = thaw_similarities
+                landmarks = thaw_landmarks
+                line_segments = thaw_segments
+            else:
+                post_ba_match_rmse = _per_match_rmse_snapshot(
+                    free_match_ids,
+                    landmark_ids,
+                    similarities,
+                    landmarks,
+                    anchor_id,
+                    match_map,
+                    usable_observations,
+                )
 
     state.similarities = similarities
     state.landmarks = landmarks
@@ -1605,6 +1753,8 @@ def solve_landmark_sync(
         scale_bits.append(f"{free_line_count} free lines")
     if parallel_pairs:
         scale_bits.append(f"{len(parallel_pairs)} parallel")
+    if mirror_pairs:
+        scale_bits.append(f"{len(mirror_pairs)} mirror")
     if scale_bits:
         message += " · scale from " + " + ".join(scale_bits)
     else:
@@ -1651,6 +1801,26 @@ def solve_landmark_sync(
             message += (
                 f" · known 3D slack {known_3d_slack:g} exceeded: "
                 + ", ".join(bits)
+            )
+    if ignored_mirror_pairs:
+        message += (
+            f" · {ignored_mirror_pairs} mirror pair(s) ignored — no Mirror Empty"
+        )
+    if (
+        mirror_slack > 1.0e-12
+        and mirror_plane is not None
+        and mirror_pairs
+    ):
+        offset = mirror_plane_offset(
+            landmarks,
+            mirror_pairs,
+            mirror_plane[0],
+            mirror_plane[1],
+        )
+        if offset is not None and abs(offset) > mirror_slack:
+            message += (
+                f" · mirror slack {mirror_slack:g} exceeded: "
+                f"plane Δ={offset:.3f}"
             )
     if recovered:
         recovered_list = ", ".join(f"'{name}'" for name in sorted(recovered))

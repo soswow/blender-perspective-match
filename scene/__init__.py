@@ -2796,6 +2796,75 @@ def build_sync_problem(context: bpy.types.Context):
     )
 
 
+def collect_sync_mirror_pairs(context: bpy.types.Context) -> list[tuple[str, str]]:
+    """Undirected Is Mirror Of pairs among enabled point landmarks."""
+    space = properties.workspace(context)
+    enabled_ids = {
+        landmark.item_id
+        for landmark in space.landmarks
+        if getattr(landmark, "use_in_sync", True)
+        and landmark.kind == "POINT"
+        and landmark.item_id
+    }
+    seen: set[tuple[str, str]] = set()
+    pairs: list[tuple[str, str]] = []
+    for landmark in space.landmarks:
+        if landmark.item_id not in enabled_ids:
+            continue
+        other_id = getattr(landmark, "mirror_of", "NONE")
+        if not other_id or other_id == "NONE" or other_id == landmark.item_id:
+            continue
+        if other_id not in enabled_ids:
+            continue
+        pair = tuple(sorted((landmark.item_id, other_id)))
+        if pair in seen:
+            continue
+        seen.add(pair)
+        pairs.append((pair[0], pair[1]))
+    return pairs
+
+
+def sync_mirror_plane_from_workspace(
+    context: bpy.types.Context,
+) -> tuple[tuple[float, float, float], tuple[float, float, float]] | None:
+    """Shared-world ``(point, unit_normal)`` from the scene Mirror Empty, or None."""
+    import numpy as np
+
+    space = properties.workspace(context)
+    obj = getattr(space, "mirror_object", None)
+    if obj is None or obj.name not in bpy.data.objects:
+        return None
+    matrix = np.array(obj.matrix_world, dtype=np.float64)
+    point = (float(matrix[0, 3]), float(matrix[1, 3]), float(matrix[2, 3]))
+    face = getattr(space, "mirror_plane", "YZ")
+    if face == "XZ":
+        axis = matrix[:3, 1]
+    elif face == "XY":
+        axis = matrix[:3, 2]
+    else:
+        axis = matrix[:3, 0]
+    length = float(np.linalg.norm(axis))
+    if length < 1.0e-12:
+        return None
+    normal = (
+        float(axis[0] / length),
+        float(axis[1] / length),
+        float(axis[2] / length),
+    )
+    return point, normal
+
+
+def _sync_mirror_kwargs(context: bpy.types.Context) -> dict:
+    """Solver kwargs for the scene-level mirror plane and pairs."""
+    space = properties.workspace(context)
+    plane = sync_mirror_plane_from_workspace(context)
+    return {
+        "mirror_pairs": collect_sync_mirror_pairs(context),
+        "mirror_plane": None if plane is None else (plane[0], plane[1]),
+        "mirror_slack": float(getattr(space, "mirror_slack", 0.0)),
+    }
+
+
 def ensure_ground_frame_from_landmarks(
     context: bpy.types.Context,
 ) -> str:
@@ -3017,6 +3086,9 @@ class DiagnoseSyncPrep:
     lock_translation: bool
     ground_slack: float
     known_3d_slack: float
+    mirror_pairs: list
+    mirror_plane: tuple | None
+    mirror_slack: float
 
 
 def prepare_diagnose_sync(context: bpy.types.Context) -> DiagnoseSyncPrep:
@@ -3068,6 +3140,7 @@ def prepare_diagnose_sync(context: bpy.types.Context) -> DiagnoseSyncPrep:
         lock_translation=bool(space.lock_translation),
         ground_slack=float(getattr(space, "ground_slack", 0.02)),
         known_3d_slack=float(getattr(space, "known_3d_slack", 0.0)),
+        **_sync_mirror_kwargs(context),
     )
 
 
@@ -3099,6 +3172,9 @@ def run_diagnose_sync(
         use_pose_cache=True,
         ground_slack=prep.ground_slack,
         known_3d_slack=prep.known_3d_slack,
+        mirror_pairs=prep.mirror_pairs,
+        mirror_plane=prep.mirror_plane,
+        mirror_slack=prep.mirror_slack,
         cancel_check=cancel_check,
         progress_callback=_base_progress,
     )
@@ -3123,6 +3199,9 @@ def run_diagnose_sync(
             lock_translation=prep.lock_translation,
             ground_slack=prep.ground_slack,
             known_3d_slack=prep.known_3d_slack,
+            mirror_pairs=prep.mirror_pairs,
+            mirror_plane=prep.mirror_plane,
+            mirror_slack=prep.mirror_slack,
             cancel_check=cancel_check,
             progress_callback=_leave_one_out_progress,
         )
@@ -3248,6 +3327,7 @@ def solve_and_apply_sync(context: bpy.types.Context):
         use_pose_cache=True,
         ground_slack=float(getattr(space, "ground_slack", 0.02)),
         known_3d_slack=float(getattr(space, "known_3d_slack", 0.0)),
+        **_sync_mirror_kwargs(context),
     )
     _apply_sync_landmark_diagnostics(context, result)
     message = result.message
@@ -3368,6 +3448,9 @@ def refine_lenses_and_sync(context: bpy.types.Context):
         share_lens=prep.share_lens,
         ground_slack=prep.ground_slack,
         known_3d_slack=prep.known_3d_slack,
+        mirror_pairs=prep.mirror_pairs,
+        mirror_plane=prep.mirror_plane,
+        mirror_slack=prep.mirror_slack,
     )
     return apply_lens_refine_result(context, refine_result, prep.root_by_name)
 
@@ -3390,6 +3473,9 @@ class LensRefinePrep:
     share_lens: bool = True
     ground_slack: float | None = None
     known_3d_slack: float | None = None
+    mirror_pairs: list | None = None
+    mirror_plane: tuple | None = None
+    mirror_slack: float | None = None
 
 
 def prepare_lens_refine(context: bpy.types.Context) -> LensRefinePrep:
@@ -3484,6 +3570,7 @@ def prepare_lens_refine(context: bpy.types.Context) -> LensRefinePrep:
         share_lens=share_lens,
         ground_slack=ground_slack,
         known_3d_slack=known_3d_slack,
+        **_sync_mirror_kwargs(context),
     )
 
 

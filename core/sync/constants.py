@@ -43,6 +43,18 @@ KNOWN_3D_SLACK_DEFAULT = 0.0
 # Soft XYZ residual at |offset| = slack equals this many pixels before Huber.
 KNOWN_3D_RESIDUAL_PX = 6.0
 
+# Default Mirror Slack: 0 pins the plane to the Empty (Empty is not moved).
+MIRROR_SLACK_DEFAULT = 0.0
+
+# Soft plane-offset residual at |δ| = slack equals this many pixels before Huber.
+MIRROR_PLANE_RESIDUAL_PX = 6.0
+
+# Pair reflection gap of this many scene units equals MIRROR_PAIR_RESIDUAL_PX.
+MIRROR_PAIR_HARD_GAP = 0.01
+
+# Soft XYZ residual for B − reflect(A) at |gap| = MIRROR_PAIR_HARD_GAP.
+MIRROR_PAIR_RESIDUAL_PX = 6.0
+
 # When On Ground is a hard Z=0 pin (slack 0) but Known 3D is thawed, BA still
 # needs a Z spring. This tiny slack is stiff enough to keep |Z| ≈ 0.
 GROUND_Z_HARD_SLACK = 1.0e-4

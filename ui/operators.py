@@ -14,6 +14,7 @@ from bpy_extras.io_utils import ImportHelper
 from mathutils import Vector
 
 from .. import core, properties, scene
+from ..core.sync.mirrors import suggested_mirror_partner_name
 from ..detect import apriltags as apriltag_detect
 from ..detect import line_snap
 from ..detect import opencv as opencv_support
@@ -2843,6 +2844,105 @@ class PM_OT_landmark_clear_known(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class PM_OT_use_selected_mirror(bpy.types.Operator):
+    """Assign the active object as the scene Mirror Empty."""
+
+    bl_idname = "perspective_match.use_selected_mirror"
+    bl_label = "Use Selected as Mirror Empty"
+    bl_description = (
+        "Use the active object as the shared mirror plane for every "
+        "Is Mirror Of pair"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        obj = context.active_object
+        return obj is not None and obj.type != "CAMERA"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        space = _workspace(context)
+        obj = context.active_object
+        if obj is None:
+            return {"CANCELLED"}
+        space.mirror_object = obj
+        properties.tag_viewport_redraw(context)
+        return {"FINISHED"}
+
+
+class PM_OT_clear_mirror(bpy.types.Operator):
+    """Clear the scene Mirror Empty."""
+
+    bl_idname = "perspective_match.clear_mirror"
+    bl_label = "Clear Mirror Empty"
+    bl_description = "Remove the shared mirror plane Empty"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        space = properties.workspace(context)
+        return getattr(space, "mirror_object", None) is not None
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        space = _workspace(context)
+        space.mirror_object = None
+        properties.tag_viewport_redraw(context)
+        return {"FINISHED"}
+
+
+def _named_mirror_partner(context: bpy.types.Context, landmark):
+    """Other point landmark whose name is this one's left/right swap."""
+    wanted = suggested_mirror_partner_name(landmark.name or "")
+    if not wanted or not landmark.item_id:
+        return None
+    wanted_key = wanted.casefold()
+    space = properties.workspace(context)
+    for other in space.landmarks:
+        if other.kind != "POINT":
+            continue
+        if other.item_id == landmark.item_id or not other.item_id:
+            continue
+        if (other.name or "").strip().casefold() == wanted_key:
+            return other
+    return None
+
+
+class PM_OT_guess_mirror_partner(bpy.types.Operator):
+    """Set Is Mirror Of from a left/right name swap."""
+
+    bl_idname = "perspective_match.guess_mirror_partner"
+    bl_label = "Guess Mirror Partner"
+    bl_description = (
+        "Set Is Mirror Of from a matching landmark whose name ends with "
+        "the opposite of this one's left/right suffix"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        landmark = scene.active_landmark(context)
+        if landmark is None or landmark.kind != "POINT":
+            return False
+        partner = _named_mirror_partner(context, landmark)
+        return partner is not None and landmark.mirror_of != partner.item_id
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        landmark = scene.active_landmark(context)
+        if landmark is None or landmark.kind != "POINT":
+            return {"CANCELLED"}
+        partner = _named_mirror_partner(context, landmark)
+        if partner is None:
+            self.report(
+                {"WARNING"},
+                "No point landmark whose name swaps left/right with this one",
+            )
+            return {"CANCELLED"}
+        landmark.mirror_of = partner.item_id
+        properties.tag_viewport_redraw(context)
+        self.report({"INFO"}, f"Is Mirror Of set to '{partner.name}'")
+        return {"FINISHED"}
+
+
 class PM_OT_remove_landmark(bpy.types.Operator):
     """Delete the active sync landmark."""
 
@@ -2859,6 +2959,10 @@ class PM_OT_remove_landmark(bpy.types.Operator):
     def execute(self, context: bpy.types.Context) -> set[str]:
         space = _workspace(context)
         index = space.active_landmark_index
+        removed_id = space.landmarks[index].item_id
+        for landmark in space.landmarks:
+            if getattr(landmark, "mirror_of", "NONE") == removed_id:
+                landmark.mirror_of = "NONE"
         space.landmarks.remove(index)
         space.active_landmark_index = min(index, len(space.landmarks) - 1)
         scene.sync_landmark_empties(context)
@@ -2928,7 +3032,8 @@ class PM_OT_duplicate_landmark(bpy.types.Operator):
     bl_label = "Duplicate Landmark"
     bl_description = (
         "Duplicate the active landmark (keeps type, On Ground, Use in Sync). "
-        "Clears picks, Known 3D links, parallel links, and solved positions. "
+        "Clears picks, Known 3D links, parallel links, mirror links, and solved "
+        "positions. "
         "Sets Pick Confidence from the source landmark's picks when available"
     )
     bl_options = {"REGISTER", "UNDO"}
@@ -3332,6 +3437,9 @@ class PM_OT_refine_lenses(bpy.types.Operator):
                     share_lens=prep.share_lens,
                     ground_slack=prep.ground_slack,
                     known_3d_slack=prep.known_3d_slack,
+                    mirror_pairs=prep.mirror_pairs,
+                    mirror_plane=prep.mirror_plane,
+                    mirror_slack=prep.mirror_slack,
                     cancel_check=cancel_event.is_set,
                     progress_callback=_on_progress,
                 )
@@ -3554,6 +3662,9 @@ CLASSES = (
     PM_OT_add_landmarks_from_selected,
     PM_OT_landmark_use_selected,
     PM_OT_landmark_clear_known,
+    PM_OT_use_selected_mirror,
+    PM_OT_clear_mirror,
+    PM_OT_guess_mirror_partner,
     PM_OT_remove_landmark,
     PM_OT_find_apriltag_landmarks,
     PM_OT_duplicate_landmark,

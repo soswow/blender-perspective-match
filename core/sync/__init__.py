@@ -12,15 +12,25 @@ landmarks now visible in recovered views and PnP stills that had no cloud
 support → report.
 
 Package layout: ``constants``, ``types``, ``projection``, ``pose``, ``ground``,
-``lines``, ``ba``, ``solve``. ``from match_perspective.core import sync`` still
-exposes the same names as the former single module, including test helpers.
+``lines``, ``mirrors``, ``ba``, ``solve``. ``from match_perspective.core import sync``
+still exposes the same names as the former single module, including test helpers.
 """
 
 from __future__ import annotations
 
-from . import ba, constants, ground, lines, pose, projection, solve, types
+from . import ba, constants, ground, lines, mirrors, pose, projection, solve, types
 
-for _module in (constants, types, projection, ba, lines, ground, pose, solve):
+for _module in (
+    constants,
+    types,
+    projection,
+    ba,
+    lines,
+    mirrors,
+    ground,
+    pose,
+    solve,
+):
     for _name, _value in vars(_module).items():
         if _name.startswith("__"):
             continue

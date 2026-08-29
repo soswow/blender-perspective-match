@@ -11,11 +11,15 @@ from .constants import (
     GROUND_Z_HARD_SLACK,
     GROUND_Z_RESIDUAL_PX,
     KNOWN_3D_RESIDUAL_PX,
+    MIRROR_PAIR_HARD_GAP,
+    MIRROR_PAIR_RESIDUAL_PX,
+    MIRROR_PLANE_RESIDUAL_PX,
     OUTLIER_WEIGHT_FACTOR,
     RADIAL_WEIGHT_GAIN,
     SPATIAL_GRID_SIZE,
     SPATIAL_WEIGHT_CLIP,
 )
+from .mirrors import _dedupe_mirror_pairs, _householder, _normalize_plane
 from .projection import (
     _known_line_reprojection_errors,
     _line_observation_reprojection_errors,
@@ -454,8 +458,9 @@ def _pack_ba_params(
     lock_translation: bool = False,
     free_line_ids: list[str] | None = None,
     free_line_points: dict[str, np.ndarray] | None = None,
+    plane_offset: float | None = None,
 ) -> np.ndarray:
-    """Pack free-match pose (+ optional log-scale / rotation / translation), free landmarks, free line midpoints."""
+    """Pack free-match pose, free landmarks, free line midpoints, optional plane δ."""
     values: list[float] = []
     for match_id in free_match_ids:
         similarity = similarities[match_id]
@@ -470,6 +475,8 @@ def _pack_ba_params(
     for line_id in free_line_ids or []:
         point = (free_line_points or {})[line_id]
         values.extend(np.asarray(point, dtype=np.float64).tolist())
+    if plane_offset is not None:
+        values.append(float(plane_offset))
     return np.asarray(values, dtype=np.float64)
 
 
@@ -667,6 +674,10 @@ def _ba_raw_residuals_and_jacobian(
     ground_slack: float = 0.0,
     known_world_priors: dict[str, np.ndarray] | None = None,
     known_3d_slack: float = 0.0,
+    mirror_pairs: list[tuple[str, str]] | None = None,
+    mirror_plane: tuple[np.ndarray, np.ndarray] | None = None,
+    mirror_slack: float = 0.0,
+    free_plane_offset: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Unweighted BA residuals and block-analytic Jacobian."""
     free_line_ids = free_line_ids or []
@@ -728,6 +739,11 @@ def _ba_raw_residuals_and_jacobian(
     residuals: list[float] = []
     jacobian_rows: list[np.ndarray] = []
     column_count = int(params.size)
+    plane_col: int | None = None
+    plane_offset = 0.0
+    if free_plane_offset and column_count > 0:
+        plane_col = column_count - 1
+        plane_offset = float(params[plane_col])
 
     for observation in observations:
         point_shared = landmarks.get(observation.landmark_id)
@@ -825,6 +841,43 @@ def _ba_raw_residuals_and_jacobian(
                 row_axis[start + axis] = spring
                 jacobian_rows.append(row_axis)
 
+    if mirror_pairs and mirror_plane is not None:
+        plane_point, normal = _normalize_plane(mirror_plane[0], mirror_plane[1])
+        householder = _householder(normal)
+        two_nc_n = 2.0 * float(np.dot(normal, plane_point)) * normal
+        pair_spring = MIRROR_PAIR_RESIDUAL_PX / max(MIRROR_PAIR_HARD_GAP, 1.0e-12)
+        offset_shift = (2.0 * plane_offset) * normal
+        for landmark_a, landmark_b in _dedupe_mirror_pairs(mirror_pairs):
+            point_a = landmarks.get(landmark_a)
+            point_b = landmarks.get(landmark_b)
+            if point_a is None or point_b is None:
+                continue
+            reflected = householder @ point_a + two_nc_n + offset_shift
+            delta = point_b - reflected
+            start_a = landmark_offset.get(landmark_a)
+            start_b = landmark_offset.get(landmark_b)
+            for axis in range(3):
+                residuals.append(pair_spring * float(delta[axis]))
+                row_axis = np.zeros(column_count, dtype=np.float64)
+                if start_a is not None:
+                    row_axis[start_a : start_a + 3] = (
+                        -pair_spring * householder[axis]
+                    )
+                if start_b is not None:
+                    row_axis[start_b + axis] = pair_spring
+                if plane_col is not None:
+                    row_axis[plane_col] = pair_spring * (
+                        -2.0 * float(normal[axis])
+                    )
+                jacobian_rows.append(row_axis)
+        slack = max(float(mirror_slack), 0.0)
+        if plane_col is not None and slack > 1.0e-12:
+            spring = MIRROR_PLANE_RESIDUAL_PX / slack
+            residuals.append(spring * plane_offset)
+            row_offset = np.zeros(column_count, dtype=np.float64)
+            row_offset[plane_col] = spring
+            jacobian_rows.append(row_offset)
+
     # Lines: pose FD + free-midpoint FD (directions stay fixed from the seed).
     for landmark_id, _seed_point, direction, observation in line_constraints:
         match_id = observation.match_id
@@ -915,6 +968,10 @@ def _ba_residual_vector(
     ground_slack: float = 0.0,
     known_world_priors: dict[str, np.ndarray] | None = None,
     known_3d_slack: float = 0.0,
+    mirror_pairs: list[tuple[str, str]] | None = None,
+    mirror_plane: tuple[np.ndarray, np.ndarray] | None = None,
+    mirror_slack: float = 0.0,
+    free_plane_offset: bool = False,
 ) -> np.ndarray:
     """Joint reprojection residuals for free poses + free landmarks (+ lines)."""
     residual_array, _jacobian = _ba_raw_residuals_and_jacobian(
@@ -939,6 +996,10 @@ def _ba_residual_vector(
         ground_slack=ground_slack,
         known_world_priors=known_world_priors,
         known_3d_slack=known_3d_slack,
+        mirror_pairs=mirror_pairs,
+        mirror_plane=mirror_plane,
+        mirror_slack=mirror_slack,
+        free_plane_offset=free_plane_offset,
     )
     return residual_array * _robust_weights(residual_array, huber_delta)
 
@@ -994,12 +1055,19 @@ def _auto_downweight_outlier_observations(
     factor: float = OUTLIER_WEIGHT_FACTOR,
     absolute_px: float = 20.0,
     relative_to_median: float = 2.5,
+    protected_ids: set[str] | None = None,
 ) -> tuple[list[SyncObservation], list[str]]:
-    """Clone observations with reduced weight for severe landmark outliers."""
+    """Clone observations with reduced weight for severe landmark outliers.
+
+    ``protected_ids`` (mirror partners) keep full weight so a biased plane
+    can still be pulled by their 2D picks.
+    """
+    skip = set(protected_ids or ())
     point_values = [
         rmse
         for landmark_id, rmse in per_landmark_rmse.items()
-        if any(item.landmark_id == landmark_id for item in observations)
+        if landmark_id not in skip
+        and any(item.landmark_id == landmark_id for item in observations)
     ]
     if not point_values:
         return observations, []
@@ -1008,7 +1076,7 @@ def _auto_downweight_outlier_observations(
     outlier_ids = {
         landmark_id
         for landmark_id, rmse in per_landmark_rmse.items()
-        if rmse > threshold
+        if rmse > threshold and landmark_id not in skip
     }
     if not outlier_ids:
         return observations, []
@@ -1054,6 +1122,10 @@ def _bundle_adjust_registration(
     ground_slack: float = 0.0,
     known_world_priors: dict[str, np.ndarray] | None = None,
     known_3d_slack: float = 0.0,
+    mirror_pairs: list[tuple[str, str]] | None = None,
+    mirror_plane: tuple[np.ndarray, np.ndarray] | None = None,
+    mirror_slack: float = 0.0,
+    free_plane_offset: bool = False,
 ) -> tuple[
     dict[str, SimilarityTransform],
     dict[str, np.ndarray],
@@ -1152,6 +1224,7 @@ def _bundle_adjust_registration(
         lock_translation=lock_translation,
         free_line_ids=free_line_ids,
         free_line_points=free_line_points,
+        plane_offset=0.0 if free_plane_offset else None,
     )
     residual_kwargs = {
         "free_match_ids": pose_match_ids,
@@ -1175,6 +1248,10 @@ def _bundle_adjust_registration(
         "ground_slack": float(ground_slack),
         "known_world_priors": known_world_priors or {},
         "known_3d_slack": float(known_3d_slack),
+        "mirror_pairs": list(mirror_pairs or ()),
+        "mirror_plane": mirror_plane,
+        "mirror_slack": float(mirror_slack),
+        "free_plane_offset": bool(free_plane_offset),
     }
     damping = 1.0e-2
     previous_cost = float("inf")
@@ -1379,6 +1456,9 @@ def leave_one_out_landmark_report(
     lock_translation: bool = False,
     ground_slack: float | None = None,
     known_3d_slack: float | None = None,
+    mirror_pairs: list[tuple[str, str]] | None = None,
+    mirror_plane: tuple[np.ndarray, np.ndarray] | None = None,
+    mirror_slack: float | None = None,
     cancel_check: Callable[[], bool] | None = None,
     progress_callback: Callable[[int, int, str], None] | None = None,
 ) -> list[tuple[str, float, float]]:
@@ -1405,6 +1485,9 @@ def leave_one_out_landmark_report(
             lock_translation=lock_translation,
             ground_slack=ground_slack,
             known_3d_slack=known_3d_slack,
+            mirror_pairs=mirror_pairs,
+            mirror_plane=mirror_plane,
+            mirror_slack=mirror_slack,
             use_pose_cache=True,
             cancel_check=cancel_check,
         )
@@ -1471,6 +1554,11 @@ def leave_one_out_landmark_report(
             for pair in (parallel_pairs or [])
             if landmark_id not in pair
         ]
+        filtered_mirror = [
+            pair
+            for pair in (mirror_pairs or [])
+            if landmark_id not in pair
+        ]
         without = solve_landmark_sync(
             accepted_matches,
             filtered,
@@ -1484,6 +1572,9 @@ def leave_one_out_landmark_report(
             lock_translation=lock_translation,
             ground_slack=ground_slack,
             known_3d_slack=known_3d_slack,
+            mirror_pairs=filtered_mirror,
+            mirror_plane=mirror_plane,
+            mirror_slack=mirror_slack,
             use_pose_cache=True,
             cancel_check=cancel_check,
         )

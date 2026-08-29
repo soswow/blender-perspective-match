@@ -90,6 +90,7 @@ def main(argv: list[str]) -> int:
         line_observations=line_observations,
         known_lines=known_lines,
         parallel_pairs=parallel,
+        **scene._sync_mirror_kwargs(bpy.context),
     )
     print(result.message)
     print(f"per_match={ {k: round(v, 1) for k, v in result.per_match_rmse_px.items()} }")

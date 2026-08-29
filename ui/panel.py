@@ -15,6 +15,20 @@ def _observation_count(landmark) -> int:
     return sum(1 for observation in landmark.observations if observation.is_set)
 
 
+def _landmark_is_mirror_linked(landmark, workspace) -> bool:
+    """True when this point is mirror-linked to another (either direction)."""
+    if landmark.kind != "POINT":
+        return False
+    if landmark.mirror_of and landmark.mirror_of != "NONE":
+        return True
+    for other in workspace.landmarks:
+        if other.item_id == landmark.item_id:
+            continue
+        if other.kind == "POINT" and other.mirror_of == landmark.item_id:
+            return True
+    return False
+
+
 def _landmark_is_parallel_linked(landmark, workspace) -> bool:
     """True when this line is parallel-linked to another (either direction)."""
     if landmark.kind != "LINE":
@@ -64,6 +78,8 @@ class PM_UL_landmarks(bpy.types.UIList):
             meta.label(text="", icon="MESH_DATA")
             if _landmark_is_parallel_linked(item, _data):
                 meta.label(text="", icon="LINKED")
+        elif _landmark_is_mirror_linked(item, _data):
+            meta.label(text="", icon="MOD_MIRROR")
         if item.known_object is not None:
             meta.label(text="", icon="PIVOT_CURSOR")
         elif item.on_ground:
@@ -607,6 +623,14 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             if landmark.kind == "LINE":
                 sync_body.prop(landmark, "known_object_b", text="Known 3D B")
                 sync_body.prop(landmark, "parallel_to", text="Is Parallel To")
+            if landmark.kind == "POINT":
+                mirror_of_row = sync_body.row(align=True)
+                mirror_of_row.prop(landmark, "mirror_of", text="Is Mirror Of")
+                mirror_of_row.operator(
+                    "perspective_match.guess_mirror_partner",
+                    text="",
+                    icon="SHADERFX",
+                )
             if landmark.known_object is not None:
                 location = landmark.known_object.matrix_world.to_translation()
                 sync_body.label(
@@ -717,6 +741,23 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
         slack_row.use_property_split = False
         slack_row.prop(workspace, "ground_slack", text="Ground Slack")
         slack_row.prop(workspace, "known_3d_slack", text="Known 3D Slack")
+        mirror_row = sync_body.row(align=True)
+        mirror_row.use_property_split = False
+        mirror_row.prop(workspace, "mirror_object", text="Mirror Empty")
+        mirror_row.operator(
+            "perspective_match.use_selected_mirror",
+            text="",
+            icon="EYEDROPPER",
+        )
+        mirror_row.operator(
+            "perspective_match.clear_mirror",
+            text="",
+            icon="X",
+        )
+        mirror_opts = sync_body.row(align=True)
+        mirror_opts.use_property_split = False
+        mirror_opts.prop(workspace, "mirror_plane", text="Plane")
+        mirror_opts.prop(workspace, "mirror_slack", text="Mirror Slack")
         opts_row = sync_body.row(align=True)
         opts_row.use_property_split = False
         opts_row.prop(workspace, "share_lens", text="Same Lens")

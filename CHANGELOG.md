@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Undistorted Plate** (left of Original Plate) remaps the still with imported D / estimated λ and shows that pinhole plate
 - **Ground Slack** lets On Ground landmarks sit a little off Z=0 so a boarded floor can flex without bending cameras
 - **Known 3D Slack** lets Known 3D point landmarks ease a little off their Empty during Solve Sync so CAD error can follow the 2D picks without stretching cameras
+- Point landmarks can be **Is Mirror Of** a partner across one scene **Mirror Empty**; **Mirror Slack** lets that plane ease along its normal if the Empty was slightly off; the magic wand next to Is Mirror Of fills the partner from a left/right name suffix
 - **Use Known 3D** (Camera) polishes FOV, principal point, and camera position from landmark picks after Auto from VPs, Estimate Distortion, or VP-line edits, without locking Manual FOV; orientation is rebuilt from the VP strokes at the new K
 
 ### Changed

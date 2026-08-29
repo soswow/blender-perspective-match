@@ -51,6 +51,15 @@ WORLD_AXIS_PARALLEL_ITEMS = (
     ("WORLD_AXIS_Z", "Z Axis", "Parallel to the shared-world Z axis"),
 )
 
+MIRROR_PLANE_ITEMS = (
+    ("YZ", "YZ", "Empty's local YZ is the mirror (local X is the normal)"),
+    ("XZ", "XZ", "Empty's local XZ is the mirror (local Y is the normal)"),
+    ("XY", "XY", "Empty's local XY is the mirror (local Z is the normal)"),
+)
+
+# Dynamic Is Mirror Of identifiers must stay referenced for EnumProperty.
+_MIRROR_OF_ITEMS: dict[tuple[tuple[str, str], ...], tuple] = {}
+
 
 def tag_viewport_redraw(context: bpy.types.Context | None = None) -> None:
     """Request redraw in every 3D View."""
@@ -156,9 +165,11 @@ def _update_hide_origin_empty(self, context: bpy.types.Context) -> None:
 
 
 def _update_landmark_kind(self, context: bpy.types.Context) -> None:
-    """Clear line-only links when switching away from Line."""
+    """Clear kind-specific links when switching point/line."""
     if self.kind != "LINE":
         self.parallel_to = "NONE"
+    if self.kind != "POINT":
+        self.mirror_of = "NONE"
     tag_viewport_redraw(context)
 
 
@@ -184,6 +195,35 @@ def _parallel_to_items(self, context):
             )
         )
     return items
+
+
+def _mirror_of_items(self, context):
+    """Dropdown of other point landmarks for the mirror-pair constraint."""
+    items = [("NONE", "None", "No mirror partner")]
+    if context is None:
+        return items
+    space = workspace(context)
+    partners: list[tuple[str, str]] = []
+    for landmark in space.landmarks:
+        if landmark.kind != "POINT":
+            continue
+        if landmark.item_id == self.item_id or not landmark.item_id:
+            continue
+        partners.append((landmark.item_id, landmark.name or landmark.item_id[:8]))
+    key = tuple(partners)
+    cached = _MIRROR_OF_ITEMS.get(key)
+    if cached is not None:
+        return cached
+    built = [
+        *items,
+        *(
+            (item_id, name, "This feature mirrored across the scene Mirror Empty")
+            for item_id, name in partners
+        ),
+    ]
+    packed = tuple(built)
+    _MIRROR_OF_ITEMS[key] = packed
+    return packed
 
 
 def is_match_root(obj: bpy.types.Object | None) -> bool:
@@ -526,6 +566,15 @@ class PMLandmark(bpy.types.PropertyGroup):
             "3D direction. Constrains relative orientation during sync"
         ),
         items=_parallel_to_items,
+        update=_redraw,
+    )
+    mirror_of: bpy.props.EnumProperty(
+        name="Is Mirror Of",
+        description=(
+            "Another point landmark that is this feature reflected across the "
+            "scene Mirror Empty. Each side can be picked in different stills"
+        ),
+        items=_mirror_of_items,
         update=_redraw,
     )
     observations: bpy.props.CollectionProperty(type=PMLandmarkObservation)
@@ -1016,6 +1065,43 @@ class PMWorkspace(bpy.types.PropertyGroup):
             "stretching the cameras. Does not move the linked Empty — "
             "Landmark Empties show the eased position. On Ground Known 3D "
             "uses the tighter of this and Ground Slack for Z"
+        ),
+        default=0.0,
+        min=0.0,
+        soft_max=0.25,
+        max=2.0,
+        step=1,
+        precision=3,
+        unit="LENGTH",
+        update=_redraw,
+    )
+    mirror_object: bpy.props.PointerProperty(
+        name="Mirror Empty",
+        description=(
+            "One object whose chosen local plane is the shared mirror for "
+            "every Is Mirror Of pair. Place it on the object's midline. "
+            "The Empty is not moved by Solve Sync"
+        ),
+        type=bpy.types.Object,
+        update=_redraw,
+    )
+    mirror_plane: bpy.props.EnumProperty(
+        name="Plane",
+        description=(
+            "Which local face of the Mirror Empty is the mirror plane. "
+            "YZ (default) means local X is the normal"
+        ),
+        items=MIRROR_PLANE_ITEMS,
+        default="YZ",
+        update=_redraw,
+    )
+    mirror_slack: bpy.props.FloatProperty(
+        name="Mirror Slack",
+        description=(
+            "How far the shared mirror plane may slide along its normal "
+            "(scene units) during Solve Sync. 0 pins it to the Empty. "
+            "A small value lets a slightly misplaced Empty ease toward "
+            "the 2D picks. Does not move the Empty"
         ),
         default=0.0,
         min=0.0,

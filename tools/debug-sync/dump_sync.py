@@ -576,6 +576,7 @@ def main(argv: list[str]) -> int:
             line_observations=line_observations,
             known_lines=known_lines,
             parallel_pairs=parallel,
+            **scene._sync_mirror_kwargs(bpy.context),
         )
         log(f"success={result.success}")
         log(f"message={result.message}")

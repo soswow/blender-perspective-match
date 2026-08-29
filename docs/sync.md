@@ -6,7 +6,7 @@ When several matches show the same scene, register them into one Blender world.
 
 1. Match each still on its own (VP lines; Origin optional). Origins do **not** need to match across stills. If every still has locked/imported full K, you can instead omit VP lines and use the calibrated ground-only workflow below.
 2. Choose an **Anchor** match — that world is shared space. Each match has **Enable sync for current match** (on by default); turn it off to exclude that still from Solve Sync / Diagnose / Refine Lenses. After **Solve Sync**, that same row shows **Synced** or **Not synced** for the active match: whether this still was registered in the last run. A later run that skips it (or **Clear**) removes the check.
-3. Add landmarks for features visible in two or more stills (≥5 shared 2D picks), **or** link **Known 3D** Blender objects (≥3) and pick them in the other stills.
+3. Add landmarks for features visible in two or more stills (≥5 shared 2D picks), **or** link **Known 3D** Blender objects (≥3) and pick them in the other stills. Optional: pair one-sided features with **Is Mirror Of** and one scene **Mirror Empty**.
 4. Pick each landmark in every still where it is visible. With the **Perspective Match** sidebar tab open and the view through the active match camera, **Ctrl+Cmd+A** (macOS; **Ctrl+Win+A** on Windows/Linux) starts **Pick in Active Match**. Optional: enable **Snap to AprilTag** (under **Pick in Active Match**) so a point click on a small or blurry marker snaps to the tag centre — the intersection of the dark quadrilateral's diagonals — without needing the marker to decode.
 5. Optional: tag **On Ground** on point landmarks in the anchor, or rely on Known 3D, to pin absolute scale.
 6. **Solve Sync** writes a rigid (or similarity) transform onto non-anchor root Empties. If a sync-enabled match still has no Pick Origin but has an **On Ground** pick, Sync auto-sets Origin from the earliest such pick (creation order) before solving — status shows `Auto origin: Match←landmark`.
@@ -34,7 +34,7 @@ Each landmark keeps a stable `item_id` plus a `creation_index` (add order). UI h
 - **Filter** toggle: show only landmarks with a pick defined in the active match.
 - **Font** toggle: show landmark names next to picks on the plate.
 - Click a pick on the plate to select it in the list (while the **Perspective Match** sidebar tab is open). The selected pick draws in red. **On Ground** picks draw in magenta; Known 3D picks in cyan.
-- **Duplicate**: copies type / On Ground / Use in Sync, clears Known 3D links, parallel links, picks, and solved positions.
+- **Duplicate**: copies type / On Ground / Use in Sync, clears Known 3D links, parallel links, mirror links, picks, and solved positions.
 - **Use in Sync**: exclude a landmark from Solve Sync / Diagnose without deleting picks. With **Landmark Empties** on, that also removes its helper from `PM_Sync_Landmarks`.
 
 ### Find AprilTags
@@ -46,6 +46,14 @@ When a printed marker is too small or blurry to decode, pick it by hand with **S
 ### Known 3D workflow
 
 Model or place Empties in the anchor world → select them → Sync list **Landmarks from Selected** (auto-fills 2D on the anchor still) → in each other match, **Pick** those features in 2D. Add a few off-line 2D↔2D landmarks if the known points lie on one edge (kills spin-around-the-line ambiguity). The same Known 3D links plus picks on **this** still also feed **Use Known 3D** in the Camera section — pick on the photo, not the auto-projected positions, when you want that single-camera polish. If the CAD is a strong guide but not exact, raise **Known 3D Slack** so Solve Sync can ease those points a little toward the picks.
+
+### Mirror pairs
+
+A point landmark can name another as **Is Mirror Of** — the same feature on the opposite side of a symmetric object. Each side is picked only where it is visible. The magic-wand button next to the dropdown fills the partner when this landmark's name ends with **left** or **right** and another point landmark uses the swapped name. Pairwise registration still needs ordinary shared points; the mirror constraint is used in joint BA.
+
+One scene **Mirror Empty** (below Ground Slack / Known 3D Slack) is the plane for every pair. Place it on the midline. **Plane** chooses which local face is the mirror (YZ by default: local X is the normal). **Mirror Slack** (0 pins the plane) lets that plane slide along its normal if the Empty was slightly off. The Empty is not moved.
+
+If Is Mirror Of is set but Mirror Empty is empty, Solve Sync ignores those pairs and says so in the status line.
 
 ### Line landmarks
 
@@ -64,6 +72,7 @@ Without Known 3D ends, a free line needs **three or more** stills — two views 
 - Both checked — leave cameras unmoved; only adjust 3D landmark / Empty positions.
 - **Ground Slack** — how far On Ground landmarks may sit off Z=0 (scene units). 0 pins them to the floor raycast. The default (0.02) is enough for plank cup / tag thickness on a boarded floor.
 - **Known 3D Slack** — how far Known 3D point landmarks may sit off their Empty (scene units). 0 (the default) pins them. A small value is a spring toward the Empty while each still's 2D pick pulls the point along that camera's ray, so CAD that is slightly wrong can share the error with the cameras instead of stretching the overlay. Linked Empties stay put; **Landmark Empties** show the eased positions. Known 3D lines stay pinned. **Use Known 3D** (Camera) still treats the Empty as fixed. A point that is both Known 3D and **On Ground** uses the tighter of the two slacks for Z.
+- **Mirror Empty / Plane / Mirror Slack** — one object whose chosen local face is the shared mirror for every **Is Mirror Of** pair. Slack 0 pins the plane to the Empty; a small value lets it slide along the normal. The Empty is not moved.
 
 **Diagnose** shows per-landmark RMSE without moving cameras; when error is high it also runs leave-one-out checks on the worst landmarks. It runs in the background: the status line shows the current solve stage, and **Esc** or **Cancel** stops it. Leave-one-out keeps the camera graph accepted by the base solve, so a rejected still is not globally re-registered five more times. **Clear** resets sync transforms. Diagnose and Solve Sync cache each still-pair pose so a second run skips the expensive pairwise search when those two cameras' shared picks, Known 3D, and private K/pose are unchanged; **Clear** drops that cache. Independent still pairs on the first run are solved in parallel.
 

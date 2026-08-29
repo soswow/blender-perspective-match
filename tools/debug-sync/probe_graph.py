@@ -446,6 +446,7 @@ def main(argv: list[str]) -> int:
             line_observations=line_observations,
             known_lines=known_lines,
             parallel_pairs=parallel,
+            **scene._sync_mirror_kwargs(bpy.context),
         )
         solve_s = time.perf_counter() - solve_t0
         log(f"success={result.success}")
@@ -474,6 +475,7 @@ def main(argv: list[str]) -> int:
                 parallel_pairs=parallel,
                 top_k=5,
                 baseline=result,
+                **scene._sync_mirror_kwargs(bpy.context),
             )
             leave_s = time.perf_counter() - leave_t0
             log(f"leave_one_out_s={leave_s:.2f}")
