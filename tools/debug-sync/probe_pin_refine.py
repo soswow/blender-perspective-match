@@ -88,7 +88,10 @@ def _collect_pins(root):
                 point_private=scene._private_point_from_world(root, world),
                 u=float(observation.x),
                 v=float(observation.y),
-                weight=sync_module.confidence_weight(observation.confidence),
+                weight=sync_module.observation_weight(
+                    observation.confidence,
+                    float(getattr(landmark, "sync_weight", 1.0)),
+                ),
                 landmark_name=str(landmark.name or landmark.item_id),
             )
         )

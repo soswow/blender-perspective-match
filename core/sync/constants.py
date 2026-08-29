@@ -66,6 +66,9 @@ LOG_SCALE_CLIP = 18.0
 # Multiply an outlier landmark's pick weight by this in joint BA.
 OUTLIER_WEIGHT_FACTOR = 0.15
 
+# Landmark Sync Weight above this keeps full BA pull (no outlier downweight).
+SYNC_WEIGHT_PROTECT = 1.0
+
 # Joint BA freezes 3D and refines poses only above this landmark count.
 # Triangulation stays the 3D prior so cameras move instead of a few
 # landmarks absorbing edge error.

@@ -86,8 +86,10 @@ class SyncObservation:
     v: float
     on_ground: bool = False
     landmark_name: str = ""
-    # Relative least-squares weight (High=4, Normal=1, Low=0.25).
+    # Relative least-squares weight (High=4, Normal=1, Low=0.25) × Sync Weight.
     weight: float = 1.0
+    # True when the user raised Sync Weight — skip outlier auto-downweight.
+    protect_outlier: bool = False
 
 
 @dataclass
@@ -107,6 +109,11 @@ class SyncLineObservation:
 def confidence_weight(confidence: str) -> float:
     """Map a UI confidence enum to a sync residual weight."""
     return float(CONFIDENCE_WEIGHTS.get(confidence, 1.0))
+
+
+def observation_weight(confidence: str, landmark_weight: float = 1.0) -> float:
+    """Combine pick confidence with per-landmark Sync Weight."""
+    return confidence_weight(confidence) * max(float(landmark_weight), 1.0e-12)
 
 
 def _observation_scale(observation: SyncObservation) -> float:

@@ -85,12 +85,14 @@ class PM_UL_landmarks(bpy.types.UIList):
         elif item.on_ground:
             meta.label(text="", icon="ORIENTATION_VIEW")
         count = _observation_count(item)
+        weight = float(getattr(item, "sync_weight", 1.0))
+        weight_mark = f" · ×{weight:g}" if abs(weight - 1.0) > 0.05 else ""
         if not item.use_in_sync:
-            meta.label(text=f"{count} · off")
+            meta.label(text=f"{count} · off{weight_mark}")
         elif item.rmse_px > 0.5:
-            meta.label(text=f"{count} · {item.rmse_px:.0f}px")
+            meta.label(text=f"{count} · {item.rmse_px:.0f}px{weight_mark}")
         else:
-            meta.label(text=f"{count}")
+            meta.label(text=f"{count}{weight_mark}")
 
     def filter_items(self, context, data, propname):
         """Filter to the active match, then apply the selected list order.
@@ -639,6 +641,7 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
                     ),
                     icon="EMPTY_AXIS",
                 )
+            sync_body.prop(landmark, "sync_weight", slider=True)
             pick_row = sync_body.row(align=True)
             pick_row.operator_context = "INVOKE_REGION_WIN"
             pick_enabled = pick_row.row(align=True)

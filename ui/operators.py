@@ -3031,7 +3031,8 @@ class PM_OT_duplicate_landmark(bpy.types.Operator):
     bl_idname = "perspective_match.duplicate_landmark"
     bl_label = "Duplicate Landmark"
     bl_description = (
-        "Duplicate the active landmark (keeps type, On Ground, Use in Sync). "
+        "Duplicate the active landmark (keeps type, On Ground, Use in Sync, "
+        "Sync Weight). "
         "Clears picks, Known 3D links, parallel links, mirror links, and solved "
         "positions. "
         "Sets Pick Confidence from the source landmark's picks when available"
@@ -3067,6 +3068,7 @@ class PM_OT_duplicate_landmark(bpy.types.Operator):
         duplicate.kind = source.kind
         duplicate.on_ground = bool(source.on_ground)
         duplicate.use_in_sync = bool(source.use_in_sync)
+        duplicate.sync_weight = float(getattr(source, "sync_weight", 1.0))
         # Intentionally leave Known 3D / parallel / observations / positions empty.
         properties.ensure_landmark_creation_indices(space)
         space.active_landmark_index = len(space.landmarks) - 1

@@ -179,6 +179,47 @@ class BundleAdjustSyncTests(unittest.TestCase):
         self.assertLess(by_id["bad"], by_id["good_a"])
         self.assertAlmostEqual(by_id["good_a"], 1.0)
 
+    def test_auto_downweight_skips_protected_outlier(self) -> None:
+        """Raised Sync Weight must keep full pull even when RMSE is high."""
+        observations = [
+            sync.SyncObservation(
+                match_id="anchor",
+                landmark_id="good_a",
+                u=100.0,
+                v=100.0,
+                weight=1.0,
+            ),
+            sync.SyncObservation(
+                match_id="anchor",
+                landmark_id="good_b",
+                u=120.0,
+                v=120.0,
+                weight=1.0,
+            ),
+            sync.SyncObservation(
+                match_id="anchor",
+                landmark_id="good_c",
+                u=140.0,
+                v=140.0,
+                weight=1.0,
+            ),
+            sync.SyncObservation(
+                match_id="anchor",
+                landmark_id="keep",
+                u=200.0,
+                v=200.0,
+                weight=8.0,
+                protect_outlier=True,
+            ),
+        ]
+        adjusted, ids = sync._auto_downweight_outlier_observations(
+            observations,
+            {"good_a": 2.0, "good_b": 3.0, "good_c": 2.5, "keep": 80.0},
+        )
+        self.assertEqual(ids, [])
+        by_id = {item.landmark_id: item.weight for item in adjusted}
+        self.assertEqual(by_id["keep"], 8.0)
+
 
     def test_ba_jacobian_matches_finite_differences(self) -> None:
         """Block-analytic BA Jacobian should track dense finite differences."""
@@ -313,6 +354,33 @@ class BundleAdjustSyncTests(unittest.TestCase):
         balanced = sync._balance_observation_weights(observations, matches)
         by_id = {item.landmark_id: item.weight for item in balanced}
         self.assertAlmostEqual(by_id["high"] / by_id["normal"], 4.0, places=6)
+
+    def test_spatial_balance_preserves_protect_outlier(self) -> None:
+        """Spatial reweight must not drop the Sync Weight protect flag."""
+        intrinsics = core.CameraIntrinsics(
+            fx=800.0,
+            fy=800.0,
+            cx=400.0,
+            cy=300.0,
+            image_width=800,
+            image_height=600,
+        )
+        calibration = core.Calibration(
+            intrinsics=intrinsics,
+            rotation_w2c=np.eye(3, dtype=np.float64),
+            camera_center=np.zeros(3, dtype=np.float64),
+        )
+        matches = {"cam": sync.SyncMatchInput("cam", calibration)}
+        observations = [
+            sync.SyncObservation(
+                "cam", "keep", 40.0, 30.0, weight=4.0, protect_outlier=True
+            ),
+            sync.SyncObservation("cam", "plain", 400.0, 300.0, weight=1.0),
+        ]
+        balanced = sync._balance_observation_weights(observations, matches)
+        by_id = {item.landmark_id: item for item in balanced}
+        self.assertTrue(by_id["keep"].protect_outlier)
+        self.assertFalse(by_id["plain"].protect_outlier)
 
 
     def test_edge_landmarks_keep_camera_depth_with_cluster(self) -> None:

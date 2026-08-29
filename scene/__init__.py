@@ -1255,7 +1255,10 @@ def collect_known_pins(context: bpy.types.Context):
                 point_private=_private_point_from_world(root, world),
                 u=float(observation.x),
                 v=float(observation.y),
-                weight=sync_module.confidence_weight(observation.confidence),
+                weight=sync_module.observation_weight(
+                    observation.confidence,
+                    float(getattr(landmark, "sync_weight", 1.0)),
+                ),
                 landmark_name=str(landmark.name or landmark.item_id),
             )
         )
@@ -2776,7 +2779,10 @@ def build_sync_problem(context: bpy.types.Context):
                         u2=float(observation.x2),
                         v2=float(observation.y2),
                         landmark_name=landmark.name or landmark.item_id,
-                        weight=sync_module.confidence_weight(observation.confidence),
+                        weight=sync_module.observation_weight(
+                            observation.confidence,
+                            float(getattr(landmark, "sync_weight", 1.0)),
+                        ),
                     )
                 )
             else:
@@ -2788,7 +2794,14 @@ def build_sync_problem(context: bpy.types.Context):
                         v=float(observation.y),
                         on_ground=bool(landmark.on_ground),
                         landmark_name=landmark.name or landmark.item_id,
-                        weight=sync_module.confidence_weight(observation.confidence),
+                        weight=sync_module.observation_weight(
+                            observation.confidence,
+                            float(getattr(landmark, "sync_weight", 1.0)),
+                        ),
+                        protect_outlier=(
+                            float(getattr(landmark, "sync_weight", 1.0))
+                            > sync_module.SYNC_WEIGHT_PROTECT
+                        ),
                     )
                 )
     return (

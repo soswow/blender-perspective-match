@@ -1136,6 +1136,11 @@ def solve_landmark_sync(
             landmark_id
             for pair in (mirror_pairs or [])
             for landmark_id in pair
+        }
+        | {
+            observation.landmark_id
+            for observation in usable_observations
+            if observation.protect_outlier
         },
     )
     ba_observations = _balance_observation_weights(ba_observations, match_map)

@@ -496,8 +496,8 @@ class PMLandmarkObservation(bpy.types.PropertyGroup):
     confidence: bpy.props.EnumProperty(
         name="Confidence",
         description=(
-            "How strongly this pick constrains sync. Low lets the landmark Empty "
-            "drift relative to this still"
+            "How strongly this pick constrains sync (multiplies the landmark "
+            "Sync Weight). Low lets the landmark Empty drift relative to this still"
         ),
         items=LANDMARK_CONFIDENCE_ITEMS,
         default="NORMAL",
@@ -522,6 +522,22 @@ class PMLandmark(bpy.types.PropertyGroup):
         ),
         default=True,
         update=_update_landmark_use_in_sync,
+    )
+    sync_weight: bpy.props.FloatProperty(
+        name="Sync Weight",
+        description=(
+            "How strongly this landmark pulls Solve Sync. 1 is default. "
+            "Raise it for a few well-placed picks far from the others so they "
+            "are not sacrificed to a cluster of easier landmarks"
+        ),
+        default=1.0,
+        min=0.1,
+        soft_min=0.25,
+        soft_max=8.0,
+        max=16.0,
+        step=10,
+        precision=2,
+        update=_redraw,
     )
     kind: bpy.props.EnumProperty(
         name="Kind",

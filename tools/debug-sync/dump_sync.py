@@ -14,6 +14,7 @@ import math
 import sys
 import traceback
 from collections import defaultdict
+from dataclasses import replace
 from pathlib import Path
 
 import bpy
@@ -78,20 +79,7 @@ def _image_center_ray_world(calibration) -> np.ndarray:
 
 
 def _clone_obs_without_ground(observations):
-    from match_perspective.core import sync as sync_module
-
-    return [
-        sync_module.SyncObservation(
-            match_id=observation.match_id,
-            landmark_id=observation.landmark_id,
-            u=observation.u,
-            v=observation.v,
-            on_ground=False,
-            landmark_name=observation.landmark_name,
-            weight=observation.weight,
-        )
-        for observation in observations
-    ]
+    return [replace(observation, on_ground=False) for observation in observations]
 
 
 def _shared_optical_axis(calibration, similarity) -> np.ndarray:

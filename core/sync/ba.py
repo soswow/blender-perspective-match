@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Callable
 
 import numpy as np
@@ -132,13 +133,8 @@ def _balance_observation_weights(
             continue
         for index, boost in zip(indices, boosts):
             observation = observations[index]
-            balanced[index] = SyncObservation(
-                match_id=observation.match_id,
-                landmark_id=observation.landmark_id,
-                u=observation.u,
-                v=observation.v,
-                on_ground=observation.on_ground,
-                landmark_name=observation.landmark_name,
+            balanced[index] = replace(
+                observation,
                 weight=float(observation.weight) * (boost / mean_boost),
             )
     return balanced
@@ -1059,10 +1055,14 @@ def _auto_downweight_outlier_observations(
 ) -> tuple[list[SyncObservation], list[str]]:
     """Clone observations with reduced weight for severe landmark outliers.
 
-    ``protected_ids`` (mirror partners) keep full weight so a biased plane
-    can still be pulled by their 2D picks.
+    ``protected_ids`` (mirror partners) and ``protect_outlier`` observations
+    keep full weight so a biased plane or a user-boosted landmark can still
+    pull cameras instead of being treated as a bad pick.
     """
     skip = set(protected_ids or ())
+    for observation in observations:
+        if observation.protect_outlier:
+            skip.add(observation.landmark_id)
     point_values = [
         rmse
         for landmark_id, rmse in per_landmark_rmse.items()
@@ -1084,13 +1084,8 @@ def _auto_downweight_outlier_observations(
     for observation in observations:
         if observation.landmark_id in outlier_ids:
             adjusted.append(
-                SyncObservation(
-                    match_id=observation.match_id,
-                    landmark_id=observation.landmark_id,
-                    u=observation.u,
-                    v=observation.v,
-                    on_ground=observation.on_ground,
-                    landmark_name=observation.landmark_name,
+                replace(
+                    observation,
                     weight=max(float(observation.weight) * factor, 1.0e-3),
                 )
             )

@@ -22,6 +22,11 @@ class SolveSyncTests(unittest.TestCase):
         self.assertEqual(sync.confidence_weight("LOW"), 0.25)
         self.assertEqual(sync.confidence_weight("unknown"), 1.0)
 
+    def test_observation_weight_combines_confidence_and_landmark(self) -> None:
+        self.assertEqual(sync.observation_weight("HIGH", 2.0), 8.0)
+        self.assertEqual(sync.observation_weight("LOW", 4.0), 1.0)
+        self.assertEqual(sync.observation_weight("NORMAL"), 1.0)
+
     def test_resect_mismatch_checks_only_worst_picks_with_local_refits(self) -> None:
         """Mismatch diagnosis must not repeat the global PnP seed grid."""
         matches, observations, _true, _center, _shared = _synthetic_scene(
