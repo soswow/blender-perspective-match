@@ -8,39 +8,7 @@ import bpy
 
 from .. import core, properties, scene
 from ..detect import opencv as opencv_support
-from . import icons, operators, overlay
-
-
-def _observation_count(landmark) -> int:
-    return sum(1 for observation in landmark.observations if observation.is_set)
-
-
-def _landmark_is_mirror_linked(landmark, workspace) -> bool:
-    """True when this point is mirror-linked to another (either direction)."""
-    if landmark.kind != "POINT":
-        return False
-    if landmark.mirror_of and landmark.mirror_of != "NONE":
-        return True
-    for other in workspace.landmarks:
-        if other.item_id == landmark.item_id:
-            continue
-        if other.kind == "POINT" and other.mirror_of == landmark.item_id:
-            return True
-    return False
-
-
-def _landmark_is_parallel_linked(landmark, workspace) -> bool:
-    """True when this line is parallel-linked to another (either direction)."""
-    if landmark.kind != "LINE":
-        return False
-    if landmark.parallel_to and landmark.parallel_to != "NONE":
-        return True
-    for other in workspace.landmarks:
-        if other.item_id == landmark.item_id:
-            continue
-        if other.kind == "LINE" and other.parallel_to == landmark.item_id:
-            return True
-    return False
+from . import icons, landmark_list, operators, overlay
 
 
 class PM_UL_landmarks(bpy.types.UIList):
@@ -65,6 +33,9 @@ class PM_UL_landmarks(bpy.types.UIList):
             layout.label(text="", icon="EMPTY_AXIS")
             return
 
+        rows = properties.landmark_sidebar_rows(_data, _context)
+        row_meta = rows[_index] if 0 <= _index < len(rows) else None
+
         row = layout.row(align=True)
         # Icon toggle — plain Bool+emboss=False reserves a half-row and centers the name.
         sync_icon = "CHECKBOX_HLT" if item.use_in_sync else "CHECKBOX_DEHLT"
@@ -76,15 +47,15 @@ class PM_UL_landmarks(bpy.types.UIList):
         meta.alignment = "RIGHT"
         if item.kind == "LINE":
             meta.label(text="", icon="MESH_DATA")
-            if _landmark_is_parallel_linked(item, _data):
+            if row_meta is not None and row_meta.parallel_linked:
                 meta.label(text="", icon="LINKED")
-        elif _landmark_is_mirror_linked(item, _data):
+        elif row_meta is not None and row_meta.mirror_linked:
             meta.label(text="", icon="MOD_MIRROR")
         if item.known_object is not None:
             meta.label(text="", icon="PIVOT_CURSOR")
         elif item.on_ground:
             meta.label(text="", icon="ORIENTATION_VIEW")
-        count = _observation_count(item)
+        count = 0 if row_meta is None else row_meta.observation_count
         weight = float(getattr(item, "sync_weight", 1.0))
         weight_mark = f" · ×{weight:g}" if abs(weight - 1.0) > 0.05 else ""
         if not item.use_in_sync:
@@ -101,33 +72,18 @@ class PM_UL_landmarks(bpy.types.UIList):
         creation_index is assigned on add / file load, not here.
         """
         landmarks = getattr(data, propname)
-        helper_funcs = bpy.types.UI_UL_list
-        flt_flags = []
-        flt_neworder = []
         if not landmarks:
-            return flt_flags, flt_neworder
-        if getattr(data, "landmarks_filter_current_match", False):
-            root = properties.active_root(context)
-            for landmark in landmarks:
-                observation = scene.observation_for_match(landmark, root)
-                flt_flags.append(
-                    self.bitflag_filter_item
-                    if observation is not None and observation.is_set
-                    else 0
-                )
-        if getattr(data, "landmarks_sort_alphabetical", False):
-            flt_neworder = helper_funcs.sort_items_by_name(landmarks, "name")
-        elif any(landmark.creation_index < 0 for landmark in landmarks):
-            # Legacy / not yet migrated — keep collection order (no ID writes).
-            flt_neworder = []
-        else:
-            keyed = [
-                (index, int(landmark.creation_index))
-                for index, landmark in enumerate(landmarks)
-            ]
-            flt_neworder = helper_funcs.sort_items_helper(
-                keyed, lambda item: item[1], False
-            )
+            return [], []
+        rows = properties.landmark_sidebar_rows(data, context)
+        flt_flags = landmark_list.filter_flags(
+            rows,
+            filter_current=bool(getattr(data, "landmarks_filter_current_match", False)),
+            bitflag=self.bitflag_filter_item,
+        )
+        flt_neworder = landmark_list.sort_neworder(
+            rows,
+            sort_alphabetical=bool(getattr(data, "landmarks_sort_alphabetical", False)),
+        )
         return flt_flags, flt_neworder
 
 

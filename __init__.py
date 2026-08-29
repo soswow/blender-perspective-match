@@ -24,14 +24,20 @@ _reload_pending = False
 _addon_keymaps: list[tuple] = []
 
 
+_IS_DEV_INSTALL: bool | None = None
+
+
 def is_dev_install() -> bool:
     """True when this package is a git checkout (``./scripts/link-dev.sh``), not a zip.
 
     Release builds exclude ``/scripts/`` (see ``blender_manifest.toml``), so the
     sidebar reload button stays hidden for Install from Disk users.
     """
-    root = Path(__file__).resolve().parent
-    return (root / "scripts" / "link-dev.sh").is_file()
+    global _IS_DEV_INSTALL
+    if _IS_DEV_INSTALL is None:
+        root = Path(__file__).resolve().parent
+        _IS_DEV_INSTALL = (root / "scripts" / "link-dev.sh").is_file()
+    return _IS_DEV_INSTALL
 
 
 def _register_keymaps() -> None:
@@ -159,6 +165,7 @@ def _reset_modal_state(_dummy=None) -> None:
     operators._lens_refine_cancel = None
     operators._vp_detect_running = False
     operators._vp_detect_cancel = None
+    properties.bump_sync_ui_cache()
     for scene_block in bpy.data.scenes:
         workspace = getattr(scene_block, "match_perspective", None)
         if workspace is None:

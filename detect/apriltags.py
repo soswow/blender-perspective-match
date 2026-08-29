@@ -424,7 +424,7 @@ def apply_apriltag_detections(
         properties.ensure_landmark_creation_indices(space)
         space.active_landmark_index = len(space.landmarks) - 1
 
-    properties.tag_viewport_redraw(context)
+    properties.tag_sync_ui_redraw(context)
     return AprilTagAssignResult(
         detected=len(detections),
         updated=updated,

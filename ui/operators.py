@@ -2717,7 +2717,7 @@ class PM_OT_add_landmark(bpy.types.Operator):
             landmark.name = f"Landmark {len(space.landmarks)}"
         properties.ensure_landmark_creation_indices(space)
         space.active_landmark_index = len(space.landmarks) - 1
-        properties.tag_viewport_redraw(context)
+        properties.tag_sync_ui_redraw(context)
         return {"FINISHED"}
 
 
@@ -2758,7 +2758,7 @@ class PM_OT_add_landmarks_from_selected(bpy.types.Operator):
             context,
             created_landmarks,
         )
-        properties.tag_viewport_redraw(context)
+        properties.tag_sync_ui_redraw(context)
         if projected and target is not None:
             self.report(
                 {"INFO"},
@@ -2808,7 +2808,7 @@ class PM_OT_landmark_use_selected(bpy.types.Operator):
         if not landmark.name or landmark.name.startswith("Landmark "):
             landmark.name = obj.name
         projected, target = scene.auto_project_known_landmarks(context, [landmark])
-        properties.tag_viewport_redraw(context)
+        properties.tag_sync_ui_redraw(context)
         if projected and target is not None:
             self.report(
                 {"INFO"},
@@ -2966,7 +2966,7 @@ class PM_OT_remove_landmark(bpy.types.Operator):
         space.landmarks.remove(index)
         space.active_landmark_index = min(index, len(space.landmarks) - 1)
         scene.sync_landmark_empties(context)
-        properties.tag_viewport_redraw(context)
+        properties.tag_sync_ui_redraw(context)
         return {"FINISHED"}
 
 
@@ -3074,7 +3074,7 @@ class PM_OT_duplicate_landmark(bpy.types.Operator):
         space.active_landmark_index = len(space.landmarks) - 1
         if pick_confidence is not None:
             space.landmark_pick_confidence = pick_confidence
-        properties.tag_viewport_redraw(context)
+        properties.tag_sync_ui_redraw(context)
         self.report({"INFO"}, f"Duplicated '{source.name}' → '{duplicate.name}'")
         return {"FINISHED"}
 

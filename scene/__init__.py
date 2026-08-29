@@ -409,7 +409,7 @@ def create_match_camera(
     apply_camera(context.scene, session, calibration)
     set_active_match(context, root)
     session.status = status
-    properties.tag_viewport_redraw(context)
+    properties.tag_sync_ui_redraw(context)
     return root
 
 
@@ -572,7 +572,7 @@ def unload_match(context: bpy.types.Context) -> None:
     properties.sync_active_match_enum(space, "NONE")
     space.is_modal = False
     space.work_mode = "NONE"
-    properties.tag_viewport_redraw(context)
+    properties.tag_sync_ui_redraw(context)
 
 
 def _clear_observations_for_root(
@@ -642,7 +642,7 @@ def delete_match(
     if collection is not None and collection.name in bpy.data.collections:
         bpy.data.collections.remove(collection)
 
-    properties.tag_viewport_redraw(context)
+    properties.tag_sync_ui_redraw(context)
     return prefix
 
 
@@ -2612,7 +2612,7 @@ def auto_project_known_landmarks(
         if project_known_object_into_match(landmark, target):
             projected += 1
     if projected:
-        properties.tag_viewport_redraw(context)
+        properties.tag_sync_ui_redraw(context)
     return projected, target
 
 
@@ -2639,7 +2639,7 @@ def set_landmark_observation(
     settings = properties.active_session(context)
     if settings is not None:
         settings.status = f"Landmark '{landmark.name}' picked in {root.name}"
-    properties.tag_viewport_redraw(context)
+    properties.tag_sync_ui_redraw(context)
 
 
 def set_landmark_line_observation(
@@ -2667,7 +2667,7 @@ def set_landmark_line_observation(
     settings = properties.active_session(context)
     if settings is not None:
         settings.status = f"Line '{landmark.name}' drawn in {root.name}"
-    properties.tag_viewport_redraw(context)
+    properties.tag_sync_ui_redraw(context)
 
 
 def clear_landmark_observation_for_active(context: bpy.types.Context) -> bool:
@@ -2679,7 +2679,7 @@ def clear_landmark_observation_for_active(context: bpy.types.Context) -> bool:
     for index, observation in enumerate(list(landmark.observations)):
         if observation.match_root == root:
             landmark.observations.remove(index)
-            properties.tag_viewport_redraw(context)
+            properties.tag_sync_ui_redraw(context)
             return True
     return False
 
@@ -3421,7 +3421,7 @@ def solve_and_apply_sync(context: bpy.types.Context):
             landmark.has_line_segment = False
 
     sync_landmark_empties(context)
-    properties.tag_viewport_redraw(context)
+    properties.tag_sync_ui_redraw(context)
     return result
 
 
@@ -3439,7 +3439,7 @@ def clear_sync_transforms(context: bpy.types.Context) -> None:
     from ..core import sync as sync_module
 
     sync_module.clear_registration_cache()
-    properties.tag_viewport_redraw(context)
+    properties.tag_sync_ui_redraw(context)
 
 
 def refine_lenses_and_sync(context: bpy.types.Context):

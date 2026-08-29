@@ -57,8 +57,35 @@ MIRROR_PLANE_ITEMS = (
     ("XY", "XY", "Empty's local XY is the mirror (local Z is the normal)"),
 )
 
-# Dynamic Is Mirror Of identifiers must stay referenced for EnumProperty.
-_MIRROR_OF_ITEMS: dict[tuple[tuple[str, str], ...], tuple] = {}
+# Dynamic enum tuples must stay referenced (Blender string-lifetime bug).
+_MIRROR_OF_NONE = (("NONE", "None", "No mirror partner"),)
+_PARALLEL_TO_STATIC = (
+    ("NONE", "None", "No parallel direction constraint"),
+    *WORLD_AXIS_PARALLEL_ITEMS,
+)
+_MIRROR_OF_ITEMS: dict[tuple, tuple] = {}
+_PARALLEL_TO_ITEMS: dict[tuple, tuple] = {}
+
+# Sidebar list / enum / match-root scans. Bump after landmark or match-graph edits
+# so viewport pan can reuse the last snapshot instead of walking RNA every frame.
+_sync_ui_generation = 0
+_match_roots_cache: list | None = None
+_match_roots_cache_key: tuple | None = None
+_landmark_rows_cache: tuple | None = None
+_landmark_rows_key: tuple | None = None
+
+
+def bump_sync_ui_cache() -> None:
+    """Drop cached Sync Matches scans after landmark or match-root edits."""
+    global _sync_ui_generation, _match_roots_cache, _match_roots_cache_key
+    global _landmark_rows_cache, _landmark_rows_key
+    _sync_ui_generation += 1
+    _match_roots_cache = None
+    _match_roots_cache_key = None
+    _landmark_rows_cache = None
+    _landmark_rows_key = None
+    _MIRROR_OF_ITEMS.clear()
+    _PARALLEL_TO_ITEMS.clear()
 
 
 def tag_viewport_redraw(context: bpy.types.Context | None = None) -> None:
@@ -71,6 +98,17 @@ def tag_viewport_redraw(context: bpy.types.Context | None = None) -> None:
         for area in window.screen.areas:
             if area.type == "VIEW_3D":
                 area.tag_redraw()
+
+
+def tag_sync_ui_redraw(context: bpy.types.Context | None = None) -> None:
+    """Invalidate Sync Matches caches and request a viewport redraw."""
+    bump_sync_ui_cache()
+    tag_viewport_redraw(context)
+
+
+def _touch_sync_ui(_self, context: bpy.types.Context) -> None:
+    """Landmark RNA that the Sync list / enums display."""
+    tag_sync_ui_redraw(context)
 
 
 def _update_vp_detect_sensitivity(self, context: bpy.types.Context) -> None:
@@ -143,7 +181,7 @@ def _update_landmark_use_in_sync(_self, context: bpy.types.Context) -> None:
     from .. import scene
 
     scene.sync_landmark_empties(context)
-    tag_viewport_redraw(context)
+    tag_sync_ui_redraw(context)
 
 
 def _update_landmark_empties(_self, context: bpy.types.Context) -> None:
@@ -170,58 +208,64 @@ def _update_landmark_kind(self, context: bpy.types.Context) -> None:
         self.parallel_to = "NONE"
     if self.kind != "POINT":
         self.mirror_of = "NONE"
-    tag_viewport_redraw(context)
+    tag_sync_ui_redraw(context)
+
+
+def landmark_sidebar_rows(space, context) -> tuple:
+    """Cached per-landmark list meta for the current Sync UI generation."""
+    global _landmark_rows_cache, _landmark_rows_key
+    from ..ui import landmark_list
+
+    root = active_root(context)
+    space_key = space.as_pointer() if hasattr(space, "as_pointer") else id(space)
+    key = (
+        _sync_ui_generation,
+        space_key,
+        len(space.landmarks),
+        None if root is None else root.name,
+    )
+    if _landmark_rows_cache is not None and _landmark_rows_key == key:
+        return _landmark_rows_cache
+    rows = landmark_list.collect_landmark_rows(space.landmarks, root)
+    _landmark_rows_cache = rows
+    _landmark_rows_key = key
+    return rows
 
 
 def _parallel_to_items(self, context):
     """Dropdown of world axes and other Lines for the parallel constraint."""
-    items = [
-        ("NONE", "None", "No parallel direction constraint"),
-        *WORLD_AXIS_PARALLEL_ITEMS,
-    ]
     if context is None:
-        return items
+        return _PARALLEL_TO_STATIC
     space = workspace(context)
-    for landmark in space.landmarks:
-        if landmark.kind != "LINE":
-            continue
-        if landmark.item_id == self.item_id or not landmark.item_id:
-            continue
-        items.append(
-            (
-                landmark.item_id,
-                landmark.name or landmark.item_id[:8],
-                "Same 3D direction as this line",
-            )
-        )
-    return items
+    key = (_sync_ui_generation, space.as_pointer(), self.item_id)
+    cached = _PARALLEL_TO_ITEMS.get(key)
+    if cached is not None:
+        return cached
+    from ..ui import landmark_list
+
+    packed = _PARALLEL_TO_STATIC + landmark_list.parallel_to_enum_entries(
+        landmark_sidebar_rows(space, context),
+        self.item_id,
+    )
+    _PARALLEL_TO_ITEMS[key] = packed
+    return packed
 
 
 def _mirror_of_items(self, context):
     """Dropdown of other point landmarks for the mirror-pair constraint."""
-    items = [("NONE", "None", "No mirror partner")]
     if context is None:
-        return items
+        return _MIRROR_OF_NONE
     space = workspace(context)
-    partners: list[tuple[str, str]] = []
-    for landmark in space.landmarks:
-        if landmark.kind != "POINT":
-            continue
-        if landmark.item_id == self.item_id or not landmark.item_id:
-            continue
-        partners.append((landmark.item_id, landmark.name or landmark.item_id[:8]))
-    key = tuple(partners)
+    key = (_sync_ui_generation, space.as_pointer(), self.item_id)
     cached = _MIRROR_OF_ITEMS.get(key)
     if cached is not None:
         return cached
-    built = [
-        *items,
-        *(
-            (item_id, name, "This feature mirrored across the scene Mirror Empty")
-            for item_id, name in partners
-        ),
-    ]
-    packed = tuple(built)
+    from ..ui import landmark_list
+
+    packed = _MIRROR_OF_NONE + landmark_list.mirror_of_enum_entries(
+        landmark_sidebar_rows(space, context),
+        self.item_id,
+    )
     _MIRROR_OF_ITEMS[key] = packed
     return packed
 
@@ -243,8 +287,13 @@ def iter_match_roots() -> list[bpy.types.Object]:
     EnumProperty items callbacks cannot write ID data; call
     ``reconcile_workspace_refs`` from operators or load handlers to drop flags.
     """
+    global _match_roots_cache, _match_roots_cache_key
+    objects = bpy.data.objects
+    key = (_sync_ui_generation, len(objects))
+    if _match_roots_cache is not None and _match_roots_cache_key == key:
+        return _match_roots_cache
     roots = []
-    for obj in bpy.data.objects:
+    for obj in objects:
         if not hasattr(obj, "pm_session"):
             continue
         session = obj.pm_session
@@ -254,7 +303,10 @@ def iter_match_roots() -> list[bpy.types.Object]:
         if camera is None or camera.name not in bpy.data.objects:
             continue
         roots.append(obj)
-    return sorted(roots, key=lambda item: item.name)
+    roots.sort(key=lambda item: item.name)
+    _match_roots_cache = roots
+    _match_roots_cache_key = key
+    return roots
 
 
 def prune_stale_match_roots() -> None:
@@ -511,7 +563,7 @@ class PMLandmark(bpy.types.PropertyGroup):
     item_id: bpy.props.StringProperty(default="", options={"HIDDEN"})
     # Stable insertion order for UI sort-off; assigned on add / file load migrate.
     creation_index: bpy.props.IntProperty(default=-1, options={"HIDDEN"})
-    name: bpy.props.StringProperty(name="Name", default="Landmark")
+    name: bpy.props.StringProperty(name="Name", default="Landmark", update=_touch_sync_ui)
     # Off = keep picks/overlay but omit from Solve Sync / Diagnose graph.
     use_in_sync: bpy.props.BoolProperty(
         name="Use in Sync",
@@ -537,7 +589,7 @@ class PMLandmark(bpy.types.PropertyGroup):
         max=16.0,
         step=10,
         precision=2,
-        update=_redraw,
+        update=_touch_sync_ui,
     )
     kind: bpy.props.EnumProperty(
         name="Kind",
@@ -553,7 +605,7 @@ class PMLandmark(bpy.types.PropertyGroup):
             "absolute baseline scale after 2D↔2D relative pose is solved"
         ),
         default=False,
-        update=_redraw,
+        update=_touch_sync_ui,
     )
     known_object: bpy.props.PointerProperty(
         name="Known 3D",
@@ -563,7 +615,7 @@ class PMLandmark(bpy.types.PropertyGroup):
             "endpoint of a known edge"
         ),
         type=bpy.types.Object,
-        update=_redraw,
+        update=_touch_sync_ui,
     )
     known_object_b: bpy.props.PointerProperty(
         name="Known 3D B",
@@ -573,7 +625,7 @@ class PMLandmark(bpy.types.PropertyGroup):
             "otherwise draw the line in ≥3 stills"
         ),
         type=bpy.types.Object,
-        update=_redraw,
+        update=_touch_sync_ui,
     )
     parallel_to: bpy.props.EnumProperty(
         name="Is Parallel To",
@@ -582,7 +634,7 @@ class PMLandmark(bpy.types.PropertyGroup):
             "3D direction. Constrains relative orientation during sync"
         ),
         items=_parallel_to_items,
-        update=_redraw,
+        update=_touch_sync_ui,
     )
     mirror_of: bpy.props.EnumProperty(
         name="Is Mirror Of",
@@ -591,7 +643,7 @@ class PMLandmark(bpy.types.PropertyGroup):
             "scene Mirror Empty. Each side can be picked in different stills"
         ),
         items=_mirror_of_items,
-        update=_redraw,
+        update=_touch_sync_ui,
     )
     observations: bpy.props.CollectionProperty(type=PMLandmarkObservation)
     position: bpy.props.FloatVectorProperty(
