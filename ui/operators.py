@@ -438,7 +438,7 @@ def _queue_sidebar_landmark_from_selection(*_args) -> None:
 
 
 def _apply_sidebar_landmark_from_selection() -> None:
-    """If the active object is a PM landmark helper, select it in the Sync list."""
+    """If the active object is a PM helper or Known 3D object, select it in the Sync list."""
     context = bpy.context
     if context is None:
         return None

@@ -719,6 +719,24 @@ def main() -> None:
             assert helper is not None, "Solve Sync should create landmark Empties"
             assert helper.get(scene.LANDMARK_HELPER_ID_KEY) == "smoke-g0"
             assert scene.landmark_index_for_helper(space, helper) == 0
+            known_pin = bpy.data.objects.new("smoke_known_3d", None)
+            bpy.context.scene.collection.objects.link(known_pin)
+            space.landmarks[0].known_object = known_pin
+            assert scene.landmark_index_for_helper(space, known_pin) == 0
+            known_end = bpy.data.objects.new("smoke_known_3d_b", None)
+            bpy.context.scene.collection.objects.link(known_end)
+            line_landmark = space.landmarks.add()
+            line_landmark.item_id = "smoke-line-known"
+            line_landmark.name = "Known Line"
+            line_landmark.kind = "LINE"
+            line_landmark.known_object_b = known_end
+            assert scene.landmark_index_for_helper(space, known_end) == (
+                len(space.landmarks) - 1
+            )
+            space.landmarks.remove(len(space.landmarks) - 1)
+            space.landmarks[0].known_object = None
+            bpy.data.objects.remove(known_pin, do_unlink=True)
+            bpy.data.objects.remove(known_end, do_unlink=True)
             assert session_b.sync_is_applied
             assert session_a.sync_last_ok
             assert session_b.sync_last_ok

@@ -2385,18 +2385,23 @@ def _bind_landmark_helper(obj: bpy.types.Object, landmark) -> None:
 
 
 def landmark_index_for_helper(space, obj: bpy.types.Object | None) -> int:
-    """Collection index of the landmark this helper represents, or -1."""
-    if obj is None or not obj.name.startswith("PM_LM_"):
+    """Collection index of the landmark this helper or Known 3D object represents, or -1."""
+    if obj is None:
         return -1
-    item_id = obj.get(LANDMARK_HELPER_ID_KEY, "")
-    if item_id:
+    if obj.name.startswith("PM_LM_"):
+        item_id = obj.get(LANDMARK_HELPER_ID_KEY, "")
+        if item_id:
+            for index, landmark in enumerate(space.landmarks):
+                if landmark.item_id == item_id:
+                    return index
+        # Helpers from older files may lack the id stamp; match the generated name.
         for index, landmark in enumerate(space.landmarks):
-            if landmark.item_id == item_id:
+            base_name = safe_identifier(landmark.name) or landmark.item_id[:8]
+            if obj.name == f"PM_LM_{base_name}":
                 return index
-    # Helpers from older files may lack the id stamp; match the generated name.
+        return -1
     for index, landmark in enumerate(space.landmarks):
-        base_name = safe_identifier(landmark.name) or landmark.item_id[:8]
-        if obj.name == f"PM_LM_{base_name}":
+        if landmark.known_object == obj or landmark.known_object_b == obj:
             return index
     return -1
 
