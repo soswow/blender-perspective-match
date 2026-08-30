@@ -232,6 +232,9 @@ class SolveSyncTests(unittest.TestCase):
         self.assertIn("other", result.similarities)
         self.assertNotIn("isolated", result.similarities)
         self.assertIn("isolated", result.message)
+        self.assertIn("shared with any registered match", result.message)
+        self.assertIn("non-collinear 2D↔3D point picks", result.message)
+        self.assertNotIn("shared with the anchor", result.message)
         recovered = result.similarities["other"]
         self.assertTrue(np.allclose(recovered.rotation, true_sim.rotation, atol=0.08))
         recovered_center = recovered.transform_point(center_private)

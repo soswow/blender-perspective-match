@@ -1064,8 +1064,10 @@ def solve_landmark_sync(
             per_landmark_rmse_px={},
             message=failure_detail
             or (
-                "Could not register every match — need ≥5 well-spread 2D "
-                "landmarks or ≥3 Known 3D / On Ground / Known 3D line picks"
+                "Could not register every match — add ≥5 well-spread ordinary "
+                "point landmarks shared with any registered match, or ≥3 "
+                "non-collinear 2D↔3D point picks (Known 3D / reconstructed On "
+                "Ground), or ≥3 Known 3D line picks"
             ),
             success=False,
         )

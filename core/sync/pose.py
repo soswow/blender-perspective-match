@@ -3779,8 +3779,10 @@ def _register_from_relative_pose(
             failure_details[0]
             if failure_details
             else (
-                f"Could not register {pending_list} — need ≥5 well-spread 2D "
-                "landmarks shared with the anchor, or ≥3 Known 3D / On Ground picks"
+                f"Could not register {pending_list} — add ≥5 well-spread ordinary "
+                "point landmarks shared with any registered match, or ≥3 "
+                "non-collinear 2D↔3D point picks (Known 3D / reconstructed On "
+                "Ground), or ≥3 Known 3D line picks"
             )
         )
         if len(similarities) <= 1:
