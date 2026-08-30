@@ -513,6 +513,8 @@ def _known_line_reprojection_errors(
     observation: SyncLineObservation,
     calibration: core.Calibration,
     similarity: SimilarityTransform,
+    *,
+    weighted: bool = True,
 ) -> list[float]:
     """Pixel distances from Known 3D line endpoints projected onto the observed 2D line."""
     observed = _image_line_homogeneous(
@@ -520,7 +522,11 @@ def _known_line_reprojection_errors(
     )
     if observed is None:
         return [1.0e3, 1.0e3]
-    scale = float(np.sqrt(max(float(observation.weight), 1.0e-12)))
+    scale = (
+        float(np.sqrt(max(float(observation.weight), 1.0e-12)))
+        if weighted
+        else 1.0
+    )
     errors: list[float] = []
     for point in (point_a, point_b):
         private = similarity.inverse_point(point)
@@ -581,5 +587,4 @@ def _image_points_collinear(
     if singular.size < 2:
         return True
     return float(singular[1]) < min_cross_spread_px
-
 

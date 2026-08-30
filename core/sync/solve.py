@@ -1737,7 +1737,7 @@ def solve_landmark_sync(
                 names[landmark_id] = item.landmark_name
                 break
         names.setdefault(landmark_id, landmark_id[:8])
-    if mean_weighted_rmse > ACCEPT_RMSE_PX and point_sse:
+    if mean_rmse > ACCEPT_RMSE_PX and point_sse:
         # Worst among points — line Parallel miss is not a pose failure.
         point_only_rmse = {
             landmark_id: rmse

@@ -1694,6 +1694,78 @@ def _reprojection_errors_for_similarity(
     return errors
 
 
+def _mixed_reprojection_errors(
+    similarity: SimilarityTransform,
+    pairs: list[tuple[SyncObservation, SyncObservation]],
+    anchor: core.Calibration,
+    other: core.Calibration,
+    points_shared: list[np.ndarray],
+    points_image: list[np.ndarray],
+    *,
+    point_weights: list[float] | None = None,
+    known_line_constraints: list[
+        tuple[np.ndarray, np.ndarray, SyncLineObservation]
+    ]
+    | tuple[()] = (),
+    weighted: bool = False,
+) -> list[float]:
+    """Point and Known 3D line pixel errors; ``weighted`` scales by sqrt(weight)."""
+    errors = _reprojection_errors_for_similarity(
+        similarity,
+        pairs,
+        anchor,
+        other,
+        points_shared,
+        points_image,
+        point_weights=point_weights,
+        weighted=weighted,
+    )
+    for point_a, point_b, line_obs in known_line_constraints:
+        errors.extend(
+            _known_line_reprojection_errors(
+                point_a,
+                point_b,
+                line_obs,
+                other,
+                similarity,
+                weighted=weighted,
+            )
+        )
+    return errors
+
+
+def _mixed_reprojection_rmse(
+    similarity: SimilarityTransform,
+    pairs: list[tuple[SyncObservation, SyncObservation]],
+    anchor: core.Calibration,
+    other: core.Calibration,
+    points_shared: list[np.ndarray],
+    points_image: list[np.ndarray],
+    *,
+    point_weights: list[float] | None = None,
+    known_line_constraints: list[
+        tuple[np.ndarray, np.ndarray, SyncLineObservation]
+    ]
+    | tuple[()] = (),
+    weighted: bool = False,
+) -> float:
+    """RMSE of ``_mixed_reprojection_errors``, or inf when the pose has no fit."""
+    errors = _mixed_reprojection_errors(
+        similarity,
+        pairs,
+        anchor,
+        other,
+        points_shared,
+        points_image,
+        point_weights=point_weights,
+        known_line_constraints=known_line_constraints,
+        weighted=weighted,
+    )
+    if not errors:
+        return float("inf")
+    return float(np.sqrt(np.mean(np.square(errors))))
+
+
 def _solve_relative_from_pairs(
     pairs: list[tuple[SyncObservation, SyncObservation]],
     anchor: core.Calibration,
@@ -2506,7 +2578,7 @@ def _compute_relative_pose_from_correspondences(
             lock_rotation=lock_rotation,
             lock_translation=lock_translation,
         )
-        warm_errors = _reprojection_errors_for_similarity(
+        warm_rmse = _mixed_reprojection_rmse(
             warm,
             free_pairs,
             anchor,
@@ -2514,20 +2586,10 @@ def _compute_relative_pose_from_correspondences(
             points_shared,
             points_image,
             point_weights=known_weights,
-            weighted=True,
+            known_line_constraints=known_line_constraints,
+            weighted=False,
         )
-        for point_a, point_b, line_obs in known_line_constraints:
-            warm_errors.extend(
-                _known_line_reprojection_errors(
-                    point_a,
-                    point_b,
-                    line_obs,
-                    other,
-                    warm,
-                )
-            )
-        if warm_errors:
-            warm_rmse = float(np.sqrt(np.mean(np.square(warm_errors))))
+        if np.isfinite(warm_rmse):
             if warm_rmse <= ACCEPT_RMSE_PX:
                 if best_candidate_out is not None:
                     best_candidate_out.append(_copy_similarity(warm))
@@ -2666,6 +2728,7 @@ def _compute_relative_pose_from_correspondences(
             _check_cancelled(cancel_check)
             best_pnp: SimilarityTransform | None = None
             best_pnp_rmse = float("inf")
+            best_pnp_raw_rmse = float("inf")
             seeds = _mixed_pose_seeds(
                 anchor,
                 other,
@@ -2700,7 +2763,7 @@ def _compute_relative_pose_from_correspondences(
                         lock_scale=not allow_scale,
                         **mixed_kwargs,
                     )
-                errors = _reprojection_errors_for_similarity(
+                rmse = _mixed_reprojection_rmse(
                     solved,
                     free_pairs,
                     anchor,
@@ -2708,17 +2771,29 @@ def _compute_relative_pose_from_correspondences(
                     points_shared,
                     points_image,
                     point_weights=known_weights,
+                    known_line_constraints=known_line_constraints,
                     weighted=True,
                 )
-                if not errors:
+                if not np.isfinite(rmse):
                     continue
-                rmse = float(np.sqrt(np.mean(np.square(errors))))
+                raw_rmse = _mixed_reprojection_rmse(
+                    solved,
+                    free_pairs,
+                    anchor,
+                    other,
+                    points_shared,
+                    points_image,
+                    point_weights=known_weights,
+                    known_line_constraints=known_line_constraints,
+                    weighted=False,
+                )
                 if rmse < best_pnp_rmse:
                     best_pnp_rmse = rmse
+                    best_pnp_raw_rmse = raw_rmse
                     best_pnp = solved
-                if best_pnp_rmse < 8.0:
+                if best_pnp_raw_rmse < 8.0:
                     break
-            if best_pnp is not None and best_pnp_rmse <= ACCEPT_RMSE_PX:
+            if best_pnp is not None and best_pnp_raw_rmse <= ACCEPT_RMSE_PX:
                 candidates.append(best_pnp)
                 break
             if best_pnp is not None:
@@ -2747,60 +2822,84 @@ def _compute_relative_pose_from_correspondences(
 
     best: SimilarityTransform | None = None
     best_rmse = float("inf")
+    diagnostic: SimilarityTransform | None = None
+    diagnostic_raw_rmse = float("inf")
+    mixed_fit_kwargs = {
+        "point_weights": known_weights,
+        "known_line_constraints": known_line_constraints,
+    }
     for candidate in candidates:
         _check_cancelled(cancel_check)
-        errors = _reprojection_errors_for_similarity(
+        score_rmse = _mixed_reprojection_rmse(
             candidate,
             free_pairs,
             anchor,
             other,
             points_shared,
             points_image,
-            point_weights=known_weights,
             weighted=True,
+            **mixed_fit_kwargs,
         )
-        for point_a, point_b, line_obs in known_line_constraints:
-            errors.extend(
-                _known_line_reprojection_errors(
-                    point_a, point_b, line_obs, other, candidate
-                )
-            )
-        if not errors:
+        if not np.isfinite(score_rmse):
             continue
-        rmse = float(np.sqrt(np.mean(np.square(errors))))
-        if rmse < best_rmse:
-            best_rmse = rmse
+        raw_rmse = _mixed_reprojection_rmse(
+            candidate,
+            free_pairs,
+            anchor,
+            other,
+            points_shared,
+            points_image,
+            weighted=False,
+            **mixed_fit_kwargs,
+        )
+        if raw_rmse < diagnostic_raw_rmse:
+            diagnostic_raw_rmse = raw_rmse
+            diagnostic = candidate
+        if raw_rmse > ACCEPT_RMSE_PX:
+            continue
+        if score_rmse < best_rmse:
+            best_rmse = score_rmse
             best = candidate
 
     # On Ground / Known 3D can poison a mixed score when those 3D points are
     # wrong. Keep a pure 2D↔2D pose if it still locks.
-    if (best is None or best_rmse > ACCEPT_RMSE_PX) and relative is not None and free_pairs_ok:
-        pairs_pose = _apply_depth_heuristic_scale(relative, free_pairs, anchor, other)
-        pair_errors = _reprojection_errors_for_similarity(
+    if best is None and relative is not None and free_pairs_ok:
+        pairs_pose = _apply_depth_heuristic_scale(
+            relative, free_pairs, anchor, other
+        )
+        pairs_raw_rmse = _mixed_reprojection_rmse(
             pairs_pose,
             free_pairs,
             anchor,
             other,
             [],
             [],
-            weighted=True,
+            weighted=False,
         )
-        if pair_errors:
-            pairs_rmse = float(np.sqrt(np.mean(np.square(pair_errors))))
-            if pairs_rmse <= ACCEPT_RMSE_PX:
-                best = pairs_pose
-                best_rmse = pairs_rmse
+        if pairs_raw_rmse <= ACCEPT_RMSE_PX:
+            best = pairs_pose
+            best_rmse = _mixed_reprojection_rmse(
+                pairs_pose,
+                free_pairs,
+                anchor,
+                other,
+                [],
+                [],
+                weighted=True,
+            )
 
-    if best is None or best_rmse > ACCEPT_RMSE_PX:
-        if best is not None and best_candidate_out is not None:
-            best_candidate_out.append(_copy_similarity(best))
+    if best is None:
+        failed = diagnostic
+        failed_raw_rmse = diagnostic_raw_rmse
+        if failed is not None and best_candidate_out is not None:
+            best_candidate_out.append(_copy_similarity(failed))
         detail = (
             f"Sync for '{other_id}' failed (reproj ~"
-            f"{best_rmse if best is not None else float('nan'):.0f} px). "
+            f"{failed_raw_rmse if failed is not None else float('nan'):.0f} px). "
         )
-        if best is not None:
+        if failed is not None:
             per_landmark = _per_landmark_rmse_for_similarity(
-                best,
+                failed,
                 free_pairs,
                 anchor,
                 other,
@@ -2850,27 +2949,33 @@ def _compute_relative_pose_from_correspondences(
             axis_line_constraints=axis_specs,
             parallel_weight=12.0,
         )
-        refined_errors = _reprojection_errors_for_similarity(
+        refined_rmse = _mixed_reprojection_rmse(
             refined,
             free_pairs,
             anchor,
             other,
             points_shared,
             points_image,
-            point_weights=known_weights,
             weighted=True,
+            **mixed_fit_kwargs,
         )
-        for point_a, point_b, line_obs in known_line_constraints:
-            refined_errors.extend(
-                _known_line_reprojection_errors(
-                    point_a, point_b, line_obs, other, refined
-                )
-            )
-        if refined_errors:
-            refined_rmse = float(np.sqrt(np.mean(np.square(refined_errors))))
-            # Keep parallel refine only when it does not wreck point fit.
-            if refined_rmse <= best_rmse + 5.0:
-                best = refined
+        refined_raw_rmse = _mixed_reprojection_rmse(
+            refined,
+            free_pairs,
+            anchor,
+            other,
+            points_shared,
+            points_image,
+            weighted=False,
+            **mixed_fit_kwargs,
+        )
+        # Keep parallel refine only when it does not wreck point fit.
+        if (
+            np.isfinite(refined_rmse)
+            and refined_rmse <= best_rmse + 5.0
+            and refined_raw_rmse <= ACCEPT_RMSE_PX
+        ):
+            best = refined
     return _metric_scale_similarity(best, other), ""
 
 
@@ -2903,7 +3008,7 @@ def _registration_candidate_rmse(
     *,
     known_world_ids: set[str] | None = None,
 ) -> float:
-    """Score one shared-frame pose against every currently registered view."""
+    """Unweighted pixel RMSE of one shared-frame pose against registered views."""
     errors: list[float] = []
     for reference_id, reference_similarity in registered.items():
         pairs = _point_pairs_between_matches(
@@ -2926,7 +3031,7 @@ def _registration_candidate_rmse(
                 matches[match_id].calibration,
                 [],
                 [],
-                weighted=True,
+                weighted=False,
             )
         )
 
@@ -2944,13 +3049,11 @@ def _registration_candidate_rmse(
             candidate.inverse_point(point),
             matches[match_id].calibration,
         )
-        scale = _observation_scale(observation)
         if projected is None:
-            errors.append(scale * 1.0e3)
+            errors.append(1.0e3)
             continue
         errors.append(
-            scale
-            * float(
+            float(
                 np.hypot(
                     projected[0] - observation.u,
                     projected[1] - observation.v,
@@ -2971,7 +3074,7 @@ def _registration_strong_pair_rmse(
     *,
     known_world_ids: set[str] | None = None,
 ) -> float:
-    """Score against registered views that independently constrain pose."""
+    """Unweighted pixel RMSE against registered views that independently constrain pose."""
     errors: list[float] = []
     for reference_id, reference_similarity in registered.items():
         pairs = _point_pairs_between_matches(
@@ -2994,7 +3097,7 @@ def _registration_strong_pair_rmse(
                 matches[match_id].calibration,
                 [],
                 [],
-                weighted=True,
+                weighted=False,
             )
         )
     if not errors:
@@ -3008,12 +3111,14 @@ def _select_registration_candidate(
     pair_branch_slack_px: float = 5.0,
     acceptance_px: float = ACCEPT_RMSE_PX,
 ) -> SimilarityTransform | None:
-    """Choose graph scale/refinement without leaving the best pairwise branch.
+    """Choose graph scale/refinement without leaving a pairwise pose that still fits.
 
     Candidate tuples are ``(strong_pair_rmse, graph_rmse, similarity)``.
     Pairwise reprojection identifies the relative-pose hemisphere but cannot
     observe baseline scale. Whole-graph reprojection therefore breaks ties
     among candidates that remain close to the best strong-pair solution.
+    If that pair-best branch misses the pixel limit in the graph, take another
+    candidate that still fits both scores.
     """
     if not candidates:
         return None
@@ -3029,7 +3134,17 @@ def _select_registration_candidate(
         same_branch = [
             item for item in strong_candidates if item[0] <= branch_limit
         ]
-        return min(same_branch, key=lambda item: item[1])[2]
+        selected = min(same_branch, key=lambda item: item[1])
+        if selected[1] <= acceptance_px:
+            return selected[2]
+        graph_ok = [
+            item
+            for item in strong_candidates
+            if item[0] <= acceptance_px and item[1] <= acceptance_px
+        ]
+        if graph_ok:
+            return min(graph_ok, key=lambda item: item[1])[2]
+        return None
 
     selected = min(candidates, key=lambda item: item[1])
     return selected[2] if selected[1] <= acceptance_px else None
@@ -3740,6 +3855,7 @@ def _register_from_relative_pose(
                                 line_obs,
                                 matches[match_id].calibration,
                                 candidate,
+                                weighted=False,
                             )
                         )
                     if errors and float(np.sqrt(np.mean(np.square(errors)))) < ACCEPT_RMSE_PX:

@@ -31,6 +31,63 @@ class PoseSyncTests(unittest.TestCase):
         recovered = transform.inverse_point(shared)
         self.assertTrue(np.allclose(point, recovered, atol=1.0e-9))
 
+    def test_high_weights_do_not_turn_acceptable_pose_into_failure(self) -> None:
+        """Weights rank/refine poses; the acceptance threshold stays in pixels."""
+        intrinsics = core.CameraIntrinsics(
+            fx=800.0,
+            fy=800.0,
+            cx=400.0,
+            cy=300.0,
+            image_width=800,
+            image_height=600,
+        )
+        calibration = core.Calibration(
+            intrinsics,
+            np.eye(3, dtype=np.float64),
+            np.zeros(3, dtype=np.float64),
+        )
+        matches = {
+            match_id: sync.SyncMatchInput(match_id, calibration)
+            for match_id in ("anchor", "other")
+        }
+        known_world = {
+            "p0": np.array((-1.0, -1.0, 4.5)),
+            "p1": np.array((1.0, -1.0, 5.0)),
+            "p2": np.array((1.0, 1.0, 5.5)),
+            "p3": np.array((-1.0, 1.0, 6.0)),
+        }
+        observations_by_landmark = {}
+        for landmark_id, point in known_world.items():
+            u_coord, v_coord = _project(point, calibration)
+            observation = sync.SyncObservation(
+                "other",
+                landmark_id,
+                u_coord + 30.0,
+                v_coord,
+                weight=4.0,
+            )
+            observations_by_landmark[landmark_id] = [observation]
+
+        candidate = sync.SimilarityTransform()
+        with (
+            patch.object(
+                sync.pose,
+                "_planar_homography_similarities",
+                return_value=[candidate],
+            ),
+            patch.object(sync.pose, "_mixed_pose_seeds", return_value=[candidate]),
+            patch.object(sync.pose, "_pnp_similarity", return_value=candidate),
+            patch.object(sync.pose, "_refine_rigid_mixed", return_value=candidate),
+        ):
+            solved, detail = sync.pose._compute_relative_pose_from_correspondences(
+                "anchor",
+                "other",
+                observations_by_landmark,
+                matches,
+                known_world,
+            )
+
+        self.assertIsNotNone(solved, detail)
 
     def test_graph_bridge_recovers_camera_below_ground(self) -> None:
         """A pending camera may bridge through a solved non-anchor view and flip."""
@@ -233,6 +290,42 @@ class PoseSyncTests(unittest.TestCase):
             ]
         )
         self.assertIs(selected, refined)
+
+    def test_registration_candidate_escapes_pair_branch_that_breaks_graph(self) -> None:
+        """A low pair-only score must not beat the only graph-consistent pose."""
+        pair_only = sync.SimilarityTransform(
+            translation=np.array((-2.0, 0.0, 0.0), dtype=np.float64)
+        )
+        graph_fit = sync.SimilarityTransform(
+            translation=np.array((2.0, 0.0, 0.0), dtype=np.float64)
+        )
+
+        selected = sync._select_registration_candidate(
+            [
+                (5.0, 3_000.0, pair_only),
+                (17.0, 25.0, graph_fit),
+            ]
+        )
+
+        self.assertIs(selected, graph_fit)
+
+    def test_registration_candidate_rejects_when_no_graph_fit_locks(self) -> None:
+        """A graph-broken pair branch must not register when no alternative fits."""
+        pair_only = sync.SimilarityTransform(
+            translation=np.array((-2.0, 0.0, 0.0), dtype=np.float64)
+        )
+        over_limit = sync.SimilarityTransform(
+            translation=np.array((2.0, 0.0, 0.0), dtype=np.float64)
+        )
+
+        selected = sync._select_registration_candidate(
+            [
+                (5.0, 3_000.0, pair_only),
+                (50.0, 25.0, over_limit),
+            ]
+        )
+
+        self.assertIsNone(selected)
 
 
     def test_batched_shared_projection_matches_scalar_projection(self) -> None:

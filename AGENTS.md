@@ -77,6 +77,7 @@ Headless helpers under `tools/` (and `scripts/validate_addon.py`) for investigat
 
 ## Do not
 
+- Do not save a user-provided `.blend` file in place. Treat it as read-only unless the user explicitly asks for a save or saving is required for the fix. If a save is necessary, write a sibling copy with a modified base name and report its exact path; otherwise do not save a `.blend` at all.
 - Commit or push unless the user explicitly asks to (e.g. “commit this”, “create a commit”)
 - Commit `*.zip` or `wheels/*.whl`
 - `pip install` into Blender’s Python
