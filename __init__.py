@@ -182,6 +182,22 @@ def _reset_modal_state(_dummy=None) -> None:
         bpy.app.timers.register(_restore_active_match_after_load, first_interval=0.15)
 
 
+@persistent
+def _refresh_after_history(_scene=None) -> None:
+    """Invalidate RNA-derived UI caches after Blender restores Undo / Redo."""
+    properties.bump_sync_ui_cache()
+    for scene_block in bpy.data.scenes:
+        workspace = getattr(scene_block, "match_perspective", None)
+        if workspace is None:
+            continue
+        try:
+            properties.reconcile_workspace_refs(workspace)
+        except (ReferenceError, RuntimeError):
+            # A subsequent redraw rebuilds from the post-history datablocks.
+            properties.bump_sync_ui_cache()
+    properties.tag_viewport_redraw()
+
+
 def _restore_active_match_after_load() -> None:
     """Deferred: apply saved camera state and enter camera view after load."""
     context = bpy.context
@@ -328,6 +344,10 @@ def register() -> None:
     operators._active_interact = None
     if _reset_modal_state not in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.append(_reset_modal_state)
+    if _refresh_after_history not in bpy.app.handlers.undo_post:
+        bpy.app.handlers.undo_post.append(_refresh_after_history)
+    if _refresh_after_history not in bpy.app.handlers.redo_post:
+        bpy.app.handlers.redo_post.append(_refresh_after_history)
     if _capture_framing_before_save not in bpy.app.handlers.save_pre:
         bpy.app.handlers.save_pre.append(_capture_framing_before_save)
     # Existing open file: migrate landmark creation indices once on enable.
@@ -363,6 +383,10 @@ def unregister() -> None:
         bpy.app.handlers.save_pre.remove(_capture_framing_before_save)
     if _reset_modal_state in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.remove(_reset_modal_state)
+    if _refresh_after_history in bpy.app.handlers.undo_post:
+        bpy.app.handlers.undo_post.remove(_refresh_after_history)
+    if _refresh_after_history in bpy.app.handlers.redo_post:
+        bpy.app.handlers.redo_post.remove(_refresh_after_history)
     operators._active_interact = None
     try:
         operators.request_lens_refine_cancel()

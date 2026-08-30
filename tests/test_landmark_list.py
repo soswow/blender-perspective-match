@@ -144,6 +144,34 @@ class LandmarkListTests(unittest.TestCase):
         parallel = landmark_list.parallel_to_enum_entries(rows, "l1")
         self.assertEqual(parallel, ())
 
+    def test_enum_candidates_do_not_resolve_dynamic_links(self) -> None:
+        class DynamicLinksMustNotBeRead:
+            item_id = "safe"
+            name = "Safe"
+            kind = "POINT"
+
+            @property
+            def mirror_of(self):
+                raise AssertionError("dynamic mirror enum was resolved")
+
+            @property
+            def parallel_to(self):
+                raise AssertionError("dynamic parallel enum was resolved")
+
+        candidates = landmark_list.collect_landmark_enum_candidates(
+            (DynamicLinksMustNotBeRead(),)
+        )
+        self.assertEqual(
+            candidates,
+            (
+                landmark_list.LandmarkEnumCandidate(
+                    name="Safe",
+                    item_id="safe",
+                    kind="POINT",
+                ),
+            ),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

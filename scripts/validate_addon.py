@@ -64,6 +64,8 @@ def main() -> None:
         try:
             extension.register()
             registered = True
+            assert bpy.app.handlers.undo_post.count(extension._refresh_after_history) == 1
+            assert bpy.app.handlers.redo_post.count(extension._refresh_after_history) == 1
             pick_keys = [
                 item
                 for _keymap, item in extension._addon_keymaps
@@ -86,11 +88,15 @@ def main() -> None:
             ] = legacy_sidebar_handle
             # Disable/re-enable and wheel extract can call register() twice.
             extension.register()
+            assert bpy.app.handlers.undo_post.count(extension._refresh_after_history) == 1
+            assert bpy.app.handlers.redo_post.count(extension._refresh_after_history) == 1
             assert (
                 overlay._LEGACY_SIDEBAR_DRAW_NAMESPACE_KEY
                 not in bpy.app.driver_namespace
             )
             extension.unregister()
+            assert extension._refresh_after_history not in bpy.app.handlers.undo_post
+            assert extension._refresh_after_history not in bpy.app.handlers.redo_post
             assert overlay._DRAW_NAMESPACE_KEY not in bpy.app.driver_namespace
             assert overlay._SIDEBAR_TIMER_NAMESPACE_KEY not in bpy.app.driver_namespace
             assert not bpy.app.timers.is_registered(overlay._poll_sidebar_visibility)
@@ -144,6 +150,37 @@ def main() -> None:
             assert settings.camera_object is not None
             assert settings.camera_object.parent == properties.active_root(bpy.context)
             assert settings.image_width == 800 and settings.image_height == 600
+
+            # Undo/Redo can ask dynamic enums for items while restoring RNA.
+            # A transient empty scan must not remain cached after history settles.
+            expected_root_names = [root.name for root in properties.iter_match_roots()]
+            root_a_name = root_a.name
+            frame_before = bpy.context.scene.frame_current
+            bpy.ops.ed.undo_push(message="Perspective Match cache regression before")
+            bpy.context.scene.frame_current = frame_before + 1
+            bpy.ops.ed.undo_push(message="Perspective Match cache regression after")
+            properties._match_roots_cache = []
+            properties._match_roots_cache_key = (
+                properties._sync_ui_generation,
+                len(bpy.data.objects),
+            )
+            assert not properties.iter_match_roots()
+            assert bpy.ops.ed.undo() == {"FINISHED"}
+            assert [root.name for root in properties.iter_match_roots()] == expected_root_names
+            properties._match_roots_cache = []
+            properties._match_roots_cache_key = (
+                properties._sync_ui_generation,
+                len(bpy.data.objects),
+            )
+            assert not properties.iter_match_roots()
+            assert bpy.ops.ed.redo() == {"FINISHED"}
+            assert [root.name for root in properties.iter_match_roots()] == expected_root_names
+            root_a = bpy.data.objects[root_a_name]
+            settings = root_a.pm_session
+            active_items = properties._active_match_items(
+                properties.workspace(bpy.context), bpy.context
+            )
+            assert root_a.name in {item[0] for item in active_items}
 
             settings.vp_mode = "2"
             settings.lock_focal = False

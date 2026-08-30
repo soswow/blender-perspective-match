@@ -23,6 +23,27 @@ class LandmarkRowMeta:
     kind: str
 
 
+@dataclass(frozen=True)
+class LandmarkEnumCandidate:
+    """Static landmark fields that are safe inside dynamic enum callbacks."""
+
+    name: str
+    item_id: str
+    kind: str
+
+
+def collect_landmark_enum_candidates(landmarks) -> tuple[LandmarkEnumCandidate, ...]:
+    """Collect enum labels without resolving mirror_of / parallel_to enums."""
+    return tuple(
+        LandmarkEnumCandidate(
+            name=str(getattr(landmark, "name", "") or ""),
+            item_id=str(getattr(landmark, "item_id", "") or ""),
+            kind=str(getattr(landmark, "kind", "POINT") or "POINT"),
+        )
+        for landmark in landmarks
+    )
+
+
 def _observation_count(landmark) -> int:
     observations = getattr(landmark, "observations", ())
     return sum(1 for observation in observations if observation.is_set)

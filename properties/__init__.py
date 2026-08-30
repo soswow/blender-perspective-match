@@ -65,6 +65,8 @@ _PARALLEL_TO_STATIC = (
 )
 _MIRROR_OF_ITEMS: dict[tuple, tuple] = {}
 _PARALLEL_TO_ITEMS: dict[tuple, tuple] = {}
+_ACTIVE_MATCH_ITEMS: dict[tuple[tuple[str, str], ...], tuple] = {}
+_ANCHOR_MATCH_ITEMS: dict[tuple[tuple[str, str], ...], tuple] = {}
 
 # Sidebar list / enum / match-root scans. Bump after landmark or match-graph edits
 # so viewport pan can reuse the last snapshot instead of walking RNA every frame.
@@ -73,19 +75,26 @@ _match_roots_cache: list | None = None
 _match_roots_cache_key: tuple | None = None
 _landmark_rows_cache: tuple | None = None
 _landmark_rows_key: tuple | None = None
+_landmark_enum_candidates_cache: tuple | None = None
+_landmark_enum_candidates_key: tuple | None = None
 
 
 def bump_sync_ui_cache() -> None:
     """Drop cached Sync Matches scans after landmark or match-root edits."""
     global _sync_ui_generation, _match_roots_cache, _match_roots_cache_key
     global _landmark_rows_cache, _landmark_rows_key
+    global _landmark_enum_candidates_cache, _landmark_enum_candidates_key
     _sync_ui_generation += 1
     _match_roots_cache = None
     _match_roots_cache_key = None
     _landmark_rows_cache = None
     _landmark_rows_key = None
+    _landmark_enum_candidates_cache = None
+    _landmark_enum_candidates_key = None
     _MIRROR_OF_ITEMS.clear()
     _PARALLEL_TO_ITEMS.clear()
+    _ACTIVE_MATCH_ITEMS.clear()
+    _ANCHOR_MATCH_ITEMS.clear()
 
 
 def tag_viewport_redraw(context: bpy.types.Context | None = None) -> None:
@@ -232,6 +241,24 @@ def landmark_sidebar_rows(space, context) -> tuple:
     return rows
 
 
+def landmark_enum_candidates(space) -> tuple:
+    """Cached names/types for constraint enums without reading dynamic RNA."""
+    global _landmark_enum_candidates_cache, _landmark_enum_candidates_key
+    from ..ui import landmark_list
+
+    space_key = space.as_pointer() if hasattr(space, "as_pointer") else id(space)
+    key = (_sync_ui_generation, space_key, len(space.landmarks))
+    if (
+        _landmark_enum_candidates_cache is not None
+        and _landmark_enum_candidates_key == key
+    ):
+        return _landmark_enum_candidates_cache
+    candidates = landmark_list.collect_landmark_enum_candidates(space.landmarks)
+    _landmark_enum_candidates_cache = candidates
+    _landmark_enum_candidates_key = key
+    return candidates
+
+
 def _parallel_to_items(self, context):
     """Dropdown of world axes and other Lines for the parallel constraint."""
     if context is None:
@@ -244,7 +271,7 @@ def _parallel_to_items(self, context):
     from ..ui import landmark_list
 
     packed = _PARALLEL_TO_STATIC + landmark_list.parallel_to_enum_entries(
-        landmark_sidebar_rows(space, context),
+        landmark_enum_candidates(space),
         self.item_id,
     )
     _PARALLEL_TO_ITEMS[key] = packed
@@ -263,7 +290,7 @@ def _mirror_of_items(self, context):
     from ..ui import landmark_list
 
     packed = _MIRROR_OF_NONE + landmark_list.mirror_of_enum_entries(
-        landmark_sidebar_rows(space, context),
+        landmark_enum_candidates(space),
         self.item_id,
     )
     _MIRROR_OF_ITEMS[key] = packed
@@ -411,12 +438,19 @@ def _active_match_items(self, context):
     """Dynamic enum entries for the active-match dropdown."""
     from .. import scene as scene_module
 
-    items = [("NONE", "(Unloaded)", "No active Perspective Match session")]
-    for root in iter_match_roots():
-        # Show PM_<label> in the UI; identifier stays the Origin Empty name.
-        items.append(
-            (root.name, scene_module.match_prefix(root), "Activate this match camera")
+    roots = iter_match_roots()
+    key = tuple((root.name, scene_module.match_prefix(root)) for root in roots)
+    items = _ACTIVE_MATCH_ITEMS.get(key)
+    if items is None:
+        # Keep dynamic enum strings referenced for Blender's callback lifetime.
+        items = (
+            ("NONE", "(Unloaded)", "No active Perspective Match session"),
+            *(
+                (identifier, label, "Activate this match camera")
+                for identifier, label in key
+            ),
         )
+        _ACTIVE_MATCH_ITEMS[key] = items
     return items
 
 
@@ -459,15 +493,22 @@ def _anchor_match_items(self, context):
     """Dynamic enum entries for the sync anchor dropdown."""
     from .. import scene as scene_module
 
-    items = [("NONE", "(None)", "No sync anchor selected")]
-    for root in iter_match_roots():
-        items.append(
-            (
-                root.name,
-                scene_module.match_prefix(root),
-                "Use this match as the shared-world anchor",
-            )
+    roots = iter_match_roots()
+    key = tuple((root.name, scene_module.match_prefix(root)) for root in roots)
+    items = _ANCHOR_MATCH_ITEMS.get(key)
+    if items is None:
+        items = (
+            ("NONE", "(None)", "No sync anchor selected"),
+            *(
+                (
+                    identifier,
+                    label,
+                    "Use this match as the shared-world anchor",
+                )
+                for identifier, label in key
+            ),
         )
+        _ANCHOR_MATCH_ITEMS[key] = items
     return items
 
 
