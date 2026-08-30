@@ -42,6 +42,7 @@ Keep this map accurate when you add a module, move a stage, or change a named co
 | Blender cameras, stills, Solve Sync apply | `scene/__init__.py` |
 | Image analysis (AprilTags, VP detect, edge/tag snap) | `detect/` |
 | Operators / panel / overlay | `ui/` |
+| Self-contained HTML sync diagnostics | `ui/sync_report.py` |
 | RNA | `properties/__init__.py` |
 
 Do not special-case a `.blend` filename in solver code or UI copy.

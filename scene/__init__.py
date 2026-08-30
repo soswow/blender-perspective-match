@@ -3264,60 +3264,16 @@ def apply_diagnose_sync_result(
     space = properties.workspace(context)
     _apply_sync_landmark_diagnostics(context, result)
 
-    parts = []
-    if prep.ground_frame_note:
-        parts.append(prep.ground_frame_note)
-    if prep.auto_origin_notes:
-        parts.append("Auto origin: " + ", ".join(prep.auto_origin_notes))
-    if prep.skipped_matches:
-        parts.append(f"{prep.skipped_matches} match(es) sync-disabled")
-    if prep.excluded_landmarks:
-        parts.append(f"{prep.excluded_landmarks} landmark(s) excluded from sync")
-    if prep.warnings:
-        parts.append("Known 3D: " + "; ".join(prep.warnings[:3]))
-    parts.append(result.message)
-    if result.per_landmark_rmse_px:
-        ranked = sorted(
-            result.per_landmark_rmse_px.items(), key=lambda item: -item[1]
-        )[:5]
-        name_by_id = {
-            landmark.item_id: (landmark.name or landmark.item_id)
-            for landmark in space.landmarks
-        }
-        bits = [
-            f"{name_by_id.get(landmark_id, landmark_id[:8])} {rmse:.1f}px"
-            for landmark_id, rmse in ranked
-        ]
-        parts.append("Per-landmark: " + ", ".join(bits))
-    if result.leave_one_out:
-        helpful = [
-            f"{name} {with_rmse:.0f}→{without_rmse:.0f}px"
-            for name, with_rmse, without_rmse in result.leave_one_out[:3]
-            if without_rmse < with_rmse
-        ]
-        if helpful:
-            parts.append("Leave-one-out: " + ", ".join(helpful))
-    if result.inconsistent_picks:
-        bits = [
-            f"{name} on '{match_id}' ({error:.0f}px)"
-            for match_id, name, error in result.inconsistent_picks[:3]
-        ]
-        parts.append(
-            "Mismatched pick: " + ", ".join(bits) + " — uncheck Use in Sync or re-pick"
-        )
-    if result.downweighted_landmark_ids:
-        name_by_id = {
-            landmark.item_id: (landmark.name or landmark.item_id)
-            for landmark in space.landmarks
-        }
-        bits = [
-            name_by_id.get(landmark_id, landmark_id[:8])
-            for landmark_id in result.downweighted_landmark_ids[:4]
-        ]
-        parts.append("Auto-downweighted: " + ", ".join(bits))
-    if result.success:
-        parts.append("Pose OK to apply via Solve Sync (not applied by Diagnose)")
-    space.sync_status = " | ".join(parts)
+    registered = len(set(result.similarities) & {item.match_id for item in prep.matches})
+    outcome = "Complete"
+    if not result.success:
+        outcome = "Failed"
+    elif registered < len(prep.matches):
+        outcome = "Partial"
+    space.sync_status = (
+        f"Diagnose · {outcome} · {registered}/{len(prep.matches)} cameras · "
+        f"{result.mean_reprojection_px:.2f}px · HTML report pending"
+    )
     properties.tag_viewport_redraw(context)
     return result
 

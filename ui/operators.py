@@ -10,7 +10,7 @@ from uuid import uuid4
 
 import bpy
 import numpy as np
-from bpy_extras.io_utils import ImportHelper
+from bpy_extras.io_utils import ExportHelper, ImportHelper
 from mathutils import Vector
 
 from .. import core, properties, scene
@@ -21,7 +21,7 @@ from ..detect import opencv as opencv_support
 from ..detect import tag_snap
 from ..detect import vp_lines as vp_line_detect
 from ..scene import distortion
-from . import overlay, overlay_hit
+from . import overlay, overlay_hit, sync_report
 
 
 def _session(context: bpy.types.Context):
@@ -30,6 +30,68 @@ def _session(context: bpy.types.Context):
 
 def _workspace(context: bpy.types.Context):
     return properties.workspace(context)
+
+
+def _write_diagnose_report(
+    context: bpy.types.Context,
+    result,
+    *,
+    prep,
+):
+    """Build, write, open, and publish one Diagnose HTML report."""
+    roots = properties.iter_match_roots()
+    labels = {
+        root.name: sync_report.friendly_match_name(scene.match_prefix(root))
+        for root in roots
+    }
+    disabled_ids = {
+        root.name
+        for root in roots
+        if not getattr(root.pm_session, "sync_enabled", True)
+    }
+    notes = []
+    if prep.ground_frame_note:
+        notes.append(prep.ground_frame_note)
+    if prep.auto_origin_notes:
+        notes.append("Auto origin: " + ", ".join(prep.auto_origin_notes))
+
+    source_name = Path(bpy.data.filepath).name if bpy.data.filepath else "Untitled.blend"
+    report = sync_report.build_sync_report(
+        operation="Diagnose",
+        source_name=source_name,
+        matches=prep.matches,
+        observations=prep.observations,
+        line_observations=prep.line_observations,
+        result=result,
+        anchor_id=prep.anchor_id,
+        known_world=prep.known_world,
+        known_lines=prep.known_lines,
+        parallel_pairs=prep.parallel_pairs,
+        mirror_pairs=prep.mirror_pairs,
+        all_match_labels=labels,
+        disabled_match_ids=disabled_ids,
+        fixed_match_ids=set(prep.fixed_similarities),
+        excluded_landmarks=prep.excluded_landmarks,
+        warnings=prep.warnings,
+        notes=notes,
+    )
+    report_path = sync_report.write_temp_report(
+        report,
+        temp_root=(bpy.app.tempdir or None),
+    )
+    opened = False
+    try:
+        opened = "FINISHED" in bpy.ops.wm.url_open(
+            url=report_path.resolve().as_uri()
+        )
+    except Exception as error:
+        print(f"Perspective Match: could not open sync report: {error}")
+    _workspace(context).sync_status = sync_report.compact_status(
+        report,
+        opened=opened,
+    )
+    properties.tag_viewport_redraw(context)
+    return report, report_path, opened
 
 
 def _pm_controls_camera(context: bpy.types.Context) -> bool:
@@ -3154,8 +3216,8 @@ class PM_OT_diagnose_sync(bpy.types.Operator):
     bl_idname = "perspective_match.diagnose_sync"
     bl_label = "Diagnose"
     bl_description = (
-        "Run the sync solver and list per-landmark RMSE plus Known 3D "
-        "consistency checks without applying a pose. Auto-sets missing "
+        "Run the sync solver and open a local HTML report with camera connectivity, "
+        "per-landmark RMSE, and Known 3D checks without applying a pose. Auto-sets missing "
         "origins and, with locked K plus 4+ shared On Ground picks across 3+ "
         "images, can initialize orientation like Solve Sync. Runs in the "
         "background — Esc or Cancel to stop"
@@ -3272,13 +3334,21 @@ class PM_OT_diagnose_sync(bpy.types.Operator):
 
         try:
             scene.apply_diagnose_sync_result(context, self._prep, result)
+            report, _path, opened = _write_diagnose_report(
+                context,
+                result,
+                prep=self._prep,
+            )
         except Exception as error:
             workspace.sync_status = str(error)
             return _report_exception(self, error)
         settings = properties.active_session(context)
         if settings is not None:
             settings.error = ""
-        self.report({"INFO"} if result.success else {"WARNING"}, workspace.sync_status)
+        self.report(
+            {"INFO"} if report.severity == "success" else {"WARNING"},
+            sync_report.compact_status(report, opened=opened),
+        )
         return {"FINISHED"}
 
     def modal(self, context: bpy.types.Context, event) -> set[str]:
@@ -3322,12 +3392,19 @@ class PM_OT_diagnose_sync(bpy.types.Operator):
     def execute(self, context: bpy.types.Context) -> set[str]:
         workspace = _workspace(context)
         try:
-            result = scene.diagnose_sync(context)
+            prep = scene.prepare_diagnose_sync(context)
+            result = scene.run_diagnose_sync(prep)
+            scene.apply_diagnose_sync_result(context, prep, result)
+            report, _path, opened = _write_diagnose_report(
+                context,
+                result,
+                prep=prep,
+            )
         except Exception as error:
             workspace.sync_status = str(error)
             return _report_exception(self, error)
-        level = {"INFO"} if result.success else {"WARNING"}
-        self.report(level, workspace.sync_status)
+        level = {"INFO"} if report.severity == "success" else {"WARNING"}
+        self.report(level, sync_report.compact_status(report, opened=opened))
         return {"FINISHED"}
 
 
@@ -3628,7 +3705,63 @@ class PM_OT_clear_sync(bpy.types.Operator):
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         scene.clear_sync_transforms(context)
+        sync_report.clear_last_report()
         self.report({"INFO"}, "Sync cleared")
+        return {"FINISHED"}
+
+
+class PM_OT_open_sync_report(bpy.types.Operator):
+    """Open the most recently generated sync diagnostic report."""
+
+    bl_idname = "perspective_match.open_sync_report"
+    bl_label = "Open Report"
+    bl_description = "Open the latest self-contained sync diagnostic HTML report"
+    bl_options = {"REGISTER"}
+
+    @classmethod
+    def poll(cls, _context: bpy.types.Context) -> bool:
+        return sync_report.last_report_path() is not None
+
+    def execute(self, _context: bpy.types.Context) -> set[str]:
+        path = sync_report.last_report_path()
+        if path is None:
+            self.report({"WARNING"}, "No sync diagnostic report is available")
+            return {"CANCELLED"}
+        result = bpy.ops.wm.url_open(url=path.resolve().as_uri())
+        if "FINISHED" not in result:
+            self.report({"WARNING"}, "Could not open the sync diagnostic report")
+            return {"CANCELLED"}
+        self.report({"INFO"}, "Opened sync diagnostic report")
+        return {"FINISHED"}
+
+
+class PM_OT_export_sync_report(bpy.types.Operator, ExportHelper):
+    """Save the latest self-contained sync diagnostic report permanently."""
+
+    bl_idname = "perspective_match.export_sync_report"
+    bl_label = "Export Report"
+    bl_description = "Save the latest sync diagnostic HTML report to a permanent file"
+    bl_options = {"REGISTER"}
+
+    filename_ext = ".html"
+    filter_glob: bpy.props.StringProperty(default="*.html", options={"HIDDEN"})
+
+    @classmethod
+    def poll(cls, _context: bpy.types.Context) -> bool:
+        return sync_report.last_report_path() is not None
+
+    def invoke(self, context: bpy.types.Context, event) -> set[str]:
+        if not self.filepath:
+            blend_name = Path(bpy.data.filepath).stem if bpy.data.filepath else "untitled"
+            self.filepath = f"{blend_name}-sync-diagnostics.html"
+        return ExportHelper.invoke(self, context, event)
+
+    def execute(self, _context: bpy.types.Context) -> set[str]:
+        try:
+            output = sync_report.export_last_report(self.filepath)
+        except Exception as error:
+            return _report_exception(self, error)
+        self.report({"INFO"}, f"Exported sync report to {output}")
         return {"FINISHED"}
 
 
@@ -3679,6 +3812,8 @@ CLASSES = (
     PM_OT_refine_lenses,
     PM_OT_cancel_refine_lenses,
     PM_OT_clear_sync,
+    PM_OT_open_sync_report,
+    PM_OT_export_sync_report,
     PM_OT_activate_match_slot,
     PM_OT_cycle_match,
     PM_OT_interact,

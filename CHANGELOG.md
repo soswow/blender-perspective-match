@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Diagnose opens a self-contained local HTML report with actionable issues, camera connectivity, match status, sortable landmark errors, and export controls
 - Per-match **Lock Pose in Sync** keeps a trusted camera fixed while its landmark picks constrain the rest of the sync graph
 - Per-landmark **Sync Weight** so a few important picks can pull harder during Solve Sync
 - Sync Matches shows whether the current match was registered in the last Solve Sync

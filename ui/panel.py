@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import textwrap
 
 import bpy
 
@@ -696,6 +697,17 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
                 icon="INFO",
             )
             row.operator("perspective_match.clear_sync", text="Clear", icon="X")
+        report_row = sync_body.row(align=True)
+        report_row.operator(
+            "perspective_match.open_sync_report",
+            text="Open Report",
+            icon="URL",
+        )
+        report_row.operator(
+            "perspective_match.export_sync_report",
+            text="Export",
+            icon="EXPORT",
+        )
         # Full-width rows — avoid property-split pushing controls to mid-panel.
         lock_row = sync_body.row(align=True)
         lock_row.use_property_split = False
@@ -765,12 +777,13 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
         origin_hide_row.prop(settings, "hide_origin_empty", text="Hide Origin Empty")
         if workspace.sync_status:
             status_column = sync_body.column(align=True)
-            # Blender labels do not wrap — split so the full message is readable.
-            wrap_width = 48
-            text = workspace.sync_status
-            while text:
-                status_column.label(text=text[:wrap_width])
-                text = text[wrap_width:]
+            # Blender labels do not wrap; keep word boundaries in the compact status.
+            status_lines = textwrap.wrap(workspace.sync_status, width=48)
+            for index, line in enumerate(status_lines):
+                status_column.label(
+                    text=line,
+                    icon="INFO" if index == 0 else "NONE",
+                )
         if settings is not None and settings.sync_last_ok and settings.sync_is_applied:
             sync_body.label(
                 text=(
