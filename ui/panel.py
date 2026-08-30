@@ -480,6 +480,11 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
         if not settings.sync_enabled:
             return
 
+        lock_pose_row = sync_body.row()
+        active_root = properties.active_root(context)
+        lock_pose_row.enabled = active_root != properties.anchor_root(context)
+        lock_pose_row.prop(settings, "sync_lock_pose", text="Lock Pose in Sync")
+
         match_count = len(properties.iter_match_roots())
         enabled_count = len(properties.iter_sync_enabled_roots())
         if match_count < 2 or enabled_count < 2:

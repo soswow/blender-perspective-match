@@ -993,6 +993,16 @@ class PMSession(bpy.types.PropertyGroup):
         default=True,
         update=_redraw,
     )
+    sync_lock_pose: bpy.props.BoolProperty(
+        name="Lock Pose in Sync",
+        description=(
+            "Keep this match's current shared-space pose and scale unchanged "
+            "during Solve Sync, Diagnose, and Refine Lenses, while its landmark "
+            "picks still constrain the other matches"
+        ),
+        default=False,
+        update=_redraw,
+    )
     sync_is_applied: bpy.props.BoolProperty(default=False, options={"HIDDEN"})
     # True only if this match was registered in the last successful Solve Sync.
     sync_last_ok: bpy.props.BoolProperty(

@@ -1656,6 +1656,8 @@ def ensure_origins_from_ground_landmarks(
         session = root.pm_session
         if not getattr(session, "sync_enabled", True):
             continue
+        if getattr(session, "sync_lock_pose", False):
+            continue
         if uses_adjusted_camera(session):
             continue
         if session.origin_is_set:
@@ -2346,6 +2348,25 @@ def _similarity_from_session(session: properties.PMSession):
     )
 
 
+def collect_sync_fixed_similarities(context: bpy.types.Context) -> dict:
+    """Current shared transforms for sync-enabled, pose-locked matches."""
+    from ..core import sync as sync_module
+
+    anchor = properties.anchor_root(context)
+    fixed = {}
+    for root in properties.iter_sync_enabled_roots():
+        if root == anchor or not getattr(root.pm_session, "sync_lock_pose", False):
+            continue
+        location, rotation, scale_xyz = root.matrix_world.decompose()
+        scale = sum(abs(float(value)) for value in scale_xyz) / 3.0
+        fixed[root.name] = sync_module.SimilarityTransform(
+            scale=scale,
+            rotation=np.array(rotation.to_matrix(), dtype=np.float64),
+            translation=np.array(location, dtype=np.float64),
+        )
+    return fixed
+
+
 def apply_similarity_to_root(root: bpy.types.Object, similarity) -> None:
     """Write a similarity onto a match root Empty."""
     session = root.pm_session
@@ -2989,6 +3010,8 @@ def ensure_ground_frame_from_landmarks(
         if root is None or relative_rotation is None:
             continue
         session = root.pm_session
+        if getattr(session, "sync_lock_pose", False):
+            continue
         line_bundles = line_bundles_from_settings(session)
         lock_focal = bool(session.lock_focal or session.vp_mode == "1")
         if core.can_solve_orientation(
@@ -3102,6 +3125,7 @@ class DiagnoseSyncPrep:
     excluded_landmarks: int
     lock_rotation: bool
     lock_translation: bool
+    fixed_similarities: dict
     ground_slack: float
     known_3d_slack: float
     mirror_pairs: list
@@ -3156,6 +3180,7 @@ def prepare_diagnose_sync(context: bpy.types.Context) -> DiagnoseSyncPrep:
         ),
         lock_rotation=bool(space.lock_rotation),
         lock_translation=bool(space.lock_translation),
+        fixed_similarities=collect_sync_fixed_similarities(context),
         ground_slack=float(getattr(space, "ground_slack", 0.02)),
         known_3d_slack=float(getattr(space, "known_3d_slack", 0.0)),
         **_sync_mirror_kwargs(context),
@@ -3185,6 +3210,7 @@ def run_diagnose_sync(
         line_observations=prep.line_observations,
         known_lines=prep.known_lines,
         parallel_pairs=prep.parallel_pairs,
+        fixed_similarities=prep.fixed_similarities,
         lock_rotation=prep.lock_rotation,
         lock_translation=prep.lock_translation,
         use_pose_cache=True,
@@ -3211,6 +3237,7 @@ def run_diagnose_sync(
             line_observations=prep.line_observations,
             known_lines=prep.known_lines,
             parallel_pairs=prep.parallel_pairs,
+            fixed_similarities=prep.fixed_similarities,
             top_k=5,
             baseline=result if result.per_landmark_rmse_px else None,
             lock_rotation=prep.lock_rotation,
@@ -3340,6 +3367,7 @@ def solve_and_apply_sync(context: bpy.types.Context):
         line_observations=line_observations,
         known_lines=known_lines,
         parallel_pairs=parallel_pairs,
+        fixed_similarities=collect_sync_fixed_similarities(context),
         lock_rotation=bool(space.lock_rotation),
         lock_translation=bool(space.lock_translation),
         use_pose_cache=True,
@@ -3378,7 +3406,12 @@ def solve_and_apply_sync(context: bpy.types.Context):
         root = root_by_name.get(match_id)
         if root is None:
             continue
-        apply_similarity_to_root(root, similarity)
+        if getattr(root.pm_session, "sync_lock_pose", False) and root != anchor:
+            # Preserve the live matrix byte-for-byte; only refresh persisted
+            # sync metadata and diagnostics for this participating match.
+            store_similarity_on_session(root.pm_session, similarity)
+        else:
+            apply_similarity_to_root(root, similarity)
         root.pm_session.sync_rmse_px = float(
             result.per_match_rmse_px.get(match_id, 0.0)
         )
@@ -3463,6 +3496,7 @@ def refine_lenses_and_sync(context: bpy.types.Context):
         fx_span=prep.fx_span,
         lock_rotation=prep.lock_rotation,
         lock_translation=prep.lock_translation,
+        fixed_similarities=prep.fixed_similarities,
         share_lens=prep.share_lens,
         ground_slack=prep.ground_slack,
         known_3d_slack=prep.known_3d_slack,
@@ -3488,6 +3522,7 @@ class LensRefinePrep:
     root_by_name: dict
     lock_rotation: bool = False
     lock_translation: bool = False
+    fixed_similarities: dict | None = None
     share_lens: bool = True
     ground_slack: float | None = None
     known_3d_slack: float | None = None
@@ -3548,8 +3583,17 @@ def prepare_lens_refine(context: bpy.types.Context) -> LensRefinePrep:
             lock_focal=True,
             vp_mode=settings.vp_mode,
         )
-        freeze = (not share_lens) and (settings.vp_mode == "1" or not can_orient)
-        reorient = can_orient and settings.vp_mode != "1"
+        pose_locked = bool(
+            root != anchor and getattr(settings, "sync_lock_pose", False)
+        )
+        freeze = pose_locked or (
+            (not share_lens) and (settings.vp_mode == "1" or not can_orient)
+        )
+        # Same Lens may still change a locked match's focal, but it must keep
+        # that match's private camera pose as well as its fixed root transform.
+        reorient = (
+            not pose_locked and can_orient and settings.vp_mode != "1"
+        )
         origin_image = None
         if settings.origin_is_set:
             origin_image = (
@@ -3585,6 +3629,7 @@ def prepare_lens_refine(context: bpy.types.Context) -> LensRefinePrep:
         root_by_name=root_by_name,
         lock_rotation=bool(space.lock_rotation),
         lock_translation=bool(space.lock_translation),
+        fixed_similarities=collect_sync_fixed_similarities(context),
         share_lens=share_lens,
         ground_slack=ground_slack,
         known_3d_slack=known_3d_slack,

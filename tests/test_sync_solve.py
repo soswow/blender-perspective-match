@@ -92,6 +92,33 @@ class SolveSyncTests(unittest.TestCase):
                 cancel_check=lambda: True,
             )
 
+    def test_pose_locked_match_stays_fixed_and_keeps_its_observations(self) -> None:
+        """A participating match can be fixed without removing it from Sync."""
+        matches, observations, true_sim, _center, _shared = _synthetic_scene(
+            with_ground=True
+        )
+        locked = sync.SimilarityTransform(
+            scale=true_sim.scale,
+            rotation=true_sim.rotation.copy(),
+            translation=true_sim.translation.copy(),
+        )
+
+        result = sync.solve_landmark_sync(
+            matches,
+            observations,
+            anchor_id="anchor",
+            fixed_similarities={"other": locked},
+        )
+
+        self.assertTrue(result.success, result.message)
+        self.assertIn("other", result.per_match_rmse_px)
+        self.assertEqual(len(result.landmarks), 7)
+        recovered = result.similarities["other"]
+        self.assertEqual(recovered.scale, locked.scale)
+        self.assertTrue(np.array_equal(recovered.rotation, locked.rotation))
+        self.assertTrue(np.array_equal(recovered.translation, locked.translation))
+        self.assertIn("1 pose locked", result.message)
+
 
     def test_low_confidence_outlier_softens_pose_pull(self) -> None:
         """A badly placed Low pick should bias pose less than the same High pick."""
@@ -769,4 +796,3 @@ class SolveSyncTests(unittest.TestCase):
             np.allclose(recovered_center, underside_center, atol=0.35),
             recovered_center,
         )
-

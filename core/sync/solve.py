@@ -386,6 +386,7 @@ class _SolveState:
     usable_observations: list[SyncObservation]
     landmark_ids: list[str]
     free_match_ids: list[str]
+    fixed_match_ids: set[str]
     similarities: dict[str, SimilarityTransform]
     skipped_unregistered: list[str]
     failure_detail: str
@@ -406,6 +407,9 @@ class _SolveState:
 
     def drop_matches(self, match_ids: list[str]) -> None:
         """Remove cameras from the joint graph and remember them as skipped."""
+        match_ids = [
+            match_id for match_id in match_ids if match_id not in self.fixed_match_ids
+        ]
         if not match_ids:
             return
         skip = set(match_ids)
@@ -549,6 +553,7 @@ def _peel_cameras_above_rmse(state: _SolveState) -> SyncSolveResult | None:
             (
                 (state.pre_ba_match_rmse.get(match_id, 0.0), match_id)
                 for match_id in state.free_match_ids
+                if match_id not in state.fixed_match_ids
             ),
             reverse=True,
         )
@@ -645,6 +650,7 @@ def _expand_landmarks_after_resect(state: _SolveState) -> None:
         match_id
         for match_id in list(state.similarities)
         if match_id != state.anchor_id
+        and match_id not in state.fixed_match_ids
         and _cloud_observation_count(
             match_id,
             original_cloud,
@@ -804,6 +810,7 @@ def solve_landmark_sync(
     known_lines: dict[str, tuple[np.ndarray, np.ndarray]] | None = None,
     parallel_pairs: list[tuple[str, str]] | None = None,
     initial_similarities: dict[str, SimilarityTransform] | None = None,
+    fixed_similarities: dict[str, SimilarityTransform] | None = None,
     lock_rotation: bool = False,
     lock_translation: bool = False,
     use_pose_cache: bool = False,
@@ -827,7 +834,9 @@ def solve_landmark_sync(
     ``known_3d_slack`` is how far Known 3D points may leave their Empty
     (0 pins them; pairwise registration still uses the Empty). On Ground
     Known 3D uses the tighter of the two slacks for Z. ``mirror_pairs`` are
-    joint-BA only (not pairwise). ``mirror_plane`` is ``(point, normal)``;
+    joint-BA only (not pairwise). ``fixed_similarities`` keeps those non-anchor
+    match transforms unchanged while their observations still constrain the
+    solve. ``mirror_plane`` is ``(point, normal)``;
     ``mirror_slack`` is how far that plane may slide along the normal (the
     Empty is not moved).
     """
@@ -879,6 +888,19 @@ def solve_landmark_sync(
             message="Anchor match is missing",
             success=False,
         )
+    fixed_similarities = {
+        match_id: SimilarityTransform(
+            scale=float(similarity.scale),
+            rotation=np.asarray(similarity.rotation, dtype=np.float64)
+            .reshape(3, 3)
+            .copy(),
+            translation=np.asarray(similarity.translation, dtype=np.float64)
+            .reshape(3)
+            .copy(),
+        )
+        for match_id, similarity in (fixed_similarities or {}).items()
+        if match_id in match_map and match_id != anchor_id
+    }
 
     valid_observations = [
         observation
@@ -1016,6 +1038,8 @@ def solve_landmark_sync(
 
     _check_cancelled(cancel_check)
     _report_progress(progress_callback, "Registering cameras")
+    registration_seeds = dict(initial_similarities or {})
+    registration_seeds.update(fixed_similarities)
     similarities, failure_detail = _register_from_relative_pose(
         anchor_id,
         free_match_ids,
@@ -1025,7 +1049,7 @@ def solve_landmark_sync(
         known_lines=known_lines,
         line_observations_by_landmark=line_observations_by_landmark,
         parallel_pairs=parallel_pairs,
-        initial_similarities=initial_similarities,
+        initial_similarities=registration_seeds,
         lock_rotation=lock_rotation,
         lock_translation=lock_translation,
         use_pose_cache=use_pose_cache,
@@ -1095,6 +1119,7 @@ def solve_landmark_sync(
         usable_observations=usable_observations,
         landmark_ids=landmark_ids,
         free_match_ids=free_match_ids,
+        fixed_match_ids=set(fixed_similarities) & set(free_match_ids),
         similarities=similarities,
         skipped_unregistered=skipped_unregistered,
         failure_detail=failure_detail or "",
@@ -1295,6 +1320,11 @@ def solve_landmark_sync(
                 line_segments=line_segments,
                 lock_rotation=lock_rotation,
                 lock_translation=lock_translation,
+                fixed_similarities={
+                    match_id: similarities[match_id]
+                    for match_id in state.fixed_match_ids
+                    if match_id in similarities
+                },
                 max_iterations=iterations,
                 ground_landmark_ids=ground_landmark_ids,
                 ground_slack=ground_slack,
@@ -1468,11 +1498,14 @@ def solve_landmark_sync(
     weak_after = [
         match_id
         for match_id, rmse in sorted(
-            ((match_id, post_ba_match_rmse.get(match_id, 0.0)) for match_id in free_match_ids),
+            (
+                (match_id, post_ba_match_rmse.get(match_id, 0.0))
+                for match_id in free_match_ids
+            ),
             key=lambda item: item[1],
             reverse=True,
         )
-        if rmse > ACCEPT_RMSE_PX
+        if rmse > ACCEPT_RMSE_PX and match_id not in state.fixed_match_ids
     ][:1]
     if weak_after:
         _record_mismatch_picks(state, weak_after[0])
@@ -1747,6 +1780,8 @@ def solve_landmark_sync(
         f"Synced {len(free_match_ids)} match(es) · {len(landmarks)} landmarks · "
         f"RMSE {mean_rmse:.2f} px"
     )
+    if state.fixed_match_ids:
+        message += f" · {len(state.fixed_match_ids)} pose locked"
     scale_bits = []
     if known_count:
         scale_bits.append(f"{known_count} known 3D")

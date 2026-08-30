@@ -663,6 +663,7 @@ def _ba_raw_residuals_and_jacobian(
     fixed_rotations: dict[str, np.ndarray] | None = None,
     lock_translation: bool = False,
     fixed_translations: dict[str, np.ndarray] | None = None,
+    fixed_similarities: dict[str, SimilarityTransform] | None = None,
     free_line_ids: list[str] | None = None,
     fixed_line_points: dict[str, np.ndarray] | None = None,
     fixed_line_directions: dict[str, np.ndarray] | None = None,
@@ -681,6 +682,7 @@ def _ba_raw_residuals_and_jacobian(
     fixed_line_directions = fixed_line_directions or {}
     fixed_rotations = fixed_rotations or {}
     fixed_translations = fixed_translations or {}
+    fixed_similarities = fixed_similarities or {}
     similarities, free_landmarks, free_line_points = _unpack_ba_params(
         params,
         free_match_ids,
@@ -693,6 +695,7 @@ def _ba_raw_residuals_and_jacobian(
         fixed_translations=fixed_translations,
         free_line_ids=free_line_ids,
     )
+    similarities.update(fixed_similarities)
     similarities[anchor_id] = SimilarityTransform()
     # Both locks omit Empty poses from the parameter vector — keep identity
     # similarities so residual eval can still project through every match.
@@ -918,6 +921,7 @@ def _ba_raw_residuals_and_jacobian(
                 fixed_translations=fixed_translations,
                 free_line_ids=free_line_ids,
             )
+            trial_sims.update(fixed_similarities)
             trial_sims[anchor_id] = SimilarityTransform()
             if lock_rotation and lock_translation:
                 for trial_match_id in matches:
@@ -957,6 +961,7 @@ def _ba_residual_vector(
     fixed_rotations: dict[str, np.ndarray] | None = None,
     lock_translation: bool = False,
     fixed_translations: dict[str, np.ndarray] | None = None,
+    fixed_similarities: dict[str, SimilarityTransform] | None = None,
     free_line_ids: list[str] | None = None,
     fixed_line_points: dict[str, np.ndarray] | None = None,
     fixed_line_directions: dict[str, np.ndarray] | None = None,
@@ -985,6 +990,7 @@ def _ba_residual_vector(
         fixed_rotations=fixed_rotations,
         lock_translation=lock_translation,
         fixed_translations=fixed_translations,
+        fixed_similarities=fixed_similarities,
         free_line_ids=free_line_ids,
         fixed_line_points=fixed_line_points,
         fixed_line_directions=fixed_line_directions,
@@ -1110,6 +1116,7 @@ def _bundle_adjust_registration(
     lock_scale: bool = True,
     lock_rotation: bool = False,
     lock_translation: bool = False,
+    fixed_similarities: dict[str, SimilarityTransform] | None = None,
     max_iterations: int = 20,
     huber_delta: float = 6.0,
     max_free_lines: int = 24,
@@ -1135,6 +1142,11 @@ def _bundle_adjust_registration(
     can still lock families afterward).
     """
     known_line_ids = known_line_ids or set()
+    fixed_similarities = {
+        match_id: similarity
+        for match_id, similarity in (fixed_similarities or {}).items()
+        if match_id in free_match_ids
+    }
     line_segments = {
         landmark_id: (segment[0].copy(), segment[1].copy())
         for landmark_id, segment in (line_segments or {}).items()
@@ -1144,8 +1156,11 @@ def _bundle_adjust_registration(
     if not observations and not line_constraints:
         return similarities, landmarks, line_segments, False
 
+    pose_match_ids = [
+        match_id for match_id in free_match_ids if match_id not in fixed_similarities
+    ]
     fixed_scales = {
-        match_id: float(similarities[match_id].scale) for match_id in free_match_ids
+        match_id: float(similarities[match_id].scale) for match_id in pose_match_ids
     }
     # Prefer rigid Empty transforms when every seed is already metric.
     if lock_scale and any(abs(scale - 1.0) > 1.0e-3 for scale in fixed_scales.values()):
@@ -1154,7 +1169,7 @@ def _bundle_adjust_registration(
     if lock_rotation:
         from .pose import _snap_to_axis_aligned_rotation
 
-        for match_id in free_match_ids:
+        for match_id in pose_match_ids:
             similarity = similarities[match_id]
             similarities[match_id] = SimilarityTransform(
                 scale=float(similarity.scale),
@@ -1163,23 +1178,19 @@ def _bundle_adjust_registration(
             )
         fixed_rotations = {
             match_id: similarities[match_id].rotation.copy()
-            for match_id in free_match_ids
+            for match_id in pose_match_ids
         }
     else:
         fixed_rotations = {}
     # Zero translation when translation is locked (private worlds share origin axes).
     fixed_translations = {
-        match_id: np.zeros(3, dtype=np.float64) for match_id in free_match_ids
+        match_id: np.zeros(3, dtype=np.float64) for match_id in pose_match_ids
     } if lock_translation else {}
     # Fully locked Empty → no pose DOFs in BA (landmarks / lines only).
-    pose_match_ids = (
-        []
-        if (lock_rotation and lock_translation)
-        else list(free_match_ids)
-    )
     if lock_rotation and lock_translation:
-        for match_id in free_match_ids:
+        for match_id in pose_match_ids:
             similarities[match_id] = SimilarityTransform()
+        pose_match_ids = []
 
     working_landmarks = {
         landmark_id: landmarks[landmark_id].copy()
@@ -1235,6 +1246,7 @@ def _bundle_adjust_registration(
         "fixed_rotations": fixed_rotations,
         "lock_translation": lock_translation,
         "fixed_translations": fixed_translations,
+        "fixed_similarities": fixed_similarities,
         "huber_delta": huber_delta,
         "free_line_ids": free_line_ids,
         "fixed_line_points": fixed_line_points,
@@ -1447,6 +1459,7 @@ def leave_one_out_landmark_report(
     parallel_pairs: list[tuple[str, str]] | None = None,
     top_k: int = 5,
     baseline: SyncSolveResult | None = None,
+    fixed_similarities: dict[str, SimilarityTransform] | None = None,
     lock_rotation: bool = False,
     lock_translation: bool = False,
     ground_slack: float | None = None,
@@ -1476,6 +1489,7 @@ def leave_one_out_landmark_report(
             line_observations=line_observations,
             known_lines=known_lines,
             parallel_pairs=parallel_pairs,
+            fixed_similarities=fixed_similarities,
             lock_rotation=lock_rotation,
             lock_translation=lock_translation,
             ground_slack=ground_slack,
@@ -1514,6 +1528,11 @@ def leave_one_out_landmark_report(
     initial_similarities = {
         match_id: similarity
         for match_id, similarity in baseline.similarities.items()
+        if match_id in accepted_match_ids
+    }
+    accepted_fixed_similarities = {
+        match_id: similarity
+        for match_id, similarity in (fixed_similarities or {}).items()
         if match_id in accepted_match_ids
     }
     report: list[tuple[str, float, float]] = []
@@ -1563,6 +1582,7 @@ def leave_one_out_landmark_report(
             known_lines=filtered_known_lines,
             parallel_pairs=filtered_parallel,
             initial_similarities=initial_similarities,
+            fixed_similarities=accepted_fixed_similarities,
             lock_rotation=lock_rotation,
             lock_translation=lock_translation,
             ground_slack=ground_slack,

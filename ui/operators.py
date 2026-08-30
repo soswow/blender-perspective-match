@@ -3436,6 +3436,7 @@ class PM_OT_refine_lenses(bpy.types.Operator):
                     fx_span=prep.fx_span,
                     lock_rotation=prep.lock_rotation,
                     lock_translation=prep.lock_translation,
+                    fixed_similarities=prep.fixed_similarities,
                     share_lens=prep.share_lens,
                     ground_slack=prep.ground_slack,
                     known_3d_slack=prep.known_3d_slack,
