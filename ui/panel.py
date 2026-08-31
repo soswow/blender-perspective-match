@@ -756,15 +756,30 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
                 text="Cancel",
                 icon="X",
             )
+        elif operators.pin_sync_is_running():
+            opts_row.enabled = False
+            progress = refine_row.row(align=True)
+            progress.enabled = False
+            progress.prop(
+                workspace,
+                "lens_refine_progress",
+                text="Iterating",
+                slider=True,
+            )
+            refine_row.operator(
+                "perspective_match.cancel_iterate_known_3d_sync",
+                text="Cancel",
+                icon="X",
+            )
         else:
             refine_row.operator_context = "INVOKE_DEFAULT"
-            refine_row.enabled = not any(
-                scene.uses_adjusted_camera(root.pm_session)
-                for root in properties.iter_sync_enabled_roots()
-            )
             refine_row.operator(
                 "perspective_match.refine_lenses",
                 icon="CAMERA_DATA",
+            )
+            refine_row.operator(
+                "perspective_match.iterate_known_3d_sync",
+                icon="LOOP_FORWARDS",
             )
         empties_row = sync_body.row(align=True)
         empties_row.use_property_split = False

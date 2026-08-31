@@ -342,3 +342,50 @@ class PinRefineTests(unittest.TestCase):
         )
         self.assertFalse(result.success)
         self.assertIn("VP", result.message)
+
+    def test_pin_sync_round_improved_needs_pixel_floor(self) -> None:
+        self.assertTrue(pin_refine.pin_sync_round_improved(float("inf"), 8.0))
+        self.assertTrue(pin_refine.pin_sync_round_improved(4.0, 3.9))
+        self.assertFalse(pin_refine.pin_sync_round_improved(4.0, 3.96))
+        self.assertFalse(pin_refine.pin_sync_round_improved(4.0, 4.1))
+        self.assertFalse(pin_refine.pin_sync_round_improved(4.0, float("nan")))
+
+    def test_stale_private_frame_leaves_focal_error_that_a_second_polish_clears(
+        self,
+    ) -> None:
+        """After Sync, Known 3D is in a new private frame; a second polish can still move fx."""
+        true = _true_pinhole()
+        lines = _vp_lines(true)
+        start = pin_refine.copy_calibration(true)
+        start.intrinsics.fx *= 1.12
+        start.intrinsics.fy = start.intrinsics.fx
+        start.camera_center = start.camera_center * 1.08
+        stale_pins = []
+        for index, point in enumerate(_WORLD_POINTS):
+            u_coord, v_coord = _project(point, true)
+            stale_pins.append(
+                pin_refine.KnownPin(
+                    landmark_id=f"p{index}",
+                    point_private=point / 1.12,
+                    u=u_coord,
+                    v=v_coord,
+                )
+            )
+        first = pin_refine.refine_from_known_pins(
+            start,
+            stale_pins,
+            lines,
+            orient_from_vp=True,
+        )
+        self.assertTrue(first.success)
+        second = pin_refine.refine_from_known_pins(
+            first.calibration,
+            _pins_from_camera(true),
+            lines,
+            orient_from_vp=True,
+        )
+        self.assertTrue(second.success)
+        first_error = abs(first.calibration.intrinsics.fx - true.intrinsics.fx)
+        second_error = abs(second.calibration.intrinsics.fx - true.intrinsics.fx)
+        self.assertLess(second_error, first_error)
+        self.assertLess(second_error / true.intrinsics.fx, 0.03)

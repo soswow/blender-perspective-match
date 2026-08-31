@@ -34,10 +34,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Known 3D Slack** lets Known 3D point landmarks ease a little off their Empty during Solve Sync so CAD error can follow the 2D picks without stretching cameras
 - Point landmarks can be **Is Mirror Of** a partner across one scene **Mirror Empty**; **Mirror Slack** lets that plane ease along its normal if the Empty was slightly off; the magic wand next to Is Mirror Of fills the partner from a left/right name suffix
 - **Use Known 3D** (Camera) polishes FOV, principal point, and camera position from landmark picks after Auto from VPs, Estimate Distortion, or VP-line edits, without locking Manual FOV; orientation is rebuilt from the VP strokes at the new K
+- **Iterate Known 3D** repeats Auto from VPs (Use Known 3D) and Solve Sync until joint RMSE stops improving, so a moved match Empty can still pull FOV and camera
 
 ### Changed
 - Hiding Vanishing Point Lines also hides Show Error Label numbers on the plate
 - Viewport overlays now show only while the Perspective Match sidebar panel is expanded, except while a Draw / Pick tool is active
+- Refine Lenses skips Adjusted Camera stills instead of disabling the button for the whole graph
 - Solve Sync balances landmarks across the frame so a cluster of well-fitting central picks cannot ignore a few near the edge that pin camera distance
 - Pick Confidence and per-match confidence dropdowns sit in a collapsed section under Pick in Active Match
 - On Ground landmark picks draw in magenta on the plate (selected stays red)

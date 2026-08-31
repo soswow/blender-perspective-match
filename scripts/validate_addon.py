@@ -424,6 +424,7 @@ def main() -> None:
             assert space.anchor_match == root_b.name
             bpy.ops.perspective_match.solve_sync.poll()
             bpy.ops.perspective_match.refine_lenses.poll()
+            bpy.ops.perspective_match.iterate_known_3d_sync.poll()
             bpy.ops.perspective_match.diagnose_sync.poll()
             properties.reconcile_workspace_refs(space)
             assert space.anchor_match == root_a.name

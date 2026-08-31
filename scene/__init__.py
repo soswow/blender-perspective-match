@@ -1144,6 +1144,7 @@ def refine_match(
     context: bpy.types.Context,
     *,
     estimate_distortion: bool = False,
+    settings: properties.PMSession | None = None,
 ) -> core.Calibration:
     """Refine and apply camera state from all current VP lines.
 
@@ -1152,14 +1153,19 @@ def refine_match(
     When Use Known 3D is on, a second pass polishes translation / FOV / PP
     from landmark picks while rebuilding orientation from the VP lines at
     that K, so verticals stay on the strokes.
+
+    ``settings`` defaults to the active match so other stills can be polished
+    without switching the viewport.
     """
-    settings = properties.active_session(context)
+    if settings is None:
+        settings = properties.active_session(context)
     if settings is None:
         raise ValueError("Create or activate a match camera first")
     if uses_adjusted_camera(settings):
         raise ValueError("Adjusted Camera controls pose and FOV for this match")
     if settings.image is None:
         raise ValueError("Load a reference image first")
+    root = getattr(settings, "id_data", None)
     line_bundles = line_bundles_from_settings(settings)
     lock_focal = bool(settings.lock_focal or settings.vp_mode == "1")
     if not core.can_solve_orientation(
@@ -1207,12 +1213,17 @@ def refine_match(
     pin_note = ""
     if bool(getattr(settings, "use_known_3d_in_camera", False)):
         calibration, pin_note = _polish_known_3d_after_vp(
-            context, calibration, line_bundles
+            context, calibration, line_bundles, settings=settings
         )
 
     if _intrinsics_or_distortion_changed(previous_calibration, calibration):
         invalidate_undistorted_cache(settings)
-    apply_camera(context.scene, settings, calibration)
+    apply_camera(
+        context.scene,
+        settings,
+        calibration,
+        update_scene_camera=properties.active_root(context) == root,
+    )
     _update_diagnostics(settings, line_bundles, calibration)
     settings.status = (
         f"Camera matched · HFOV {calibration.hfov_degrees:.2f}°"
@@ -1229,12 +1240,13 @@ def refine_match(
     return calibration
 
 
-def collect_known_pins(context: bpy.types.Context):
-    """Known 3D point landmarks with a source-image pick on the active match."""
+def collect_known_pins(context: bpy.types.Context, root: bpy.types.Object | None = None):
+    """Known 3D point landmarks with a source-image pick on ``root`` (or active)."""
     from ..core import pin_refine
     from ..core import sync as sync_module
 
-    root = properties.active_root(context)
+    if root is None:
+        root = properties.active_root(context)
     space = properties.workspace(context)
     pins: list = []
     if root is None:
@@ -1269,12 +1281,18 @@ def _polish_known_3d_after_vp(
     context: bpy.types.Context,
     calibration: core.Calibration,
     line_bundles: dict[core.AxisId, list[core.LineSegment]],
+    *,
+    settings: properties.PMSession | None = None,
 ) -> tuple[core.Calibration, str]:
     """Optional Known 3D polish after a VP solve. Failure keeps the VP camera."""
     from ..core import pin_refine
 
-    settings = properties.active_session(context)
-    pins = collect_known_pins(context)
+    if settings is None:
+        settings = properties.active_session(context)
+    root = getattr(settings, "id_data", None) if settings is not None else None
+    pins = collect_known_pins(
+        context, root if properties.is_match_root(root) else None
+    )
     if len(pins) < pin_refine.MIN_PIN_COUNT:
         return (
             calibration,
@@ -1307,6 +1325,238 @@ def _short_pin_skip_reason(result) -> str:
     if "VP" in message:
         return "VP lines blocked the pin fit"
     return "pin fit rejected"
+
+
+def known_3d_iterate_roots(context: bpy.types.Context) -> list[bpy.types.Object]:
+    """Sync-enabled matches that can Auto from VPs with Use Known 3D pins."""
+    from ..core import pin_refine
+
+    anchor = properties.anchor_root(context)
+    eligible: list[bpy.types.Object] = []
+    for root in properties.iter_sync_enabled_roots():
+        settings = root.pm_session
+        if uses_adjusted_camera(settings) or settings.image is None:
+            continue
+        if not bool(getattr(settings, "use_known_3d_in_camera", False)):
+            continue
+        if (
+            anchor is not None
+            and root != anchor
+            and bool(getattr(settings, "sync_lock_pose", False))
+        ):
+            continue
+        if len(collect_known_pins(context, root)) < pin_refine.MIN_PIN_COUNT:
+            continue
+        line_bundles = line_bundles_from_settings(settings)
+        can_auto = core.can_solve_orientation(
+            line_bundles,
+            lock_focal=False,
+            vp_mode=settings.vp_mode,
+        )
+        can_locked = core.can_solve_orientation(
+            line_bundles,
+            lock_focal=True,
+            vp_mode=settings.vp_mode,
+        )
+        if not can_auto and not can_locked:
+            continue
+        eligible.append(root)
+    return eligible
+
+
+def polish_known_3d_cameras(context: bpy.types.Context) -> list[str]:
+    """Run Auto from VPs + Known 3D polish on each eligible match.
+
+    Unlocks Manual FOV when the still has enough lines for an FOV solve.
+    Does not switch the active match or rebuild undistorted plates.
+    """
+    polished: list[str] = []
+    for root in known_3d_iterate_roots(context):
+        settings = root.pm_session
+        line_bundles = line_bundles_from_settings(settings)
+        if core.can_solve_orientation(
+            line_bundles,
+            lock_focal=False,
+            vp_mode=settings.vp_mode,
+        ):
+            settings.lock_focal = False
+        refine_match(context, settings=settings)
+        polished.append(match_prefix(root))
+    return polished
+
+
+@dataclass
+class PinSyncSnapshot:
+    """Cameras, root transforms, and landmark RNA so a worse iterate round can revert."""
+
+    mean_rmse_px: float
+    cameras: dict
+    landmarks: list
+
+
+def capture_pin_sync_snapshot(
+    context: bpy.types.Context,
+    mean_rmse_px: float = float("inf"),
+) -> PinSyncSnapshot:
+    """Copy private calibrations, root matrices, and solved landmark positions."""
+    from ..core import pin_refine
+
+    cameras = {}
+    for root in properties.iter_match_roots():
+        settings = root.pm_session
+        cameras[root.name] = {
+            "matrix": root.matrix_world.copy(),
+            "calibration": pin_refine.copy_calibration(
+                calibration_from_settings(settings)
+            ),
+            "lock_focal": bool(settings.lock_focal),
+            "sync_is_applied": bool(settings.sync_is_applied),
+            "sync_scale": float(settings.sync_scale),
+            "sync_rotation": tuple(settings.sync_rotation),
+            "sync_translation": tuple(settings.sync_translation),
+            "sync_rmse_px": float(settings.sync_rmse_px),
+            "sync_last_ok": bool(settings.sync_last_ok),
+        }
+    space = properties.workspace(context)
+    landmarks = []
+    for landmark in space.landmarks:
+        landmarks.append(
+            {
+                "item_id": landmark.item_id,
+                "has_position": bool(landmark.has_position),
+                "has_line_segment": bool(landmark.has_line_segment),
+                "position": tuple(landmark.position),
+                "position_b": tuple(landmark.position_b),
+                "rmse_px": float(landmark.rmse_px),
+            }
+        )
+    return PinSyncSnapshot(
+        mean_rmse_px=float(mean_rmse_px),
+        cameras=cameras,
+        landmarks=landmarks,
+    )
+
+
+def restore_pin_sync_snapshot(
+    context: bpy.types.Context, snapshot: PinSyncSnapshot
+) -> None:
+    """Write a previous iterate snapshot back onto match Empties and cameras."""
+    active_root = properties.active_root(context)
+    for root in properties.iter_match_roots():
+        stored = snapshot.cameras.get(root.name)
+        if stored is None:
+            continue
+        settings = root.pm_session
+        root.matrix_world = stored["matrix"].copy()
+        settings.lock_focal = stored["lock_focal"]
+        settings.sync_is_applied = stored["sync_is_applied"]
+        settings.sync_scale = stored["sync_scale"]
+        settings.sync_rotation = stored["sync_rotation"]
+        settings.sync_translation = stored["sync_translation"]
+        settings.sync_rmse_px = stored["sync_rmse_px"]
+        settings.sync_last_ok = stored["sync_last_ok"]
+        previous = calibration_from_settings(settings)
+        calibration = stored["calibration"]
+        if _intrinsics_or_distortion_changed(previous, calibration):
+            invalidate_undistorted_cache(settings)
+        apply_camera(
+            context.scene,
+            settings,
+            calibration,
+            update_scene_camera=False,
+        )
+        _update_diagnostics(
+            settings, line_bundles_from_settings(settings), calibration
+        )
+    if active_root is not None:
+        apply_camera(
+            context.scene,
+            active_root.pm_session,
+            calibration_from_settings(active_root.pm_session),
+            update_scene_camera=True,
+        )
+    space = properties.workspace(context)
+    by_id = {item["item_id"]: item for item in snapshot.landmarks}
+    for landmark in space.landmarks:
+        stored = by_id.get(landmark.item_id)
+        if stored is None:
+            continue
+        landmark.has_position = stored["has_position"]
+        landmark.has_line_segment = stored["has_line_segment"]
+        landmark.position = stored["position"]
+        landmark.position_b = stored["position_b"]
+        landmark.rmse_px = stored["rmse_px"]
+    sync_landmark_empties(context)
+    properties.tag_sync_ui_redraw(context)
+
+
+def run_known_3d_sync_round(context: bpy.types.Context):
+    """One Auto from VPs (Use Known 3D) pass on eligible stills, then Solve Sync."""
+    polished = polish_known_3d_cameras(context)
+    if not polished:
+        raise ValueError(
+            "Turn on Use Known 3D for a sync-enabled match that has four "
+            "Known 3D picks and enough VP lines"
+        )
+    result = solve_and_apply_sync(context)
+    return result, polished
+
+
+def iterate_known_3d_and_sync(
+    context: bpy.types.Context,
+    *,
+    max_rounds: int | None = None,
+    cancel_check: Callable[[], bool] | None = None,
+    progress_callback=None,
+):
+    """Repeat Known 3D Auto from VPs + Solve Sync until joint RMSE stops falling.
+
+    Blocking convenience wrapper — the UI operator steps this one round per timer.
+    Reverts the last round if RMSE does not improve by PIN_SYNC_MIN_IMPROVE_PX.
+    """
+    from ..core import pin_refine
+
+    space = properties.workspace(context)
+    limit = int(max_rounds or pin_refine.PIN_SYNC_MAX_ROUNDS)
+    snapshot = capture_pin_sync_snapshot(context)
+    previous_rmse = float("inf")
+    last_result = None
+    polished: list[str] = []
+    used_rounds = 0
+    for round_index in range(1, limit + 1):
+        if cancel_check is not None and cancel_check():
+            restore_pin_sync_snapshot(context, snapshot)
+            space.sync_status = "Iterate Known 3D cancelled"
+            return last_result, polished, used_rounds, True
+        if progress_callback is not None:
+            progress_callback(round_index, limit, previous_rmse)
+        result, polished = run_known_3d_sync_round(context)
+        used_rounds = round_index
+        next_rmse = float(result.mean_reprojection_px)
+        if pin_refine.pin_sync_round_improved(previous_rmse, next_rmse):
+            snapshot = capture_pin_sync_snapshot(context, next_rmse)
+            previous_rmse = next_rmse
+            last_result = result
+            continue
+        restore_pin_sync_snapshot(context, snapshot)
+        if last_result is None:
+            last_result = result
+        break
+    from . import distortion as distortion_module
+
+    distortion_module.rebuild_undistorted_plates(context)
+    if last_result is None:
+        raise ValueError("Iterate Known 3D did not complete a sync")
+    names = ", ".join(polished) if polished else "cameras"
+    space.sync_status = (
+        f"Iterate Known 3D settled after {used_rounds} round"
+        f"{'s' if used_rounds != 1 else ''} · RMSE {previous_rmse:.2f} px · {names}"
+        if np.isfinite(previous_rmse)
+        else last_result.message
+    )
+    last_result.message = space.sync_status
+    properties.tag_viewport_redraw(context)
+    return last_result, polished, used_rounds, False
 
 
 def _update_diagnostics(
@@ -3498,29 +3748,41 @@ def prepare_lens_refine(context: bpy.types.Context) -> LensRefinePrep:
     anchor = properties.anchor_root(context)
     if anchor is None:
         raise ValueError("Choose an anchor match first")
-    adjusted_roots = [
-        root
+    adjusted_ids = {
+        root.name
         for root in properties.iter_sync_enabled_roots()
         if uses_adjusted_camera(root.pm_session)
-    ]
-    if adjusted_roots:
-        names = ", ".join(root.name for root in adjusted_roots[:3])
-        raise ValueError(
-            f"Refine Lenses is disabled while Adjusted Camera controls {names}"
-        )
+    }
 
     ensure_origins_from_ground_landmarks(context)
     matches_pack, observations, known_world, line_observations, known_lines, parallel_pairs = (
         build_sync_problem(context)
     )
+    if adjusted_ids:
+        matches_pack = [
+            item for item in matches_pack if item.match_id not in adjusted_ids
+        ]
+        observations = [
+            item for item in observations if item.match_id not in adjusted_ids
+        ]
+        line_observations = [
+            item for item in line_observations if item.match_id not in adjusted_ids
+        ]
     if not getattr(anchor.pm_session, "sync_enabled", True):
         raise ValueError(
             "Anchor match has sync disabled — enable it or choose another anchor"
         )
+    if uses_adjusted_camera(anchor.pm_session):
+        raise ValueError(
+            "Anchor match is Adjusted Camera — choose another anchor for Refine Lenses"
+        )
     if not matches_pack:
         raise ValueError("No sync-enabled solved matches available")
     if len(matches_pack) < 2:
-        raise ValueError("Need at least two sync-enabled matches")
+        raise ValueError(
+            "Need at least two Perspective Match-controlled stills "
+            "(Adjusted Camera is skipped)"
+        )
     if anchor.name not in {item.match_id for item in matches_pack}:
         raise ValueError("Anchor match needs a solved camera")
     if not observations and not line_observations:

@@ -30,6 +30,10 @@ _FX_SIGMA = 0.18
 _PP_SIGMA = 200.0
 _PIN_HUBER_PX = 40.0
 PIN_ACCEPT_RMSE_PX = 25.0
+# Alternate Auto from VPs (Known 3D polish) and Solve Sync until joint RMSE
+# stops falling. Pixel floor avoids chasing noise after the overlay has settled.
+PIN_SYNC_MAX_ROUNDS = 8
+PIN_SYNC_MIN_IMPROVE_PX = 0.02
 _AXIS_SCORE_WEIGHT = 3.0
 _AXIS_VP_SLACK_PX = 1.5
 _HFOV_MIN_DEG = 8.0
@@ -132,6 +136,15 @@ def pin_metrics(pins: list[KnownPin], calibration: core.Calibration) -> PinMetri
         tuple(per_pin),
         tuple(behind),
     )
+
+
+def pin_sync_round_improved(previous_rmse_px: float, next_rmse_px: float) -> bool:
+    """True when the next joint RMSE is worth another Known 3D / Sync round."""
+    if not np.isfinite(next_rmse_px):
+        return False
+    if not np.isfinite(previous_rmse_px):
+        return True
+    return float(previous_rmse_px) - float(next_rmse_px) >= PIN_SYNC_MIN_IMPROVE_PX
 
 
 def refine_from_known_pins(

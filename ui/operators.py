@@ -334,6 +334,10 @@ _diagnose_sync_running = False
 _diagnose_sync_progress = {"step": 0, "total": 1, "label": ""}
 _diagnose_sync_result_box: dict = {}
 
+_pin_sync_lock = threading.Lock()
+_pin_sync_cancel = False
+_pin_sync_running = False
+
 _vp_detect_lock = threading.Lock()
 _vp_detect_cancel: threading.Event | None = None
 _vp_detect_running = False
@@ -349,6 +353,20 @@ def lens_refine_is_running() -> bool:
 def diagnose_sync_is_running() -> bool:
     """True while a Diagnose modal/worker is active."""
     return bool(_diagnose_sync_running)
+
+
+def pin_sync_is_running() -> bool:
+    """True while Iterate Known 3D is stepping Auto from VPs + Solve Sync."""
+    return bool(_pin_sync_running)
+
+
+def request_pin_sync_cancel() -> bool:
+    """Ask the Iterate Known 3D modal to stop after the current round."""
+    global _pin_sync_cancel
+    if not _pin_sync_running:
+        return False
+    _pin_sync_cancel = True
+    return True
 
 
 def vp_detect_is_running() -> bool:
@@ -3180,7 +3198,7 @@ class PM_OT_solve_sync(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
-        if diagnose_sync_is_running():
+        if diagnose_sync_is_running() or pin_sync_is_running():
             return False
         anchor = properties.anchor_root(context)
         return (
@@ -3229,7 +3247,7 @@ class PM_OT_diagnose_sync(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
-        if diagnose_sync_is_running() or lens_refine_is_running():
+        if diagnose_sync_is_running() or lens_refine_is_running() or pin_sync_is_running():
             return False
         return PM_OT_solve_sync.poll(context)
 
@@ -3450,7 +3468,7 @@ class PM_OT_refine_lenses(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
-        if lens_refine_is_running() or diagnose_sync_is_running():
+        if lens_refine_is_running() or diagnose_sync_is_running() or pin_sync_is_running():
             return False
         return PM_OT_solve_sync.poll(context)
 
@@ -3691,6 +3709,240 @@ class PM_OT_cancel_refine_lenses(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class PM_OT_iterate_known_3d_sync(bpy.types.Operator):
+    """Alternate Auto from VPs (Use Known 3D) and Solve Sync until RMSE settles."""
+
+    bl_idname = "perspective_match.iterate_known_3d_sync"
+    bl_label = "Iterate Known 3D"
+    bl_description = (
+        "Repeat Auto from VPs with Use Known 3D, then Solve Sync, on every "
+        "eligible still until joint RMSE stops improving. After Sync moves a "
+        "match Empty, Known 3D sits in a new private frame so the next polish "
+        "can still move FOV and camera. Esc or Cancel stops after the current round"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    _timer = None
+    _round = 0
+    _limit = 8
+    _previous_rmse = float("inf")
+    _snapshot = None
+    _polished: list[str] = []
+    _last_result = None
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        if lens_refine_is_running() or diagnose_sync_is_running() or pin_sync_is_running():
+            return False
+        if not PM_OT_solve_sync.poll(context):
+            return False
+        return bool(scene.known_3d_iterate_roots(context))
+
+    def invoke(self, context: bpy.types.Context, _event) -> set[str]:
+        global _pin_sync_running, _pin_sync_cancel
+
+        workspace = _workspace(context)
+        if not scene.known_3d_iterate_roots(context):
+            message = (
+                "Turn on Use Known 3D for a sync-enabled match that has four "
+                "Known 3D picks and enough VP lines"
+            )
+            workspace.sync_status = message
+            self.report({"WARNING"}, message)
+            return {"CANCELLED"}
+
+        from ..core import pin_refine
+
+        with _pin_sync_lock:
+            if _pin_sync_running:
+                self.report({"WARNING"}, "Iterate Known 3D already running")
+                return {"CANCELLED"}
+            _pin_sync_running = True
+            _pin_sync_cancel = False
+
+        self._limit = int(pin_refine.PIN_SYNC_MAX_ROUNDS)
+        self._round = 0
+        self._previous_rmse = float("inf")
+        self._snapshot = scene.capture_pin_sync_snapshot(context)
+        self._polished = []
+        self._last_result = None
+        workspace.lens_refine_progress = 0.0
+        workspace.sync_status = "Iterate Known 3D running… Esc to cancel"
+        properties.tag_viewport_redraw(context)
+
+        window_manager = context.window_manager
+        window_manager.progress_begin(0, self._limit)
+        self._timer = window_manager.event_timer_add(0.05, window=context.window)
+        window_manager.modal_handler_add(self)
+        return {"RUNNING_MODAL"}
+
+    def _finish(
+        self,
+        context: bpy.types.Context,
+        *,
+        cancelled: bool,
+        message: str,
+        success: bool,
+    ) -> set[str]:
+        global _pin_sync_running, _pin_sync_cancel
+
+        window_manager = context.window_manager
+        if self._timer is not None:
+            window_manager.event_timer_remove(self._timer)
+            self._timer = None
+        try:
+            window_manager.progress_end()
+        except Exception:
+            pass
+
+        with _pin_sync_lock:
+            _pin_sync_running = False
+            _pin_sync_cancel = False
+
+        workspace = _workspace(context)
+        from ..scene import distortion as distortion_module
+
+        distortion_module.rebuild_undistorted_plates(context)
+        workspace.lens_refine_progress = 0.0
+        workspace.sync_status = message
+        properties.tag_viewport_redraw(context)
+        self.report({"INFO"} if success else {"WARNING"}, message)
+        return {"FINISHED"} if success else {"CANCELLED"}
+
+    def _settled_message(self) -> str:
+        names = ", ".join(self._polished) if self._polished else "cameras"
+        rmse = self._previous_rmse
+        rounds = max(self._round, 1)
+        if not np.isfinite(rmse):
+            return "Iterate Known 3D settled"
+        return (
+            f"Iterate Known 3D settled after {rounds} round"
+            f"{'s' if rounds != 1 else ''} · RMSE {rmse:.2f} px · {names}"
+        )
+
+    def modal(self, context: bpy.types.Context, event) -> set[str]:
+        global _pin_sync_cancel
+
+        workspace = _workspace(context)
+        if event.type in {"ESC"} and event.value == "PRESS":
+            _pin_sync_cancel = True
+            workspace.sync_status = "Cancelling Iterate Known 3D…"
+            properties.tag_viewport_redraw(context)
+            return {"RUNNING_MODAL"}
+
+        if event.type != "TIMER":
+            return {"PASS_THROUGH"}
+
+        from ..core import pin_refine
+
+        if _pin_sync_cancel:
+            scene.restore_pin_sync_snapshot(context, self._snapshot)
+            return self._finish(
+                context,
+                cancelled=True,
+                message="Iterate Known 3D cancelled",
+                success=False,
+            )
+
+        self._round += 1
+        workspace.lens_refine_progress = min(self._round / max(self._limit, 1), 1.0)
+        workspace.sync_status = (
+            f"Iterate Known 3D {self._round}/{self._limit} · Auto from VPs + Sync"
+        )
+        try:
+            context.window_manager.progress_update(self._round)
+        except Exception:
+            pass
+        properties.tag_viewport_redraw(context)
+
+        try:
+            result, self._polished = scene.run_known_3d_sync_round(context)
+        except Exception as error:
+            scene.restore_pin_sync_snapshot(context, self._snapshot)
+            return self._finish(
+                context,
+                cancelled=False,
+                message=str(error),
+                success=False,
+            )
+
+        next_rmse = float(result.mean_reprojection_px)
+        if pin_refine.pin_sync_round_improved(self._previous_rmse, next_rmse):
+            self._snapshot = scene.capture_pin_sync_snapshot(context, next_rmse)
+            self._previous_rmse = next_rmse
+            self._last_result = result
+            workspace.sync_status = (
+                f"Iterate Known 3D {self._round}/{self._limit} · "
+                f"RMSE {next_rmse:.2f} px"
+            )
+            properties.tag_viewport_redraw(context)
+            if self._round >= self._limit:
+                return self._finish(
+                    context,
+                    cancelled=False,
+                    message=self._settled_message(),
+                    success=True,
+                )
+            return {"RUNNING_MODAL"}
+
+        scene.restore_pin_sync_snapshot(context, self._snapshot)
+        if self._last_result is None:
+            self._previous_rmse = next_rmse
+        return self._finish(
+            context,
+            cancelled=False,
+            message=self._settled_message(),
+            success=True,
+        )
+
+    def cancel(self, context: bpy.types.Context) -> None:
+        if self._snapshot is not None:
+            scene.restore_pin_sync_snapshot(context, self._snapshot)
+        self._finish(
+            context,
+            cancelled=True,
+            message="Iterate Known 3D cancelled",
+            success=False,
+        )
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        workspace = _workspace(context)
+        try:
+            result, _polished, _rounds, cancelled = scene.iterate_known_3d_and_sync(
+                context
+            )
+        except Exception as error:
+            workspace.sync_status = str(error)
+            return _report_exception(self, error)
+        if cancelled:
+            self.report({"WARNING"}, workspace.sync_status)
+            return {"CANCELLED"}
+        self.report({"INFO"}, result.message)
+        return {"FINISHED"}
+
+
+class PM_OT_cancel_iterate_known_3d_sync(bpy.types.Operator):
+    """Stop Iterate Known 3D after the current round and keep the last improvement."""
+
+    bl_idname = "perspective_match.cancel_iterate_known_3d_sync"
+    bl_label = "Cancel Iterate"
+    bl_description = "Cancel Iterate Known 3D after the current round (Esc also works)"
+    bl_options = {"REGISTER"}
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        return pin_sync_is_running()
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        if not request_pin_sync_cancel():
+            return {"CANCELLED"}
+        workspace = _workspace(context)
+        workspace.sync_status = "Cancelling Iterate Known 3D…"
+        properties.tag_viewport_redraw(context)
+        self.report({"INFO"}, "Cancelling Iterate Known 3D…")
+        return {"FINISHED"}
+
+
 class PM_OT_clear_sync(bpy.types.Operator):
     """Reset match Empty sync transforms and landmark Empties."""
 
@@ -3701,7 +3953,7 @@ class PM_OT_clear_sync(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
-        return not diagnose_sync_is_running()
+        return not diagnose_sync_is_running() and not pin_sync_is_running()
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         scene.clear_sync_transforms(context)
@@ -3811,6 +4063,8 @@ CLASSES = (
     PM_OT_cancel_diagnose_sync,
     PM_OT_refine_lenses,
     PM_OT_cancel_refine_lenses,
+    PM_OT_iterate_known_3d_sync,
+    PM_OT_cancel_iterate_known_3d_sync,
     PM_OT_clear_sync,
     PM_OT_open_sync_report,
     PM_OT_export_sync_report,
