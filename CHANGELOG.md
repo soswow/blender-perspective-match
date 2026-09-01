@@ -38,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Iterate Known 3D** repeats Auto from VPs (Use Known 3D) and Solve Sync until joint RMSE stops improving, so a moved match Empty can still pull FOV and camera
 
 ### Changed
+- Drawing a landmark line rubber-band uses the selected-pick red, not the current VP axis color
 - Solve Sync uses a one-view **Is Mirror Of** line when placing a recovered camera, then pose-only BA of those stills
 - **Is Mirror Of** is stored on both landmarks: selecting either side shows the partner, and **None** clears the pair
 - Hiding Vanishing Point Lines also hides Show Error Label numbers on the plate

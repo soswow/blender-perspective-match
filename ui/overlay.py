@@ -13,20 +13,12 @@ from mathutils import Vector
 
 from .. import core, properties, scene
 from .npanel import shows_perspective_match_tab
-
-AXIS_COLORS = {
-    # Match Blender's default axis gizmo colors (X red, Y green, Z blue).
-    "x": (0.96, 0.26, 0.26, 1.0),
-    "y": (0.26, 0.50, 0.96, 1.0),
-    "z": (0.26, 0.80, 0.30, 1.0),
-}
-
-# Plate landmark picks: selected > Known 3D > On Ground > default.
-_LANDMARK_COLOR_SELECTED = (0.96, 0.22, 0.22, 1.0)
-_LANDMARK_COLOR_KNOWN = (0.25, 0.7, 0.95, 1.0)
-_LANDMARK_COLOR_GROUND = (0.92, 0.22, 0.78, 1.0)
-_LANDMARK_COLOR_DEFAULT = (0.95, 0.65, 0.15, 1.0)
-_PP_COLOR = (0.55, 0.85, 1.0, 1.0)
+from .overlay_style import (
+    AXIS_COLORS,
+    PP_COLOR,
+    landmark_pick_base_color,
+    preview_line_color,
+)
 
 # Ideal-space VPs farther than this many image diagonals are treated as parallel.
 _MAX_VP_DIAGONALS = 8.0
@@ -938,7 +930,7 @@ def _draw_placement(context: bpy.types.Context, fill_shader, settings) -> None:
         _draw_crosshair(
             fill_shader,
             principal,
-            _with_alpha(_PP_COLOR, settings.overlay_opacity),
+            _with_alpha(PP_COLOR, settings.overlay_opacity),
             9.0 if workspace.work_mode == "PP" else 7.0,
         )
 
@@ -958,15 +950,11 @@ def _draw_landmarks(context: bpy.types.Context, fill_shader, settings) -> None:
         if observation is None or not observation.is_set:
             continue
         is_active = index == active_index
-        if is_active:
-            # Selected list row: red, still drawn larger than inactive picks.
-            base = _LANDMARK_COLOR_SELECTED
-        elif landmark.known_object is not None:
-            base = _LANDMARK_COLOR_KNOWN
-        elif landmark.on_ground:
-            base = _LANDMARK_COLOR_GROUND
-        else:
-            base = _LANDMARK_COLOR_DEFAULT
+        base = landmark_pick_base_color(
+            is_active=is_active,
+            has_known_object=landmark.known_object is not None,
+            on_ground=bool(landmark.on_ground),
+        )
         # Dim picks that are excluded from the sync solve.
         draw_opacity = opacity * (0.35 if not landmark.use_in_sync else 1.0)
         color = _with_alpha(base, draw_opacity)
@@ -1169,11 +1157,11 @@ def _draw_preview(context: bpy.types.Context, fill_shader, settings) -> None:
         _draw_crosshair(
             fill_shader,
             point,
-            _with_alpha(_PP_COLOR, settings.overlay_opacity),
+            _with_alpha(PP_COLOR, settings.overlay_opacity),
             9.0,
         )
         return
-    if _preview["kind"] != "LINE":
+    if _preview["kind"] not in {"LINE", "LANDMARK_LINE"}:
         return
     calibration = scene.calibration_from_settings(settings)
     ideal = core.undistort_points(
@@ -1189,7 +1177,10 @@ def _draw_preview(context: bpy.types.Context, fill_shader, settings) -> None:
         context,
         ideal[0],
         ideal[1],
-        _with_alpha(AXIS_COLORS[settings.active_axis], settings.overlay_opacity),
+        _with_alpha(
+            preview_line_color(_preview["kind"], settings.active_axis),
+            settings.overlay_opacity,
+        ),
         2.0,
     )
 

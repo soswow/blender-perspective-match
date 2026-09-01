@@ -2083,12 +2083,14 @@ class PM_OT_interact(bpy.types.Operator):
             return
         self._start = image_point
         self._drag_kind = "LANDMARK_LINE"
-        overlay.set_preview(context, "LINE", image_point, image_point)
+        overlay.set_preview(context, "LANDMARK_LINE", image_point, image_point)
 
     def _update_drag(self, context, image_point: tuple[float, float]) -> None:
         settings = _session(context)
-        if self._drag_kind in {"NEW_LINE", "LANDMARK_LINE"}:
+        if self._drag_kind == "NEW_LINE":
             overlay.set_preview(context, "LINE", self._start, image_point)
+        elif self._drag_kind == "LANDMARK_LINE":
+            overlay.set_preview(context, "LANDMARK_LINE", self._start, image_point)
         elif self._drag_kind == "LINE_ENDPOINT":
             line = settings.lines[self._edit_index]
             if self._edit_endpoint == 1:

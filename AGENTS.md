@@ -43,7 +43,7 @@ Keep this map accurate when you add a module, move a stage, or change a named co
 | Known-3D pin refine | `core/pin_refine.py` (Iterate Known 3D loop is applied in `scene/__init__.py`) |
 | Blender cameras, stills, Solve Sync apply | `scene/__init__.py` |
 | Image analysis (AprilTags, VP detect, edge/tag snap) | `detect/` |
-| Operators / panel / overlay | `ui/` |
+| Operators / panel / overlay | `ui/` (`overlay_style.py` plate stroke colors) |
 | Self-contained HTML sync diagnostics | `ui/sync_report.py` |
 | RNA | `properties/__init__.py` |
 
