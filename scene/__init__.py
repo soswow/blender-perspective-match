@@ -741,11 +741,11 @@ def rename_match(
 
     _rename_match_hierarchy(root, prefix)
     space = properties.workspace(context)
+    properties.tag_sync_ui_redraw(context)
     if space.active_root == root:
         properties.sync_active_match_enum(space, root.name)
     if space.anchor_root == root:
         properties.sync_anchor_match_enum(space, root.name)
-    properties.tag_viewport_redraw(context)
     return root
 
 

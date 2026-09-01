@@ -57,6 +57,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Original Plate keeps imported Brown–Conrady D and only switches the background; estimated λ is still cleared
 
 ### Fixed
+- Renaming a match re-sorts the Perspective Match and Anchor dropdowns by the new name
 - Sync pose weights no longer inflate the pixel acceptance threshold and falsely report valid high-weight picks as mismatched
 - Sync no longer prefers a cheap two-view pose when another candidate still fits the camera graph in pixels
 - Sync registration failures now say that five shared 2D landmarks may connect through any registered match and clarify the usable 2D↔3D alternatives

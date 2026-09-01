@@ -328,6 +328,29 @@ def main() -> None:
             assert bpy.context.scene.camera == settings_a.camera_object
             assert bpy.context.scene.render.resolution_x == 800
 
+            prefix_a = scene.match_prefix(root_a)
+            prefix_b = scene.match_prefix(root_b)
+            properties.iter_match_roots()
+            scene.rename_match(bpy.context, root_a, "construction-2-above")
+            scene.rename_match(bpy.context, root_b, "construction-1-bare-bones")
+            ordered_prefixes = [
+                scene.match_prefix(root) for root in properties.iter_match_roots()
+            ]
+            assert ordered_prefixes == [
+                "PM_construction-1-bare-bones",
+                "PM_construction-2-above",
+            ]
+            dropdown_labels = [
+                item[1]
+                for item in properties._active_match_items(
+                    properties.workspace(bpy.context), bpy.context
+                )
+                if item[0] != "NONE"
+            ]
+            assert dropdown_labels == ordered_prefixes
+            scene.rename_match(bpy.context, root_a, prefix_a)
+            scene.rename_match(bpy.context, root_b, prefix_b)
+
             # Adjusted Camera is a live source, not a one-time snapshot. Changes
             # made after enabling it must survive View Match rehydration and a
             # switch away/back, including a later second pose/lens adjustment.

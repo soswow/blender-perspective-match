@@ -318,21 +318,23 @@ def iter_match_roots() -> list[bpy.types.Object]:
     objects = bpy.data.objects
     key = (_sync_ui_generation, len(objects))
     if _match_roots_cache is not None and _match_roots_cache_key == key:
-        return _match_roots_cache
-    roots = []
-    for obj in objects:
-        if not hasattr(obj, "pm_session"):
-            continue
-        session = obj.pm_session
-        if not session.is_match_root:
-            continue
-        camera = session.camera_object
-        if camera is None or camera.name not in bpy.data.objects:
-            continue
-        roots.append(obj)
-    roots.sort(key=lambda item: item.name)
-    _match_roots_cache = roots
-    _match_roots_cache_key = key
+        roots = _match_roots_cache
+    else:
+        roots = []
+        for obj in objects:
+            if not hasattr(obj, "pm_session"):
+                continue
+            session = obj.pm_session
+            if not session.is_match_root:
+                continue
+            camera = session.camera_object
+            if camera is None or camera.name not in bpy.data.objects:
+                continue
+            roots.append(obj)
+        _match_roots_cache = roots
+        _match_roots_cache_key = key
+    # Rename does not change object count, so the cache can keep a stale order.
+    roots.sort(key=lambda item: item.name.casefold())
     return roots
 
 
