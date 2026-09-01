@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import zlib
+
 import bpy
 
 AXIS_ITEMS = (
@@ -58,7 +60,7 @@ MIRROR_PLANE_ITEMS = (
 )
 
 # Dynamic enum tuples must stay referenced (Blender string-lifetime bug).
-_MIRROR_OF_NONE = (("NONE", "None", "No mirror partner"),)
+_MIRROR_OF_NONE = (("NONE", "None", "No mirror partner", 0, 0),)
 _PARALLEL_TO_STATIC = (
     ("NONE", "None", "No parallel direction constraint"),
     *WORLD_AXIS_PARALLEL_ITEMS,
@@ -211,13 +213,119 @@ def _update_hide_origin_empty(self, context: bpy.types.Context) -> None:
     tag_viewport_redraw(context)
 
 
+_updating_mirror_links = False
+
+
+def _landmark_mirror_links(landmarks) -> dict[str, str]:
+    from ..ui import landmark_list
+
+    return {
+        str(landmark.item_id): landmark_list.stored_mirror_id(landmark)
+        for landmark in landmarks
+        if landmark.item_id
+    }
+
+
+def _write_mirror_id(landmark, partner_id: str) -> None:
+    value = partner_id if partner_id and partner_id != "NONE" else "NONE"
+    if str(getattr(landmark, "mirror_of_id", "NONE") or "NONE") != value:
+        landmark.mirror_of_id = value
+    try:
+        del landmark["mirror_of"]
+    except (KeyError, TypeError):
+        pass
+
+
+def _apply_mirror_pair_writes(landmarks, source_id: str, partner_id: str) -> None:
+    """Write the other side of an Is Mirror Of pair without re-entering."""
+    global _updating_mirror_links
+    from ..ui import landmark_list
+
+    writes = landmark_list.mirror_pair_writes(
+        _landmark_mirror_links(landmarks),
+        source_id,
+        partner_id,
+    )
+    if not writes:
+        return
+    by_id = {landmark.item_id: landmark for landmark in landmarks if landmark.item_id}
+    _updating_mirror_links = True
+    try:
+        for item_id, value in writes.items():
+            landmark = by_id.get(item_id)
+            if landmark is None:
+                continue
+            _write_mirror_id(landmark, value)
+    finally:
+        _updating_mirror_links = False
+
+
+def _update_mirror_of_id(self, context: bpy.types.Context) -> None:
+    """Keep Is Mirror Of stored on both landmarks; None clears both sides."""
+    if not _updating_mirror_links and self.item_id:
+        space = workspace(context)
+        _apply_mirror_pair_writes(space.landmarks, self.item_id, self.mirror_of_id)
+    tag_sync_ui_redraw(context)
+
+
+def _heal_active_mirror_link(space) -> None:
+    """Fill a unique one-way inbound pair onto the selected landmark."""
+    from ..ui import landmark_list
+
+    index = int(getattr(space, "active_landmark_index", -1))
+    landmarks = space.landmarks
+    if index < 0 or index >= len(landmarks):
+        return
+    landmark = landmarks[index]
+    if not landmark.item_id or landmark.kind != "POINT":
+        return
+    links = _landmark_mirror_links(landmarks)
+    current = links.get(landmark.item_id, "NONE")
+    if current not in {"", "NONE"}:
+        other = links.get(current, "NONE")
+        if other in {"", "NONE"}:
+            _apply_mirror_pair_writes(landmarks, landmark.item_id, current)
+        return
+    inbound = landmark_list.unique_inbound_mirror_id(links, landmark.item_id)
+    if inbound != "NONE":
+        _write_mirror_id(landmark, inbound)
+
+
+def _update_active_landmark_index(self, context: bpy.types.Context) -> None:
+    """Selecting a mirror target shows the other side when the pair is unique."""
+    _heal_active_mirror_link(self)
+    tag_viewport_redraw(context)
+
+
 def _update_landmark_kind(self, context: bpy.types.Context) -> None:
     """Clear kind-specific links when switching point/line."""
     if self.kind != "LINE":
         self.parallel_to = "NONE"
     if self.kind != "POINT":
-        self.mirror_of = "NONE"
+        self.mirror_of_id = "NONE"
     tag_sync_ui_redraw(context)
+
+
+def _mirror_enum_number(item_id: str) -> int:
+    """Stable EnumProperty number so partners survive list-order changes."""
+    if not item_id or item_id == "NONE":
+        return 0
+    value = zlib.crc32(item_id.encode("utf-8")) & 0x7FFFFFFF
+    return value if value else 1
+
+
+def _pack_mirror_enum_items(entries: tuple[tuple[str, str, str], ...]) -> tuple:
+    used = {0}
+    packed = []
+    for identifier, name, description in entries:
+        number = 0 if identifier == "NONE" else _mirror_enum_number(identifier)
+        while number in used:
+            number = (number + 1) & 0x7FFFFFFF
+            if number == 0:
+                number = 1
+        used.add(number)
+        packed.append((identifier, name, description, 0, number))
+    return tuple(packed)
 
 
 def landmark_sidebar_rows(space, context) -> tuple:
@@ -278,6 +386,29 @@ def _parallel_to_items(self, context):
     return packed
 
 
+def _get_mirror_of(self):
+    from ..ui import landmark_list
+
+    partner = landmark_list.stored_mirror_id(self)
+    if partner in {"", "NONE"}:
+        return 0
+    items = _mirror_of_items(self, bpy.context)
+    for item in items:
+        if item[0] == partner:
+            return item[-1]
+    return _mirror_enum_number(partner)
+
+
+def _set_mirror_of(self, value):
+    identifier = "NONE"
+    items = _mirror_of_items(self, bpy.context)
+    for item in items:
+        if item[-1] == value:
+            identifier = item[0]
+            break
+    self.mirror_of_id = identifier
+
+
 def _mirror_of_items(self, context):
     """Dropdown of other point landmarks for the mirror-pair constraint."""
     if context is None:
@@ -289,9 +420,12 @@ def _mirror_of_items(self, context):
         return cached
     from ..ui import landmark_list
 
-    packed = _MIRROR_OF_NONE + landmark_list.mirror_of_enum_entries(
-        landmark_enum_candidates(space),
-        self.item_id,
+    packed = _pack_mirror_enum_items(
+        (("NONE", "None", "No mirror partner"),)
+        + landmark_list.mirror_of_enum_entries(
+            landmark_enum_candidates(space),
+            self.item_id,
+        )
     )
     _MIRROR_OF_ITEMS[key] = packed
     return packed
@@ -401,6 +535,62 @@ def ensure_landmark_creation_indices(space: PMWorkspace | None = None) -> None:
             landmark.creation_index = next_index
             next_index += 1
     target.next_landmark_creation_index = next_index
+
+
+def ensure_mirror_pairs(space: PMWorkspace | None = None) -> None:
+    """Migrate old enum indexes to ids and fill a missing unique back-pointer.
+
+    Safe from operators and load_post — not poll/draw/items. Does not steal a
+    partner that already names someone else.
+    """
+    from ..ui import landmark_list
+
+    target = space
+    if target is None:
+        scenes = getattr(bpy.data, "scenes", None)
+        if scenes is None:
+            return
+        for scene in scenes:
+            if hasattr(scene, "match_perspective"):
+                ensure_mirror_pairs(scene.match_perspective)
+        return
+    point_ids = tuple(
+        landmark.item_id
+        for landmark in target.landmarks
+        if landmark.kind == "POINT" and landmark.item_id
+    )
+    for landmark in target.landmarks:
+        stored = landmark_list.stored_mirror_id(landmark)
+        if stored not in {"", "NONE"}:
+            continue
+        raw = landmark.get("mirror_of")
+        if not isinstance(raw, int) or raw <= 0 or not landmark.item_id:
+            continue
+        partner_id = landmark_list.legacy_mirror_partner_id(
+            point_ids,
+            landmark.item_id,
+            raw,
+        )
+        if partner_id != "NONE":
+            _write_mirror_id(landmark, partner_id)
+        try:
+            del landmark["mirror_of"]
+        except (KeyError, TypeError):
+            pass
+    links = _landmark_mirror_links(target.landmarks)
+    by_id = {
+        landmark.item_id: landmark for landmark in target.landmarks if landmark.item_id
+    }
+    for item_id, partner_id in links.items():
+        if partner_id in {"", "NONE"}:
+            continue
+        other = by_id.get(partner_id)
+        if other is None:
+            continue
+        other_current = links.get(partner_id, "NONE")
+        if other_current in {"", "NONE"}:
+            _write_mirror_id(other, item_id)
+            links[partner_id] = item_id
 
 
 def active_root(context: bpy.types.Context | None = None) -> bpy.types.Object | None:
@@ -679,6 +869,12 @@ class PMLandmark(bpy.types.PropertyGroup):
         items=_parallel_to_items,
         update=_touch_sync_ui,
     )
+    mirror_of_id: bpy.props.StringProperty(
+        name="Is Mirror Of Id",
+        default="NONE",
+        options={"HIDDEN"},
+        update=_update_mirror_of_id,
+    )
     mirror_of: bpy.props.EnumProperty(
         name="Is Mirror Of",
         description=(
@@ -686,7 +882,8 @@ class PMLandmark(bpy.types.PropertyGroup):
             "scene Mirror Empty. Each side can be picked in different stills"
         ),
         items=_mirror_of_items,
-        update=_touch_sync_ui,
+        get=_get_mirror_of,
+        set=_set_mirror_of,
     )
     observations: bpy.props.CollectionProperty(type=PMLandmarkObservation)
     position: bpy.props.FloatVectorProperty(
@@ -1069,7 +1266,11 @@ class PMWorkspace(bpy.types.PropertyGroup):
         update=_update_anchor_match,
     )
     landmarks: bpy.props.CollectionProperty(type=PMLandmark)
-    active_landmark_index: bpy.props.IntProperty(default=-1, options={"HIDDEN"})
+    active_landmark_index: bpy.props.IntProperty(
+        default=-1,
+        options={"HIDDEN"},
+        update=_update_active_landmark_index,
+    )
     next_landmark_creation_index: bpy.props.IntProperty(
         default=0,
         min=0,

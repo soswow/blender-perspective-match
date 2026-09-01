@@ -131,6 +131,49 @@ class LandmarkListTests(unittest.TestCase):
         )
         self.assertEqual(landmark_list.sort_neworder(rows, sort_alphabetical=False), [])
 
+    def test_mirror_pair_writes_are_bidirectional(self) -> None:
+        links = {"left": "right", "right": "NONE", "other": "NONE"}
+        self.assertEqual(
+            landmark_list.mirror_pair_writes(links, "left", "right"),
+            {"right": "left"},
+        )
+        self.assertEqual(
+            landmark_list.healed_mirror_partner_id(links, "right"),
+            "left",
+        )
+        self.assertEqual(
+            landmark_list.healed_mirror_partner_id(links, "left"),
+            "right",
+        )
+        self.assertEqual(
+            landmark_list.mirror_pair_writes(
+                {"left": "right", "right": "NONE", "other": "NONE"},
+                "right",
+                "NONE",
+            ),
+            {"left": "NONE"},
+        )
+        steal = {"a": "c", "b": "NONE", "c": "d", "d": "c"}
+        self.assertEqual(
+            landmark_list.mirror_pair_writes(steal, "a", "c"),
+            {"c": "a", "d": "NONE"},
+        )
+        self.assertEqual(
+            landmark_list.unique_inbound_mirror_id(
+                {"a": "b", "c": "b", "b": "NONE"},
+                "b",
+            ),
+            "NONE",
+        )
+        self.assertEqual(
+            landmark_list.legacy_mirror_partner_id(
+                ("left", "right", "other"),
+                "left",
+                1,
+            ),
+            "right",
+        )
+
     def test_enum_entries_skip_self(self) -> None:
         rows = landmark_list.collect_landmark_rows(
             (

@@ -37,6 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Iterate Known 3D** repeats Auto from VPs (Use Known 3D) and Solve Sync until joint RMSE stops improving, so a moved match Empty can still pull FOV and camera
 
 ### Changed
+- **Is Mirror Of** is stored on both landmarks: selecting either side shows the partner, and **None** clears the pair
 - Hiding Vanishing Point Lines also hides Show Error Label numbers on the plate
 - Viewport overlays now show only while the Perspective Match sidebar panel is expanded, except while a Draw / Pick tool is active
 - Refine Lenses skips Adjusted Camera stills instead of disabling the button for the whole graph
@@ -57,6 +58,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Original Plate keeps imported Brown–Conrady D and only switches the background; estimated λ is still cleared
 
 ### Fixed
+- **Is Mirror Of** stores the partner by landmark id, so adding landmarks no longer retargets existing pairs
 - Renaming a match re-sorts the Perspective Match and Anchor dropdowns by the new name
 - Sync pose weights no longer inflate the pixel acceptance threshold and falsely report valid high-weight picks as mismatched
 - Sync no longer prefers a cheap two-view pose when another candidate still fits the camera graph in pixels

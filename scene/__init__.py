@@ -3100,7 +3100,7 @@ def collect_sync_mirror_pairs(context: bpy.types.Context) -> list[tuple[str, str
     for landmark in space.landmarks:
         if landmark.item_id not in enabled_ids:
             continue
-        other_id = getattr(landmark, "mirror_of", "NONE")
+        other_id = getattr(landmark, "mirror_of_id", "NONE")
         if not other_id or other_id == "NONE" or other_id == landmark.item_id:
             continue
         if other_id not in enabled_ids:

@@ -174,6 +174,7 @@ def _reset_modal_state(_dummy=None) -> None:
         workspace.work_mode = "NONE"
         # Backfill creation_index so Sort A–Z off restores saved add order.
         properties.ensure_landmark_creation_indices(workspace)
+        properties.ensure_mirror_pairs(workspace)
     # Re-bind overlay callback + rehydrate active match after .blend load.
     overlay.ensure_viewport_draw_handler()
     # File load clears msgbus subscriptions; re-bind the landmark helper listener.
@@ -352,6 +353,7 @@ def register() -> None:
         bpy.app.handlers.save_pre.append(_capture_framing_before_save)
     # Existing open file: migrate landmark creation indices once on enable.
     properties.ensure_landmark_creation_indices()
+    properties.ensure_mirror_pairs()
     overlay.register_viewport_draw_handler()
     icons.register()
     _register_keymaps()

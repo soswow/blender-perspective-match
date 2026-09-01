@@ -2971,20 +2971,23 @@ class PM_OT_clear_mirror(bpy.types.Operator):
 
 
 def _named_mirror_partner(context: bpy.types.Context, landmark):
-    """Other point landmark whose name is this one's left/right swap."""
+    """Unique other point landmark whose name is this one's left/right swap."""
     wanted = suggested_mirror_partner_name(landmark.name or "")
     if not wanted or not landmark.item_id:
         return None
     wanted_key = wanted.casefold()
     space = properties.workspace(context)
+    matches = []
     for other in space.landmarks:
         if other.kind != "POINT":
             continue
         if other.item_id == landmark.item_id or not other.item_id:
             continue
         if (other.name or "").strip().casefold() == wanted_key:
-            return other
-    return None
+            matches.append(other)
+    if len(matches) != 1:
+        return None
+    return matches[0]
 
 
 class PM_OT_guess_mirror_partner(bpy.types.Operator):
@@ -3004,7 +3007,7 @@ class PM_OT_guess_mirror_partner(bpy.types.Operator):
         if landmark is None or landmark.kind != "POINT":
             return False
         partner = _named_mirror_partner(context, landmark)
-        return partner is not None and landmark.mirror_of != partner.item_id
+        return partner is not None and landmark.mirror_of_id != partner.item_id
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         landmark = scene.active_landmark(context)
@@ -3017,7 +3020,7 @@ class PM_OT_guess_mirror_partner(bpy.types.Operator):
                 "No point landmark whose name swaps left/right with this one",
             )
             return {"CANCELLED"}
-        landmark.mirror_of = partner.item_id
+        landmark.mirror_of_id = partner.item_id
         properties.tag_viewport_redraw(context)
         self.report({"INFO"}, f"Is Mirror Of set to '{partner.name}'")
         return {"FINISHED"}
@@ -3039,10 +3042,12 @@ class PM_OT_remove_landmark(bpy.types.Operator):
     def execute(self, context: bpy.types.Context) -> set[str]:
         space = _workspace(context)
         index = space.active_landmark_index
-        removed_id = space.landmarks[index].item_id
+        removed = space.landmarks[index]
+        removed_id = removed.item_id
+        removed.mirror_of_id = "NONE"
         for landmark in space.landmarks:
-            if getattr(landmark, "mirror_of", "NONE") == removed_id:
-                landmark.mirror_of = "NONE"
+            if getattr(landmark, "mirror_of_id", "NONE") == removed_id:
+                landmark.mirror_of_id = "NONE"
         space.landmarks.remove(index)
         space.active_landmark_index = min(index, len(space.landmarks) - 1)
         scene.sync_landmark_empties(context)

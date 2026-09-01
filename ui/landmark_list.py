@@ -66,7 +66,7 @@ def collect_landmark_rows(landmarks, active_root=None) -> tuple[LandmarkRowMeta,
     for landmark in landmarks:
         item_id = str(getattr(landmark, "item_id", "") or "")
         kind = str(getattr(landmark, "kind", "POINT") or "POINT")
-        mirror_of = str(getattr(landmark, "mirror_of", "NONE") or "NONE")
+        mirror_of = stored_mirror_id(landmark)
         parallel_to = str(getattr(landmark, "parallel_to", "NONE") or "NONE")
         if kind == "POINT" and mirror_of not in {"", "NONE"}:
             mirror_targets.add(mirror_of)
@@ -171,6 +171,14 @@ def parallel_to_enum_entries(
     return tuple(entries)
 
 
+def stored_mirror_id(landmark) -> str:
+    """Persisted partner id; ignores the dynamic enum's list index."""
+    if hasattr(landmark, "mirror_of_id"):
+        value = str(getattr(landmark, "mirror_of_id", "") or "NONE")
+        return value or "NONE"
+    return str(getattr(landmark, "mirror_of", "NONE") or "NONE")
+
+
 def mirror_of_enum_entries(
     rows: tuple[LandmarkRowMeta, ...],
     current_item_id: str,
@@ -188,3 +196,76 @@ def mirror_of_enum_entries(
             )
         )
     return tuple(entries)
+
+
+def _normalized_mirror_id(partner_id: str, source_id: str) -> str:
+    if not partner_id or partner_id in {"", "NONE"} or partner_id == source_id:
+        return "NONE"
+    return partner_id
+
+
+def inbound_mirror_ids(links: dict[str, str], item_id: str) -> tuple[str, ...]:
+    """Landmarks whose stored partner is ``item_id``."""
+    return tuple(
+        other_id
+        for other_id, partner_id in links.items()
+        if other_id != item_id and partner_id == item_id
+    )
+
+
+def unique_inbound_mirror_id(links: dict[str, str], item_id: str) -> str:
+    """Sole inbound partner, else NONE when missing or ambiguous."""
+    found = inbound_mirror_ids(links, item_id)
+    if len(found) == 1:
+        return found[0]
+    return "NONE"
+
+
+def healed_mirror_partner_id(links: dict[str, str], item_id: str) -> str:
+    """Stored partner, or the unique landmark that already names this one."""
+    current = _normalized_mirror_id(links.get(item_id, "NONE"), item_id)
+    if current != "NONE":
+        return current
+    return unique_inbound_mirror_id(links, item_id)
+
+
+def legacy_mirror_partner_id(
+    point_ids_in_order: tuple[str, ...],
+    source_id: str,
+    stored_index: int,
+) -> str:
+    """Decode an old EnumProperty list index (NONE at 0, then other points)."""
+    if stored_index <= 0:
+        return "NONE"
+    others = tuple(item_id for item_id in point_ids_in_order if item_id != source_id)
+    if stored_index > len(others):
+        return "NONE"
+    return others[stored_index - 1]
+
+
+def mirror_pair_writes(
+    links: dict[str, str],
+    source_id: str,
+    partner_id: str,
+) -> dict[str, str]:
+    """``item_id → mirror_of`` assignments so a pair is stored on both sides.
+
+    ``links`` is the mapping after ``source_id`` already has ``partner_id``.
+    Clearing or stealing a partner writes NONE onto the leftover side.
+    """
+    partner_id = _normalized_mirror_id(partner_id, source_id)
+    writes: dict[str, str] = {}
+    if links.get(source_id, "NONE") != partner_id:
+        writes[source_id] = partner_id
+    for item_id, current in links.items():
+        if not item_id or item_id == source_id:
+            continue
+        current = current or "NONE"
+        if item_id == partner_id:
+            if current != source_id:
+                writes[item_id] = source_id
+        elif current == source_id or (
+            partner_id != "NONE" and current == partner_id
+        ):
+            writes[item_id] = "NONE"
+    return writes

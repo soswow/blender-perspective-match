@@ -52,7 +52,7 @@ Model or place Empties in the anchor world → select them → Sync list **Landm
 
 ### Mirror pairs
 
-A point landmark can name another as **Is Mirror Of** — the same feature on the opposite side of a symmetric object. Each side is picked only where it is visible. The magic-wand button next to the dropdown fills the partner when this landmark's name ends with **left** or **right** and another point landmark uses the swapped name. Pairwise registration still needs ordinary shared points; the mirror constraint is used in joint BA.
+A point landmark can name another as **Is Mirror Of** — the same feature on the opposite side of a symmetric object. The pair is stored on both landmarks; selecting either side shows the other, and clearing **None** on one side clears the other. Each side is picked only where it is visible. The magic-wand button next to the dropdown fills the partner when this landmark's name ends with **left** or **right** and another point landmark uses the swapped name. Pairwise registration still needs ordinary shared points; the mirror constraint is used in joint BA.
 
 One scene **Mirror Empty** (below Ground Slack / Known 3D Slack) is the plane for every pair. Place it on the midline. **Plane** chooses which local face is the mirror (YZ by default: local X is the normal). **Mirror Slack** (0 pins the plane) lets that plane slide along its normal if the Empty was slightly off. The Empty is not moved.
 
