@@ -36,8 +36,10 @@ from .lines import (
 )
 from .mirrors import (
     _dedupe_mirror_pairs,
+    enforce_mirror_line_segments,
     mirror_plane_offset,
     seed_mirror_landmarks,
+    seed_mirror_line_segments,
 )
 from .pose import (
     _consistent_metric_landmarks,
@@ -510,6 +512,28 @@ def _attach_mirror_landmarks(state: _SolveState) -> None:
         state.mirror_pairs,
         plane_point,
         plane_normal,
+    )
+    seed_mirror_line_segments(
+        state.line_segments,
+        state.landmarks,
+        state.line_observations_by_landmark,
+        state.similarities,
+        state.match_map,
+        state.mirror_pairs,
+        plane_point,
+        plane_normal,
+        state.known_lines,
+    )
+    enforce_mirror_line_segments(
+        state.line_segments,
+        state.landmarks,
+        state.mirror_pairs,
+        plane_point,
+        plane_normal,
+        state.line_observations_by_landmark,
+        state.similarities,
+        state.match_map,
+        state.known_lines,
     )
     existing = {
         (observation.match_id, observation.landmark_id)
@@ -1298,6 +1322,29 @@ def solve_landmark_sync(
             match_map,
             known_lines,
         )
+        if mirror_plane is not None and mirror_pairs:
+            seed_mirror_line_segments(
+                line_segments,
+                landmarks,
+                line_observations_by_landmark,
+                similarities,
+                match_map,
+                mirror_pairs,
+                mirror_plane[0],
+                mirror_plane[1],
+                known_lines,
+            )
+            enforce_mirror_line_segments(
+                line_segments,
+                landmarks,
+                mirror_pairs,
+                mirror_plane[0],
+                mirror_plane[1],
+                line_observations_by_landmark,
+                similarities,
+                match_map,
+                known_lines,
+            )
 
     def _run_ba(
         free_ids: list[str],

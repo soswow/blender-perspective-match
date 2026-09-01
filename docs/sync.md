@@ -52,7 +52,7 @@ Model or place Empties in the anchor world → select them → Sync list **Landm
 
 ### Mirror pairs
 
-A point landmark can name another as **Is Mirror Of** — the same feature on the opposite side of a symmetric object. The pair is stored on both landmarks; selecting either side shows the other, and clearing **None** on one side clears the other. Each side is picked only where it is visible. The magic-wand button next to the dropdown fills the partner when this landmark's name ends with **left** or **right** and another point landmark uses the swapped name. Pairwise registration still needs ordinary shared points; the mirror constraint is used in joint BA.
+A point or line landmark can name another of the same kind as **Is Mirror Of** — the same feature on the opposite side of a symmetric object. The pair is stored on both landmarks; selecting either side shows the other, and clearing **None** on one side clears the other. Each side is picked only where it is visible. The magic-wand button next to the dropdown fills the partner when this landmark's name ends with **left** or **right** and another landmark of the same kind uses the swapped name. Pairwise registration still needs ordinary shared points; the mirror constraint is used in joint BA.
 
 One scene **Mirror Empty** (below Ground Slack / Known 3D Slack) is the plane for every pair. Place it on the midline. **Plane** chooses which local face is the mirror (YZ by default: local X is the normal). **Mirror Slack** (0 pins the plane) lets that plane slide along its normal if the Empty was slightly off. The Empty is not moved.
 
@@ -60,7 +60,7 @@ If Is Mirror Of is set but Mirror Empty is empty, Solve Sync ignores those pairs
 
 ### Line landmarks
 
-Add with the mesh icon next to +. Drag the same physical edge in each still — endpoints do **not** need to be the same 3D points, only the same infinite edge. Optional: assign two Empties as **Known 3D** / **Known 3D B** so the edge is metric. **Is Parallel To** can constrain the edge to shared-world **X Axis**, **Y Axis**, or **Z Axis**, or to another Line landmark that shares its 3D direction.
+Add with the mesh icon next to +. Drag the same physical edge in each still — endpoints do **not** need to be the same 3D points, only the same infinite edge. Optional: assign two Empties as **Known 3D** / **Known 3D B** so the edge is metric. **Is Parallel To** can constrain the edge to shared-world **X Axis**, **Y Axis**, or **Z Axis**, or to another Line landmark that shares its 3D direction. **Is Mirror Of** pairs a line with its counterpart across the scene Mirror Empty, the same as for points.
 
 Without Known 3D ends, a free line needs **three or more** stills — two views alone cannot constrain relative pose from lines. Ordinary point landmarks must be picked in **both** stills when Known 3D sit on one line. Expand **Pick Confidence** (collapsed by default, under **Pick in Active Match**) to set the next-pick default or per-still confidence; it multiplies the landmark **Sync Weight**.
 

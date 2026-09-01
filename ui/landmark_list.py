@@ -68,7 +68,7 @@ def collect_landmark_rows(landmarks, active_root=None) -> tuple[LandmarkRowMeta,
         kind = str(getattr(landmark, "kind", "POINT") or "POINT")
         mirror_of = stored_mirror_id(landmark)
         parallel_to = str(getattr(landmark, "parallel_to", "NONE") or "NONE")
-        if kind == "POINT" and mirror_of not in {"", "NONE"}:
+        if kind in {"POINT", "LINE"} and mirror_of not in {"", "NONE"}:
             mirror_targets.add(mirror_of)
         if kind == "LINE" and parallel_to not in {"", "NONE"}:
             if not parallel_to.startswith("WORLD_AXIS"):
@@ -97,7 +97,7 @@ def collect_landmark_rows(landmarks, active_root=None) -> tuple[LandmarkRowMeta,
         observation_count,
         has_pick,
     ) in infos:
-        mirror_linked = kind == "POINT" and (
+        mirror_linked = kind in {"POINT", "LINE"} and (
             mirror_of not in {"", "NONE"} or item_id in mirror_targets
         )
         parallel_linked = kind == "LINE" and (
@@ -180,13 +180,14 @@ def stored_mirror_id(landmark) -> str:
 
 
 def mirror_of_enum_entries(
-    rows: tuple[LandmarkRowMeta, ...],
+    rows: tuple[LandmarkRowMeta, ...] | tuple[LandmarkEnumCandidate, ...],
     current_item_id: str,
+    kind: str = "POINT",
 ) -> tuple[tuple[str, str, str], ...]:
-    """Point landmarks other than ``current_item_id`` for Is Mirror Of."""
+    """Same-kind landmarks other than ``current_item_id`` for Is Mirror Of."""
     entries: list[tuple[str, str, str]] = []
     for row in rows:
-        if row.kind != "POINT" or not row.item_id or row.item_id == current_item_id:
+        if row.kind != kind or not row.item_id or row.item_id == current_item_id:
             continue
         entries.append(
             (

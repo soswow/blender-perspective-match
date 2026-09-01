@@ -587,7 +587,7 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             if landmark.kind == "LINE":
                 sync_body.prop(landmark, "known_object_b", text="Known 3D B")
                 sync_body.prop(landmark, "parallel_to", text="Is Parallel To")
-            if landmark.kind == "POINT":
+            if landmark.kind in {"POINT", "LINE"}:
                 mirror_of_row = sync_body.row(align=True)
                 mirror_of_row.prop(landmark, "mirror_of", text="Is Mirror Of")
                 mirror_of_row.operator(

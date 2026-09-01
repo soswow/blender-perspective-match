@@ -232,3 +232,52 @@ class MirrorPairSyncTests(unittest.TestCase):
             for name, point in pairs_true.items()
         )
         self.assertLess(dist_eased, dist_frozen - 0.02)
+
+    def test_mirror_line_pair_seeds_one_sided_edges(self) -> None:
+        """A left-only / right-only line pair reconstructs across the plane."""
+        matches, observations, true_sim, _center, _shared = _synthetic_scene(
+            with_ground=False
+        )
+        plane = (
+            np.array((0.0, 0.0, 0.0), dtype=np.float64),
+            np.array((1.0, 0.0, 0.0), dtype=np.float64),
+        )
+        left_a = np.array((-1.2, 0.4, 0.2), dtype=np.float64)
+        left_b = np.array((-1.2, 1.1, 0.9), dtype=np.float64)
+        right_a = sync.reflect_point(left_a, plane[0], plane[1])
+        right_b = sync.reflect_point(left_b, plane[0], plane[1])
+        anchor_cal = matches[0].calibration
+        other_cal = matches[1].calibration
+        ua1, va1 = _project(left_a, anchor_cal)
+        ua2, va2 = _project(left_b, anchor_cal)
+        ub1, vb1 = _project(true_sim.inverse_point(right_a), other_cal)
+        ub2, vb2 = _project(true_sim.inverse_point(right_b), other_cal)
+        result = sync.solve_landmark_sync(
+            matches,
+            observations,
+            anchor_id="anchor",
+            line_observations=[
+                sync.SyncLineObservation(
+                    "anchor", "edge_left", ua1, va1, ua2, va2, "edge_left"
+                ),
+                sync.SyncLineObservation(
+                    "other", "edge_right", ub1, vb1, ub2, vb2, "edge_right"
+                ),
+            ],
+            mirror_pairs=[("edge_left", "edge_right")],
+            mirror_plane=plane,
+            mirror_slack=0.0,
+        )
+        self.assertTrue(result.success, result.message)
+        self.assertIn("edge_left", result.line_segments)
+        self.assertIn("edge_right", result.line_segments)
+        left_seg = result.line_segments["edge_left"]
+        right_seg = result.line_segments["edge_right"]
+        reflected = sync.reflect_point(
+            0.5 * (left_seg[0] + left_seg[1]), plane[0], plane[1]
+        )
+        mid_right = 0.5 * (right_seg[0] + right_seg[1])
+        direction = right_seg[1] - right_seg[0]
+        direction = direction / max(float(np.linalg.norm(direction)), 1.0e-12)
+        distance = float(np.linalg.norm(np.cross(reflected - mid_right, direction)))
+        self.assertLess(distance, 0.08)

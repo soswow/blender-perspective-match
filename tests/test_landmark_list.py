@@ -70,6 +70,16 @@ class LandmarkListTests(unittest.TestCase):
         self.assertTrue(rows[0].mirror_linked)
         self.assertTrue(rows[1].mirror_linked)
         self.assertFalse(rows[2].mirror_linked)
+        left_line = _landmark(
+            item_id="ll",
+            name="Rail Left",
+            kind="LINE",
+            mirror_of="lr",
+        )
+        right_line = _landmark(item_id="lr", name="Rail Right", kind="LINE")
+        line_rows = landmark_list.collect_landmark_rows((left_line, right_line))
+        self.assertTrue(line_rows[0].mirror_linked)
+        self.assertTrue(line_rows[1].mirror_linked)
         self.assertEqual(rows[0].observation_count, 1)
         self.assertTrue(rows[0].has_pick_in_active)
         self.assertFalse(rows[1].has_pick_in_active)
@@ -184,6 +194,8 @@ class LandmarkListTests(unittest.TestCase):
         )
         mirror = landmark_list.mirror_of_enum_entries(rows, "p1")
         self.assertEqual([item[0] for item in mirror], ["p2"])
+        line_mirror = landmark_list.mirror_of_enum_entries(rows, "l1", kind="LINE")
+        self.assertEqual(line_mirror, ())
         parallel = landmark_list.parallel_to_enum_entries(rows, "l1")
         self.assertEqual(parallel, ())
 

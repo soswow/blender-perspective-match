@@ -264,7 +264,21 @@ def _update_mirror_of_id(self, context: bpy.types.Context) -> None:
     """Keep Is Mirror Of stored on both landmarks; None clears both sides."""
     if not _updating_mirror_links and self.item_id:
         space = workspace(context)
-        _apply_mirror_pair_writes(space.landmarks, self.item_id, self.mirror_of_id)
+        partner_id = self.mirror_of_id
+        if partner_id not in {"", "NONE"}:
+            partner = next(
+                (
+                    landmark
+                    for landmark in space.landmarks
+                    if landmark.item_id == partner_id
+                ),
+                None,
+            )
+            if partner is None or partner.kind != self.kind:
+                _write_mirror_id(self, "NONE")
+                tag_sync_ui_redraw(context)
+                return
+        _apply_mirror_pair_writes(space.landmarks, self.item_id, partner_id)
     tag_sync_ui_redraw(context)
 
 
@@ -277,7 +291,7 @@ def _heal_active_mirror_link(space) -> None:
     if index < 0 or index >= len(landmarks):
         return
     landmark = landmarks[index]
-    if not landmark.item_id or landmark.kind != "POINT":
+    if not landmark.item_id or landmark.kind not in {"POINT", "LINE"}:
         return
     links = _landmark_mirror_links(landmarks)
     current = links.get(landmark.item_id, "NONE")
@@ -301,8 +315,7 @@ def _update_landmark_kind(self, context: bpy.types.Context) -> None:
     """Clear kind-specific links when switching point/line."""
     if self.kind != "LINE":
         self.parallel_to = "NONE"
-    if self.kind != "POINT":
-        self.mirror_of_id = "NONE"
+    self.mirror_of_id = "NONE"
     tag_sync_ui_redraw(context)
 
 
@@ -410,11 +423,11 @@ def _set_mirror_of(self, value):
 
 
 def _mirror_of_items(self, context):
-    """Dropdown of other point landmarks for the mirror-pair constraint."""
+    """Dropdown of same-kind landmarks for the mirror-pair constraint."""
     if context is None:
         return _MIRROR_OF_NONE
     space = workspace(context)
-    key = (_sync_ui_generation, space.as_pointer(), self.item_id)
+    key = (_sync_ui_generation, space.as_pointer(), self.item_id, self.kind)
     cached = _MIRROR_OF_ITEMS.get(key)
     if cached is not None:
         return cached
@@ -425,6 +438,7 @@ def _mirror_of_items(self, context):
         + landmark_list.mirror_of_enum_entries(
             landmark_enum_candidates(space),
             self.item_id,
+            kind=str(self.kind or "POINT"),
         )
     )
     _MIRROR_OF_ITEMS[key] = packed
@@ -588,7 +602,12 @@ def ensure_mirror_pairs(space: PMWorkspace | None = None) -> None:
         if other is None:
             continue
         other_current = links.get(partner_id, "NONE")
-        if other_current in {"", "NONE"}:
+        source = by_id.get(item_id)
+        if (
+            other_current in {"", "NONE"}
+            and source is not None
+            and other.kind == source.kind
+        ):
             _write_mirror_id(other, item_id)
             links[partner_id] = item_id
 

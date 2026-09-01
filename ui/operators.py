@@ -2979,7 +2979,7 @@ def _named_mirror_partner(context: bpy.types.Context, landmark):
     space = properties.workspace(context)
     matches = []
     for other in space.landmarks:
-        if other.kind != "POINT":
+        if other.kind != landmark.kind:
             continue
         if other.item_id == landmark.item_id or not other.item_id:
             continue
@@ -3004,20 +3004,20 @@ class PM_OT_guess_mirror_partner(bpy.types.Operator):
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
         landmark = scene.active_landmark(context)
-        if landmark is None or landmark.kind != "POINT":
+        if landmark is None or landmark.kind not in {"POINT", "LINE"}:
             return False
         partner = _named_mirror_partner(context, landmark)
         return partner is not None and landmark.mirror_of_id != partner.item_id
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         landmark = scene.active_landmark(context)
-        if landmark is None or landmark.kind != "POINT":
+        if landmark is None or landmark.kind not in {"POINT", "LINE"}:
             return {"CANCELLED"}
         partner = _named_mirror_partner(context, landmark)
         if partner is None:
             self.report(
                 {"WARNING"},
-                "No point landmark whose name swaps left/right with this one",
+                "No landmark whose name swaps left/right with this one",
             )
             return {"CANCELLED"}
         landmark.mirror_of_id = partner.item_id

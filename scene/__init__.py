@@ -3086,24 +3086,26 @@ def build_sync_problem(context: bpy.types.Context):
 
 
 def collect_sync_mirror_pairs(context: bpy.types.Context) -> list[tuple[str, str]]:
-    """Undirected Is Mirror Of pairs among enabled point landmarks."""
+    """Undirected Is Mirror Of pairs among enabled same-kind landmarks."""
     space = properties.workspace(context)
-    enabled_ids = {
-        landmark.item_id
+    enabled_kinds = {
+        landmark.item_id: str(landmark.kind or "POINT")
         for landmark in space.landmarks
         if getattr(landmark, "use_in_sync", True)
-        and landmark.kind == "POINT"
+        and landmark.kind in {"POINT", "LINE"}
         and landmark.item_id
     }
     seen: set[tuple[str, str]] = set()
     pairs: list[tuple[str, str]] = []
     for landmark in space.landmarks:
-        if landmark.item_id not in enabled_ids:
+        if landmark.item_id not in enabled_kinds:
             continue
         other_id = getattr(landmark, "mirror_of_id", "NONE")
         if not other_id or other_id == "NONE" or other_id == landmark.item_id:
             continue
-        if other_id not in enabled_ids:
+        if other_id not in enabled_kinds:
+            continue
+        if enabled_kinds[other_id] != enabled_kinds[landmark.item_id]:
             continue
         pair = tuple(sorted((landmark.item_id, other_id)))
         if pair in seen:

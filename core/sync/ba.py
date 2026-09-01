@@ -846,7 +846,38 @@ def _ba_raw_residuals_and_jacobian(
         two_nc_n = 2.0 * float(np.dot(normal, plane_point)) * normal
         pair_spring = MIRROR_PAIR_RESIDUAL_PX / max(MIRROR_PAIR_HARD_GAP, 1.0e-12)
         offset_shift = (2.0 * plane_offset) * normal
+        line_ids = set(line_points)
         for landmark_a, landmark_b in _dedupe_mirror_pairs(mirror_pairs):
+            if landmark_a in line_ids and landmark_b in line_ids:
+                point_a = line_points[landmark_a]
+                point_b = line_points[landmark_b]
+                direction_b = fixed_line_directions.get(landmark_b)
+                if direction_b is None:
+                    continue
+                direction_b = direction_b / max(
+                    float(np.linalg.norm(direction_b)), 1.0e-12
+                )
+                reflected = householder @ point_a + two_nc_n + offset_shift
+                gap = np.cross(reflected - point_b, direction_b)
+                start_a = line_offset.get(landmark_a)
+                start_b = line_offset.get(landmark_b)
+                jac_gap_u = -_skew(direction_b)
+                jac_a = jac_gap_u @ householder
+                jac_b = -jac_gap_u
+                jac_plane = jac_gap_u @ (2.0 * normal)
+                for axis in range(3):
+                    residuals.append(pair_spring * float(gap[axis]))
+                    row_axis = np.zeros(column_count, dtype=np.float64)
+                    if start_a is not None:
+                        row_axis[start_a : start_a + 3] = pair_spring * jac_a[axis]
+                    if start_b is not None:
+                        row_axis[start_b : start_b + 3] = pair_spring * jac_b[axis]
+                    if plane_col is not None:
+                        row_axis[plane_col] = pair_spring * float(jac_plane[axis])
+                    jacobian_rows.append(row_axis)
+                continue
+            if landmark_a in line_ids or landmark_b in line_ids:
+                continue
             point_a = landmarks.get(landmark_a)
             point_b = landmarks.get(landmark_b)
             if point_a is None or point_b is None:
