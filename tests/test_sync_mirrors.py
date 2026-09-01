@@ -17,8 +17,9 @@ if "match_perspective" not in sys.modules:
     _package.__file__ = str(_ROOT / "__init__.py")
     sys.modules["match_perspective"] = _package
 
+from match_perspective import core
 from match_perspective.core import sync
-from sync_fixtures import _project, _synthetic_scene
+from sync_fixtures import _look_at_rotation, _project, _synthetic_scene
 
 
 class MirrorPairSyncTests(unittest.TestCase):
@@ -281,3 +282,152 @@ class MirrorPairSyncTests(unittest.TestCase):
         direction = direction / max(float(np.linalg.norm(direction)), 1.0e-12)
         distance = float(np.linalg.norm(np.cross(reflected - mid_right, direction)))
         self.assertLess(distance, 0.08)
+
+    def test_resected_camera_uses_one_view_mirror_line(self) -> None:
+        """A skipped still's one-view Is Mirror Of line pulls its resected pose.
+
+        Pairwise growth can PnP from four cloud hits, so this still also gets
+        three disagreeing off-plane picks that peel it; floor tags resect it.
+        """
+        intrinsics = core.CameraIntrinsics(
+            fx=800.0,
+            fy=800.0,
+            cx=400.0,
+            cy=300.0,
+            image_width=800,
+            image_height=600,
+        )
+        ground_points = (
+            np.array((-1.5, -1.2, 0.0)),
+            np.array((1.6, -1.0, 0.0)),
+            np.array((1.8, 1.4, 0.0)),
+            np.array((-1.3, 1.6, 0.0)),
+        )
+        elevated_points = (
+            np.array((-0.6, -0.5, 0.8)),
+            np.array((0.5, -0.4, 0.8)),
+            np.array((0.4, 0.5, 0.8)),
+        )
+        plane = (
+            np.array((0.0, 0.0, 0.0), dtype=np.float64),
+            np.array((1.0, 0.0, 0.0), dtype=np.float64),
+        )
+        left_a = np.array((-1.2, 0.3, 0.2), dtype=np.float64)
+        left_b = np.array((-1.2, 1.0, 1.0), dtype=np.float64)
+        right_a = sync.reflect_point(left_a, plane[0], plane[1])
+        right_b = sync.reflect_point(left_b, plane[0], plane[1])
+        target = np.array((0.2, 0.2, 0.3), dtype=np.float64)
+        anchor_center = np.array((-3.0, -4.0, 2.2), dtype=np.float64)
+        side_center = np.array((3.4, -3.1, 2.3), dtype=np.float64)
+        skip_center = np.array((0.2, -5.0, 1.7), dtype=np.float64)
+        leftover_center = np.array((0.8, -4.2, 2.4), dtype=np.float64)
+        anchor = core.Calibration(
+            intrinsics,
+            _look_at_rotation(anchor_center, target),
+            anchor_center,
+        )
+        side = core.Calibration(
+            intrinsics,
+            _look_at_rotation(side_center, target),
+            side_center,
+        )
+        skip_true = core.Calibration(
+            intrinsics,
+            _look_at_rotation(skip_center, target),
+            skip_center,
+        )
+        leftover = core.Calibration(
+            intrinsics,
+            _look_at_rotation(leftover_center, target),
+            leftover_center,
+        )
+        matches = [
+            sync.SyncMatchInput("anchor", anchor),
+            sync.SyncMatchInput("side", side),
+            sync.SyncMatchInput("skip", leftover),
+        ]
+        true_by_id = {"anchor": anchor, "side": side, "skip": skip_true}
+        observations: list[sync.SyncObservation] = []
+        for index, point in enumerate(ground_points):
+            for match_id in ("anchor", "side"):
+                observations.append(
+                    sync.SyncObservation(
+                        match_id,
+                        f"g{index}",
+                        *_project(point, true_by_id[match_id]),
+                        True,
+                    )
+                )
+            u_coord, v_coord = _project(point, skip_true)
+            observations.append(
+                sync.SyncObservation(
+                    "skip",
+                    f"g{index}",
+                    u_coord + 18.0,
+                    v_coord,
+                    True,
+                )
+            )
+        for index, point in enumerate(elevated_points):
+            for match_id in ("anchor", "side"):
+                observations.append(
+                    sync.SyncObservation(
+                        match_id,
+                        f"e{index}",
+                        *_project(point, true_by_id[match_id]),
+                        False,
+                    )
+                )
+            u_coord, v_coord = _project(point, skip_true)
+            observations.append(
+                sync.SyncObservation(
+                    "skip",
+                    f"e{index}",
+                    u_coord + 180.0,
+                    v_coord,
+                    False,
+                )
+            )
+        ua1, va1 = _project(left_a, anchor)
+        ua2, va2 = _project(left_b, anchor)
+        us1, vs1 = _project(left_a, side)
+        us2, vs2 = _project(left_b, side)
+        ur1, vr1 = _project(right_a, skip_true)
+        ur2, vr2 = _project(right_b, skip_true)
+        line_observations = [
+            sync.SyncLineObservation(
+                "anchor", "edge_left", ua1, va1, ua2, va2, "edge_left"
+            ),
+            sync.SyncLineObservation(
+                "side", "edge_left", us1, vs1, us2, vs2, "edge_left"
+            ),
+            sync.SyncLineObservation(
+                "skip", "edge_right", ur1, vr1, ur2, vr2, "edge_right"
+            ),
+        ]
+        solve_kwargs = {
+            "matches": matches,
+            "observations": observations,
+            "anchor_id": "anchor",
+            "line_observations": line_observations,
+            "mirror_plane": plane,
+            "mirror_slack": 0.0,
+        }
+        without_line = sync.solve_landmark_sync(**solve_kwargs)
+        with_line = sync.solve_landmark_sync(
+            **solve_kwargs,
+            mirror_pairs=[("edge_left", "edge_right")],
+        )
+        self.assertTrue(without_line.success, without_line.message)
+        self.assertTrue(with_line.success, with_line.message)
+        self.assertIn("skip", without_line.similarities)
+        self.assertIn("skip", with_line.similarities)
+        self.assertIn("recovered 'skip'", with_line.message)
+        self.assertIn("edge_right", with_line.line_segments)
+        pose_delta = float(
+            np.linalg.norm(
+                with_line.similarities["skip"].translation
+                - without_line.similarities["skip"].translation
+            )
+        )
+        self.assertGreater(pose_delta, 0.01)

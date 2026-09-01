@@ -37,6 +37,7 @@ from .lines import (
 from .mirrors import (
     _dedupe_mirror_pairs,
     enforce_mirror_line_segments,
+    frozen_mirror_line_segments,
     mirror_plane_offset,
     seed_mirror_landmarks,
     seed_mirror_line_segments,
@@ -744,10 +745,126 @@ def _rebuild_usable_observations(state: _SolveState) -> None:
     }
 
 
+def _resect_known_lines(state: _SolveState) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+    """User Known 3D lines plus frozen mirrored partners (not merged into state)."""
+    merged = {
+        landmark_id: (segment[0].copy(), segment[1].copy())
+        for landmark_id, segment in state.known_lines.items()
+    }
+    merged.update(
+        frozen_mirror_line_segments(
+            state.line_segments,
+            state.mirror_pairs,
+            state.known_lines,
+        )
+    )
+    return merged
+
+
+def _polish_recovered_poses(state: _SolveState) -> None:
+    """Pose-only BA of resected stills vs frozen 3D (Huber-soft one-view lines)."""
+    recovered = [
+        match_id
+        for match_id in state.recovered
+        if match_id in state.similarities and match_id not in state.fixed_match_ids
+    ]
+    if not recovered:
+        return
+    recovered_set = set(recovered)
+    polish_observations = []
+    for observation in state.usable_observations:
+        if observation.match_id not in recovered_set:
+            continue
+        point = state.landmarks.get(observation.landmark_id)
+        if point is None:
+            continue
+        error = _pick_reprojection_px(
+            state.similarities[observation.match_id],
+            observation,
+            state.match_map[observation.match_id].calibration,
+            point,
+        )
+        if error > ACCEPT_RMSE_PX:
+            continue
+        polish_observations.append(observation)
+    line_constraints = _collect_ba_line_constraints(
+        state.line_segments,
+        state.known_lines,
+        state.line_observations_by_landmark,
+        recovered_set,
+    )
+    if not polish_observations and not line_constraints:
+        return
+    pre_similarities = {
+        match_id: SimilarityTransform(
+            scale=item.scale,
+            rotation=np.array(item.rotation, copy=True),
+            translation=np.array(item.translation, copy=True),
+        )
+        for match_id, item in state.similarities.items()
+    }
+    pre_rmse = _per_match_rmse_snapshot(
+        recovered,
+        state.landmark_ids,
+        state.similarities,
+        state.landmarks,
+        state.anchor_id,
+        state.match_map,
+        polish_observations,
+    )
+
+    def _mean_rmse(values: dict[str, float]) -> float:
+        if not values:
+            return 0.0
+        squares = [value * value for value in values.values()]
+        return float(np.sqrt(np.mean(squares)))
+
+    fixed_landmarks = {
+        landmark_id: point.copy()
+        for landmark_id, point in state.landmarks.items()
+    }
+    similarities, landmarks, line_segments, ran = _bundle_adjust_registration(
+        recovered,
+        [],
+        fixed_landmarks,
+        state.similarities,
+        state.landmarks,
+        state.anchor_id,
+        state.match_map,
+        polish_observations,
+        line_constraints,
+        known_line_ids=set(state.line_segments) | set(state.known_lines),
+        line_segments=state.line_segments,
+        lock_rotation=state.lock_rotation,
+        lock_translation=state.lock_translation,
+        max_iterations=12,
+        max_free_lines=0,
+        huber_delta=6.0,
+    )
+    if not ran:
+        return
+    post_rmse = _per_match_rmse_snapshot(
+        recovered,
+        state.landmark_ids,
+        similarities,
+        landmarks,
+        state.anchor_id,
+        state.match_map,
+        polish_observations,
+    )
+    if _mean_rmse(post_rmse) > _mean_rmse(pre_rmse) + 2.0:
+        state.similarities = pre_similarities
+        return
+    state.similarities = similarities
+    state.landmarks = landmarks
+    state.line_segments = line_segments
+
+
 def _resect_skipped_matches(state: _SolveState) -> None:
     """PnP skipped stills against the frozen cloud; ground-only if that fails."""
     if not state.landmarks:
         return
+    _attach_mirror_landmarks(state)
     cloud = dict(state.known_world)
     cloud.update(state.landmarks)
     ground_ids = _ground_like_landmark_ids(
@@ -762,7 +879,7 @@ def _resect_skipped_matches(state: _SolveState) -> None:
         "observations_by_landmark": state.observations_by_landmark_all,
         "matches": state.match_map,
         "anchor_id": state.anchor_id,
-        "known_lines": state.known_lines,
+        "known_lines": _resect_known_lines(state),
         "line_observations_by_landmark": state.line_observations_by_landmark_all,
         "parallel_pairs": state.parallel_pairs,
         "lock_rotation": state.lock_rotation,
@@ -822,6 +939,9 @@ def _resect_skipped_matches(state: _SolveState) -> None:
     state.recovered = recovered
     _expand_landmarks_after_resect(state)
     _rebuild_usable_observations(state)
+    _attach_mirror_landmarks(state)
+    _polish_recovered_poses(state)
+    _rebuild_usable_observations(state)
 
 
 def solve_landmark_sync(
@@ -850,15 +970,18 @@ def solve_landmark_sync(
 
     Stages: pairwise register → peel cameras above ``ACCEPT_RMSE_PX`` → joint
     BA → peel again → resect skipped stills against frozen 3D (ground tags
-    if off-plane picks disagree) → triangulate landmarks now visible in
-    recovered views and PnP stills that had no cloud support → report.
+    if off-plane picks disagree; frozen Is Mirror Of lines mixed like Known 3D
+    lines) → triangulate landmarks now visible in recovered views and PnP
+    stills that had no cloud support → pose-only BA of recovered cameras →
+    report.
     Recovered cameras must not fail the joint RMSE. fy=fx when pixels were
     aspect-stretched. ``ground_slack`` is how far On Ground landmarks may leave
     Z=0 in joint BA (0 pins them when triangulation agrees with the raycast).
     ``known_3d_slack`` is how far Known 3D points may leave their Empty
     (0 pins them; pairwise registration still uses the Empty). On Ground
-    Known 3D uses the tighter of the two slacks for Z. ``mirror_pairs`` are
-    joint-BA only (not pairwise). ``fixed_similarities`` keeps those non-anchor
+    Known 3D uses the tighter of the two slacks for Z. ``mirror_pairs`` seed
+    joint BA and, after that, mixed resection of a one-view partner line.
+    ``fixed_similarities`` keeps those non-anchor
     match transforms unchanged while their observations still constrain the
     solve. ``mirror_plane`` is ``(point, normal)``;
     ``mirror_slack`` is how far that plane may slide along the normal (the

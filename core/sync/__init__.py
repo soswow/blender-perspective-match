@@ -7,9 +7,10 @@ falls back to a similarity with free scale when a rigid pose cannot lock.
 Pipeline (keep AGENTS.md in sync if this changes): register pairwise
 (strongest-pair seed, then easiest-next camera) → peel cameras above
 ``ACCEPT_RMSE_PX`` → joint BA → peel again → resect skipped stills against
-the frozen 3D (ground tags if off-plane picks disagree) → triangulate
-landmarks now visible in recovered views and PnP stills that had no cloud
-support → report.
+the frozen 3D (ground tags if off-plane picks disagree; frozen Is Mirror Of
+lines mixed like Known 3D) → triangulate landmarks now visible in recovered
+views and PnP stills that had no cloud support → pose-only BA of recovered
+cameras → report.
 
 Package layout: ``constants``, ``types``, ``projection``, ``pose``, ``ground``,
 ``lines``, ``mirrors``, ``ba``, ``solve``. ``from match_perspective.core import sync``

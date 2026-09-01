@@ -528,3 +528,27 @@ def enforce_mirror_line_segments(
                 similarities,
                 matches,
             )
+
+
+def frozen_mirror_line_segments(
+    line_segments: dict[str, tuple[np.ndarray, np.ndarray]],
+    pairs: list[tuple[str, str]] | None,
+    known_lines: dict[str, tuple[np.ndarray, np.ndarray]] | None = None,
+) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+    """Mirrored 3D edges to treat as frozen lines during resection / pose polish.
+
+    Does not include user Known 3D lines. Call after ``seed_mirror_line_segments``
+    so a partner seen in only one still already has reflected 3D.
+    """
+    known = known_lines or {}
+    partner_ids: set[str] = set()
+    for landmark_a, landmark_b in _dedupe_mirror_pairs(pairs):
+        partner_ids.add(landmark_a)
+        partner_ids.add(landmark_b)
+    frozen: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+    for landmark_id in partner_ids:
+        if landmark_id in known or landmark_id not in line_segments:
+            continue
+        point_a, point_b = line_segments[landmark_id]
+        frozen[landmark_id] = (point_a.copy(), point_b.copy())
+    return frozen
