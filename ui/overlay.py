@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import math
-import time
 
 import blf
 import bpy
@@ -13,6 +12,7 @@ from gpu_extras.batch import batch_for_shader
 from mathutils import Vector
 
 from .. import core, properties, scene
+from .npanel import shows_perspective_match_tab
 
 AXIS_COLORS = {
     # Match Blender's default axis gizmo colors (X red, Y green, Z blue).
@@ -74,13 +74,12 @@ _MODE_CHROME = {
 }
 
 _draw_handle = None
-_sidebar_visibility_by_area: dict[int, bool] = {}
-_sidebar_last_draw_by_area: dict[int, float] = {}
+_ui_visibility_handle = None
 _DRAW_NAMESPACE_KEY = "perspective_match_draw_handle"
+_UI_VISIBILITY_NAMESPACE_KEY = "perspective_match_ui_visibility_handle"
 _LEGACY_SIDEBAR_DRAW_NAMESPACE_KEY = "perspective_match_sidebar_draw_handle"
 _SIDEBAR_TIMER_NAMESPACE_KEY = "perspective_match_sidebar_visibility_timer"
-_SIDEBAR_POLL_INTERVAL = 0.1
-_SIDEBAR_DRAW_GRACE = 0.25
+_npanel_visible_by_area: dict[int, bool] = {}
 _preview: dict[str, object] = {
     "kind": "",
     "start": None,
@@ -364,61 +363,6 @@ def _region_bounds(context: bpy.types.Context) -> tuple[float, float, float, flo
     if region is None:
         return None
     return 0.0, float(region.width), 0.0, float(region.height)
-
-
-def note_sidebar_draw(context: bpy.types.Context) -> None:
-    """Record that Blender drew the expanded panel in this 3D View."""
-    area = context.area
-    if area is None or area.type != "VIEW_3D":
-        return
-    area_pointer = area.as_pointer()
-    was_visible = _sidebar_visibility_by_area.get(area_pointer, False)
-    _sidebar_last_draw_by_area[area_pointer] = time.monotonic()
-    _sidebar_visibility_by_area[area_pointer] = True
-    if was_visible:
-        return
-    for region in area.regions:
-        if region.type == "WINDOW":
-            region.tag_redraw()
-            return
-
-
-def _perspective_match_sidebar_visible(context: bpy.types.Context) -> bool:
-    """True when Blender recently drew this area's expanded panel."""
-    area = context.area
-    if area is None or area.type != "VIEW_3D":
-        return False
-    return _sidebar_visibility_by_area.get(area.as_pointer(), False)
-
-
-def _poll_sidebar_visibility() -> float:
-    """Expire stopped panel-draw heartbeats and refresh their viewports."""
-    now = time.monotonic()
-    live_area_pointers: set[int] = set()
-    window_manager = bpy.context.window_manager
-    if window_manager is not None:
-        for window in window_manager.windows:
-            screen = window.screen
-            if screen is None:
-                continue
-            for area in screen.areas:
-                if area.type != "VIEW_3D":
-                    continue
-                area_pointer = area.as_pointer()
-                live_area_pointers.add(area_pointer)
-                last_draw = _sidebar_last_draw_by_area.get(area_pointer)
-                visible = (
-                    last_draw is not None
-                    and now - last_draw <= _SIDEBAR_DRAW_GRACE
-                )
-                previous = _sidebar_visibility_by_area.get(area_pointer, False)
-                _sidebar_visibility_by_area[area_pointer] = visible
-                if visible or previous != visible:
-                    area.tag_redraw()
-    for stale_pointer in _sidebar_visibility_by_area.keys() - live_area_pointers:
-        del _sidebar_visibility_by_area[stale_pointer]
-        _sidebar_last_draw_by_area.pop(stale_pointer, None)
-    return _SIDEBAR_POLL_INTERVAL
 
 
 def _image_diagonal(settings) -> float:
@@ -1250,6 +1194,43 @@ def _draw_preview(context: bpy.types.Context, fill_shader, settings) -> None:
     )
 
 
+def _npanel_shows_perspective_match(area) -> bool:
+    """True when this 3D View's N-panel is open on the Perspective Match tab."""
+    space = area.spaces.active if area.spaces else None
+    if space is None or getattr(space, "type", None) != "VIEW_3D":
+        return False
+    ui_region = None
+    for region in area.regions:
+        if region.type == "UI":
+            ui_region = region
+            break
+    if ui_region is None:
+        return False
+    return shows_perspective_match_tab(
+        bool(getattr(space, "show_region_ui", False)),
+        int(ui_region.width),
+        getattr(ui_region, "active_panel_category", None),
+    )
+
+
+def _ui_visibility_callback() -> None:
+    """When N or the N-panel tab changes, redraw the 3D View so the overlay updates."""
+    context = bpy.context
+    area = getattr(context, "area", None)
+    if area is None or area.type != "VIEW_3D":
+        return
+    visible = _npanel_shows_perspective_match(area)
+    key = area.as_pointer()
+    previous = _npanel_visible_by_area.get(key)
+    _npanel_visible_by_area[key] = visible
+    if previous is None or previous == visible:
+        return
+    for region in area.regions:
+        if region.type == "WINDOW":
+            region.tag_redraw()
+            return
+
+
 def _draw_callback() -> None:
     context = bpy.context
     if (
@@ -1259,10 +1240,8 @@ def _draw_callback() -> None:
     ):
         return
     workspace = context.scene.match_perspective
-    sidebar_visible = _perspective_match_sidebar_visible(context)
-    # Sidebar state belongs to each 3D View. Keep live Draw / Pick feedback visible
-    # if the user temporarily closes the sidebar or switches tabs mid-tool.
-    if not workspace.is_modal and not sidebar_visible:
+    # Draw / Pick chrome stays up if the user hits N or switches tabs mid-tool.
+    if not workspace.is_modal and not _npanel_shows_perspective_match(context.area):
         return
     gpu.state.blend_set("ALPHA")
     try:
@@ -1294,15 +1273,16 @@ def _draw_callback() -> None:
 
 
 def register_viewport_draw_handler() -> None:
-    """Register the viewport overlay and sidebar visibility timer."""
+    """Register one 3D View POST_PIXEL callback."""
     ensure_viewport_draw_handler()
 
 
 def ensure_viewport_draw_handler() -> None:
-    """Replace stale callbacks and ensure the overlay timer is live."""
-    global _draw_handle
+    """Drop a stale handle if needed and ensure a live POST_PIXEL callback."""
+    global _draw_handle, _ui_visibility_handle
     # Survive importlib.reload: previous module may have lost _draw_handle.
     previous = bpy.app.driver_namespace.pop(_DRAW_NAMESPACE_KEY, None)
+    previous_ui = bpy.app.driver_namespace.pop(_UI_VISIBILITY_NAMESPACE_KEY, None)
     previous_sidebar = bpy.app.driver_namespace.pop(
         _LEGACY_SIDEBAR_DRAW_NAMESPACE_KEY, None
     )
@@ -1316,37 +1296,37 @@ def ensure_viewport_draw_handler() -> None:
             bpy.types.SpaceView3D.draw_handler_remove(handle, "WINDOW")
         except (ValueError, RuntimeError):
             pass
-    if previous_sidebar is not None:
+    for handle in (_ui_visibility_handle, previous_ui, previous_sidebar):
+        if handle is None:
+            continue
         try:
-            bpy.types.SpaceView3D.draw_handler_remove(previous_sidebar, "UI")
+            bpy.types.SpaceView3D.draw_handler_remove(handle, "UI")
         except (ValueError, RuntimeError):
             pass
-    for callback in (_poll_sidebar_visibility, previous_timer):
-        if callback is not None and bpy.app.timers.is_registered(callback):
-            bpy.app.timers.unregister(callback)
-    _sidebar_visibility_by_area.clear()
-    _sidebar_last_draw_by_area.clear()
+    if previous_timer is not None and bpy.app.timers.is_registered(previous_timer):
+        bpy.app.timers.unregister(previous_timer)
+    _npanel_visible_by_area.clear()
     _draw_handle = bpy.types.SpaceView3D.draw_handler_add(
         _draw_callback,
         (),
         "WINDOW",
         "POST_PIXEL",
     )
-    bpy.app.timers.register(
-        _poll_sidebar_visibility,
-        first_interval=0.0,
-        persistent=True,
+    _ui_visibility_handle = bpy.types.SpaceView3D.draw_handler_add(
+        _ui_visibility_callback,
+        (),
+        "UI",
+        "POST_PIXEL",
     )
     bpy.app.driver_namespace[_DRAW_NAMESPACE_KEY] = _draw_handle
-    bpy.app.driver_namespace[_SIDEBAR_TIMER_NAMESPACE_KEY] = (
-        _poll_sidebar_visibility
-    )
+    bpy.app.driver_namespace[_UI_VISIBILITY_NAMESPACE_KEY] = _ui_visibility_handle
 
 
 def unregister_viewport_draw_handler() -> None:
     """Remove the registered viewport callback."""
-    global _draw_handle
+    global _draw_handle, _ui_visibility_handle
     previous = bpy.app.driver_namespace.pop(_DRAW_NAMESPACE_KEY, None)
+    previous_ui = bpy.app.driver_namespace.pop(_UI_VISIBILITY_NAMESPACE_KEY, None)
     previous_sidebar = bpy.app.driver_namespace.pop(
         _LEGACY_SIDEBAR_DRAW_NAMESPACE_KEY, None
     )
@@ -1360,15 +1340,16 @@ def unregister_viewport_draw_handler() -> None:
             bpy.types.SpaceView3D.draw_handler_remove(handle, "WINDOW")
         except (ValueError, RuntimeError):
             pass
-    if previous_sidebar is not None:
+    for handle in (_ui_visibility_handle, previous_ui, previous_sidebar):
+        if handle is None:
+            continue
         try:
-            bpy.types.SpaceView3D.draw_handler_remove(previous_sidebar, "UI")
+            bpy.types.SpaceView3D.draw_handler_remove(handle, "UI")
         except (ValueError, RuntimeError):
             pass
-    for callback in (_poll_sidebar_visibility, previous_timer):
-        if callback is not None and bpy.app.timers.is_registered(callback):
-            bpy.app.timers.unregister(callback)
+    if previous_timer is not None and bpy.app.timers.is_registered(previous_timer):
+        bpy.app.timers.unregister(previous_timer)
     _draw_handle = None
-    _sidebar_visibility_by_area.clear()
-    _sidebar_last_draw_by_area.clear()
+    _ui_visibility_handle = None
+    _npanel_visible_by_area.clear()
     clear_preview()

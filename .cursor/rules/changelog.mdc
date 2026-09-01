@@ -11,4 +11,6 @@ Skip refactors, tests, comments, and internal-only edits. Do not bump `blender_m
 
 Prefer one short user-facing line. If the workflow changed, update `docs/user-guide.md` / `docs/sync.md` / `README.md` too.
 
+Do not rewrite an existing changelog bullet. Add a new Unreleased line if later work revises that behavior.
+
 Full conventions: `AGENTS.md`.

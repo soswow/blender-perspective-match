@@ -98,20 +98,17 @@ def main() -> None:
             assert extension._refresh_after_history not in bpy.app.handlers.undo_post
             assert extension._refresh_after_history not in bpy.app.handlers.redo_post
             assert overlay._DRAW_NAMESPACE_KEY not in bpy.app.driver_namespace
+            assert overlay._UI_VISIBILITY_NAMESPACE_KEY not in bpy.app.driver_namespace
             assert overlay._SIDEBAR_TIMER_NAMESPACE_KEY not in bpy.app.driver_namespace
-            assert not bpy.app.timers.is_registered(overlay._poll_sidebar_visibility)
             extension.register()
             core = sys.modules["match_perspective.core"]
             distortion = sys.modules["match_perspective.scene.distortion"]
             properties = sys.modules["match_perspective.properties"]
             scene = sys.modules["match_perspective.scene"]
             ui_panel = sys.modules["match_perspective.ui.panel"]
-            assert not overlay._perspective_match_sidebar_visible(bpy.context)
-            overlay.note_sidebar_draw(bpy.context)
-            assert not overlay._perspective_match_sidebar_visible(bpy.context)
             assert overlay._DRAW_NAMESPACE_KEY in bpy.app.driver_namespace
-            assert overlay._SIDEBAR_TIMER_NAMESPACE_KEY in bpy.app.driver_namespace
-            assert bpy.app.timers.is_registered(overlay._poll_sidebar_visibility)
+            assert overlay._UI_VISIBILITY_NAMESPACE_KEY in bpy.app.driver_namespace
+            assert overlay._SIDEBAR_TIMER_NAMESPACE_KEY not in bpy.app.driver_namespace
 
             crossing = core.vanishing_point_from_lines(
                 [

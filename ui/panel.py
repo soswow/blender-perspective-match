@@ -9,7 +9,8 @@ import bpy
 
 from .. import core, properties, scene
 from ..detect import opencv as opencv_support
-from . import icons, landmark_list, operators, overlay
+from . import icons, landmark_list, operators
+from .npanel import PERSPECTIVE_MATCH_CATEGORY
 
 
 class PM_UL_landmarks(bpy.types.UIList):
@@ -128,10 +129,9 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
     bl_idname = "VIEW3D_PT_perspective_match"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
-    bl_category = "Perspective Match"
+    bl_category = PERSPECTIVE_MATCH_CATEGORY
 
     def draw(self, context: bpy.types.Context) -> None:
-        overlay.note_sidebar_draw(context)
         layout = self.layout
         workspace = properties.workspace(context)
         settings = properties.active_session(context)

@@ -22,6 +22,7 @@ from ..detect import tag_snap
 from ..detect import vp_lines as vp_line_detect
 from ..scene import distortion
 from . import overlay, overlay_hit, sync_report
+from .npanel import PERSPECTIVE_MATCH_CATEGORY
 
 
 def _session(context: bpy.types.Context):
@@ -502,7 +503,7 @@ def _perspective_match_sidebar_active(context: bpy.types.Context) -> bool:
         for region in area.regions:
             if region.type != "UI":
                 continue
-            if region.width > 1 and region.active_panel_category == "Perspective Match":
+            if region.width > 1 and region.active_panel_category == PERSPECTIVE_MATCH_CATEGORY:
                 return True
     return False
 

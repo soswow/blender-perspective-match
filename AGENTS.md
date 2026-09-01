@@ -19,6 +19,8 @@ Write one short user-facing line, not a commit subject. Do not invent a version 
 
 If `[Unreleased]` has no matching subsection yet, add it. Leave dated `## [x.y.z]` sections untouched.
 
+Do not rewrite an existing changelog bullet (Unreleased or dated). If later work revises that behavior, add a new **Fixed** / **Changed** / **Removed** line; leave the original record as it was.
+
 To ship: `./scripts/release.sh 0.3.7` on a clean `main`. That cuts Unreleased, bumps `blender_manifest.toml`, tags `v0.3.7`, and pushes. GitHub Actions builds the four platform zips and creates the GitHub Release.
 
 ## Regression tests

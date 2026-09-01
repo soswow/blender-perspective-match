@@ -59,6 +59,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Original Plate keeps imported Brown–Conrady D and only switches the background; estimated λ is still cleared
 
 ### Fixed
+- Overlay hide-on-sidebar no longer redraws the 3D View ten times a second (that leaked tens of GB of GPU memory); **N** or another N-panel tab hides it, collapsing the Perspective Match accordion does not
 - **Is Mirror Of** stores the partner by landmark id, so adding landmarks no longer retargets existing pairs
 - Renaming a match re-sorts the Perspective Match and Anchor dropdowns by the new name
 - Sync pose weights no longer inflate the pixel acceptance threshold and falsely report valid high-weight picks as mismatched
