@@ -320,6 +320,11 @@ def _heal_active_mirror_link(space) -> None:
 def _update_active_landmark_index(self, context: bpy.types.Context) -> None:
     """Selecting a mirror target shows the other side when the pair is unique."""
     _heal_active_mirror_link(self)
+    index = int(getattr(self, "active_landmark_index", -1))
+    if 0 <= index < len(self.landmarks):
+        from ..scene import select_landmark_viewport_object
+
+        select_landmark_viewport_object(context, self.landmarks[index])
     tag_viewport_redraw(context)
 
 

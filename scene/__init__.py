@@ -12,6 +12,11 @@ from bpy_extras import view3d_utils
 from mathutils import Matrix, Quaternion, Vector
 
 from .. import core, properties
+from .landmark_selection import (
+    LANDMARK_HELPER_ID_KEY,
+    landmark_index_for_helper,
+    landmark_index_for_viewport_selection,
+)
 
 CV_CAMERA_TO_BLENDER_CAMERA = np.diag([1.0, -1.0, -1.0])
 
@@ -2639,10 +2644,6 @@ def reset_root_sync_transform(root: bpy.types.Object) -> None:
     clear_similarity_on_session(root.pm_session)
 
 
-# ID property on PM_LM_* helpers so sidebar selection survives rename collisions.
-LANDMARK_HELPER_ID_KEY = "pm_landmark_id"
-
-
 def ensure_landmark_collection(context: bpy.types.Context) -> bpy.types.Collection:
     """Return (creating if needed) the collection that holds landmark Empties."""
     name = "PM_Sync_Landmarks"
@@ -2658,26 +2659,39 @@ def _bind_landmark_helper(obj: bpy.types.Object, landmark) -> None:
     obj[LANDMARK_HELPER_ID_KEY] = landmark.item_id
 
 
-def landmark_index_for_helper(space, obj: bpy.types.Object | None) -> int:
-    """Collection index of the landmark this helper or Known 3D object represents, or -1."""
+def landmark_viewport_object(landmark) -> bpy.types.Object | None:
+    """Known 3D object for a landmark, else its solved PM helper when present."""
+    known_object = landmark.known_object
+    if known_object is not None and known_object.name in bpy.data.objects:
+        return known_object
+    base_name = safe_identifier(landmark.name) or landmark.item_id[:8]
+    helper = bpy.data.objects.get(f"PM_LM_{base_name}")
+    if helper is not None and helper.name in bpy.data.objects:
+        return helper
+    return None
+
+
+def select_landmark_viewport_object(
+    context: bpy.types.Context,
+    landmark,
+) -> None:
+    """Select the Known 3D object or solved helper for ``landmark`` in the viewport."""
+    obj = landmark_viewport_object(landmark)
     if obj is None:
-        return -1
-    if obj.name.startswith("PM_LM_"):
-        item_id = obj.get(LANDMARK_HELPER_ID_KEY, "")
-        if item_id:
-            for index, landmark in enumerate(space.landmarks):
-                if landmark.item_id == item_id:
-                    return index
-        # Helpers from older files may lack the id stamp; match the generated name.
-        for index, landmark in enumerate(space.landmarks):
-            base_name = safe_identifier(landmark.name) or landmark.item_id[:8]
-            if obj.name == f"PM_LM_{base_name}":
-                return index
-        return -1
-    for index, landmark in enumerate(space.landmarks):
-        if landmark.known_object == obj or landmark.known_object_b == obj:
-            return index
-    return -1
+        return
+    view_layer = getattr(context, "view_layer", None)
+    if view_layer is None or obj.name not in view_layer.objects:
+        return
+    if (
+        view_layer.objects.active == obj
+        and obj.select_get()
+        and len(view_layer.objects.selected) == 1
+    ):
+        return
+    for selected in view_layer.objects.selected:
+        selected.select_set(False)
+    obj.select_set(True)
+    view_layer.objects.active = obj
 
 
 def sync_landmark_empties(context: bpy.types.Context) -> None:

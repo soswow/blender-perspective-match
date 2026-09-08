@@ -529,7 +529,7 @@ def _apply_sidebar_landmark_from_selection() -> None:
     if view_layer is None:
         return None
     space = _workspace(context)
-    index = scene.landmark_index_for_helper(space, view_layer.objects.active)
+    index = scene.landmark_index_for_viewport_selection(space, view_layer)
     if index < 0 or space.active_landmark_index == index:
         return None
     _set_active_landmark(context, index)
@@ -600,7 +600,7 @@ def _set_active_landmark(context: bpy.types.Context, index: int) -> None:
     if index < 0 or index >= len(space.landmarks):
         return
     space.active_landmark_index = index
-    properties.tag_viewport_redraw(context)
+    # Viewport object selection and redraw run in _update_active_landmark_index.
 
 
 def _match_slot_from_event(event) -> int | None:

@@ -781,6 +781,19 @@ def main() -> None:
             bpy.context.scene.collection.objects.link(known_pin)
             space.landmarks[0].known_object = known_pin
             assert scene.landmark_index_for_helper(space, known_pin) == 0
+            parent_empty = bpy.data.objects.new("smoke_known_parent", None)
+            bpy.context.scene.collection.objects.link(parent_empty)
+            known_pin.parent = parent_empty
+            assert scene.landmark_index_for_helper(space, known_pin) == 0
+            view_layer = bpy.context.view_layer
+            for obj in view_layer.objects.selected:
+                obj.select_set(False)
+            parent_empty.select_set(True)
+            known_pin.select_set(True)
+            view_layer.objects.active = parent_empty
+            assert scene.landmark_index_for_viewport_selection(space, view_layer) == 0
+            known_pin.parent = None
+            bpy.data.objects.remove(parent_empty, do_unlink=True)
             known_end = bpy.data.objects.new("smoke_known_3d_b", None)
             bpy.context.scene.collection.objects.link(known_end)
             line_landmark = space.landmarks.add()
