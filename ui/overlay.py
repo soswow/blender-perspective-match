@@ -9,10 +9,11 @@ import bpy
 import gpu
 import numpy as np
 from gpu_extras.batch import batch_for_shader
-from mathutils import Vector
+from mathutils import Matrix, Vector
 
 from .. import core, properties, scene
 from .npanel import shows_perspective_match_tab
+from .overlay_gpu import circle_trs, rect_trs, segment_trs
 from .overlay_style import (
     AXIS_COLORS,
     PP_COLOR,
@@ -71,7 +72,9 @@ _DRAW_NAMESPACE_KEY = "perspective_match_draw_handle"
 _UI_VISIBILITY_NAMESPACE_KEY = "perspective_match_ui_visibility_handle"
 _LEGACY_SIDEBAR_DRAW_NAMESPACE_KEY = "perspective_match_sidebar_draw_handle"
 _SIDEBAR_TIMER_NAMESPACE_KEY = "perspective_match_sidebar_visibility_timer"
+_GPU_CACHE_NAMESPACE_KEY = "perspective_match_overlay_gpu_cache"
 _npanel_visible_by_area: dict[int, bool] = {}
+_gpu_cache: dict[str, object] | None = None
 _preview: dict[str, object] = {
     "kind": "",
     "start": None,
@@ -137,11 +140,17 @@ class _LineBatcher:
         for (color, thickness), positions in self._groups.items():
             if len(positions) < 2:
                 continue
-            batch = batch_for_shader(shader, "LINES", {"pos": positions})
             # Thickness is authored in logical px; Retina needs ui_scale.
             shader.uniform_float("lineWidth", thickness * scale)
             shader.uniform_float("color", color)
-            batch.draw(shader)
+            for index in range(0, len(positions) - 1, 2):
+                start = positions[index]
+                end = positions[index + 1]
+                _draw_unit_line(
+                    shader,
+                    Vector((start[0], start[1])),
+                    Vector((end[0], end[1])),
+                )
         self._groups.clear()
 
 
@@ -175,11 +184,85 @@ def interact_mode_label(mode: str) -> str:
 
 
 def _fill_shader():
-    return gpu.shader.from_builtin("UNIFORM_COLOR")
+    return _overlay_gpu()["fill"]
 
 
 def _line_shader():
-    return gpu.shader.from_builtin("POLYLINE_UNIFORM_COLOR")
+    return _overlay_gpu()["line"]
+
+
+def _overlay_gpu() -> dict[str, object]:
+    """Unit-geometry batches kept alive so Metal VBOs are not reallocated."""
+    global _gpu_cache
+    if _gpu_cache is not None:
+        return _gpu_cache
+    stored = bpy.app.driver_namespace.get(_GPU_CACHE_NAMESPACE_KEY)
+    if isinstance(stored, dict) and stored.get("ok"):
+        _gpu_cache = stored
+        return _gpu_cache
+    fill = gpu.shader.from_builtin("UNIFORM_COLOR")
+    line = gpu.shader.from_builtin("POLYLINE_UNIFORM_COLOR")
+    circle_steps = 32
+    circle_line = [
+        (math.cos(index / circle_steps * math.tau), math.sin(index / circle_steps * math.tau), 0.0)
+        for index in range(circle_steps + 1)
+    ]
+    circle_fill: list[tuple[float, float, float]] = []
+    for index in range(circle_steps):
+        angle_a = index / circle_steps * math.tau
+        angle_b = (index + 1) / circle_steps * math.tau
+        circle_fill.extend(
+            (
+                (0.0, 0.0, 0.0),
+                (math.cos(angle_a), math.sin(angle_a), 0.0),
+                (math.cos(angle_b), math.sin(angle_b), 0.0),
+            )
+        )
+    cache = {
+        "ok": True,
+        "fill": fill,
+        "line": line,
+        "unit_line": batch_for_shader(
+            line, "LINES", {"pos": [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0)]}
+        ),
+        "unit_quad": batch_for_shader(
+            fill,
+            "TRIS",
+            {
+                "pos": [
+                    (0.0, 0.0, 0.0),
+                    (1.0, 0.0, 0.0),
+                    (1.0, 1.0, 0.0),
+                    (0.0, 0.0, 0.0),
+                    (1.0, 1.0, 0.0),
+                    (0.0, 1.0, 0.0),
+                ]
+            },
+        ),
+        "unit_circle_line": batch_for_shader(fill, "LINE_STRIP", {"pos": circle_line}),
+        "unit_circle_fill": batch_for_shader(fill, "TRIS", {"pos": circle_fill}),
+    }
+    _gpu_cache = cache
+    bpy.app.driver_namespace[_GPU_CACHE_NAMESPACE_KEY] = cache
+    return cache
+
+
+def _clear_overlay_gpu() -> None:
+    global _gpu_cache
+    _gpu_cache = None
+    bpy.app.driver_namespace.pop(_GPU_CACHE_NAMESPACE_KEY, None)
+
+
+def _draw_unit_line(shader, point_a: Vector, point_b: Vector) -> None:
+    trs = segment_trs(float(point_a.x), float(point_a.y), float(point_b.x), float(point_b.y))
+    if trs is None:
+        return
+    origin_x, origin_y, angle, length = trs
+    with gpu.matrix.push_pop():
+        gpu.matrix.translate((origin_x, origin_y, 0.0))
+        gpu.matrix.multiply_matrix(Matrix.Rotation(angle, 4, "Z"))
+        gpu.matrix.scale((length, 1.0, 1.0))
+        _overlay_gpu()["unit_line"].draw(shader)
 
 
 def _with_alpha(color, alpha: float):
@@ -204,16 +287,11 @@ def _draw_line(
         _active_line_batcher.add_segment(point_a, point_b, color, thickness)
         return
     shader = _line_shader()
-    batch = batch_for_shader(
-        shader,
-        "LINES",
-        {"pos": [_as_pos3(point_a), _as_pos3(point_b)]},
-    )
     shader.bind()
     shader.uniform_float("viewportSize", gpu.state.viewport_get()[2:])
     shader.uniform_float("lineWidth", _s(thickness))
     shader.uniform_float("color", color)
-    batch.draw(shader)
+    _draw_unit_line(shader, point_a, point_b)
 
 
 def _draw_dashed_polyline(
@@ -504,25 +582,20 @@ def _draw_ideal_guide_line(
 def _draw_circle(shader, center: Vector | None, radius: float, color, *, filled: bool) -> None:
     if center is None:
         return
-    radius = _s(radius)
-    if filled:
-        vertices = [tuple(center)]
-        primitive = "TRI_FAN"
-        count = 33
-    else:
-        vertices = []
-        primitive = "LINE_LOOP"
-        count = 32
-    for index in range(count):
-        angle = index / 32.0 * math.tau
-        vertices.append((center.x + radius * math.cos(angle), center.y + radius * math.sin(angle)))
-    batch = batch_for_shader(shader, primitive, {"pos": vertices})
+    trs = circle_trs(float(center.x), float(center.y), _s(radius))
+    if trs is None:
+        return
+    origin_x, origin_y, scaled_radius = trs
     shader.bind()
     shader.uniform_float("color", color)
+    batch = _overlay_gpu()["unit_circle_fill" if filled else "unit_circle_line"]
     if not filled:
-        # LINE_LOOP width is framebuffer pixels; scale so outlines match 1× displays.
+        # LINE_STRIP width is framebuffer pixels; scale so outlines match 1× displays.
         gpu.state.line_width_set(max(1.0, _s(1.25)))
-    batch.draw(shader)
+    with gpu.matrix.push_pop():
+        gpu.matrix.translate((origin_x, origin_y, 0.0))
+        gpu.matrix.scale((scaled_radius, scaled_radius, 1.0))
+        batch.draw(shader)
     if not filled:
         gpu.state.line_width_set(1.0)
 
@@ -1013,21 +1086,16 @@ def _draw_landmark_labels(context: bpy.types.Context, settings) -> None:
 
 def _draw_rect(shader, x0: float, y0: float, x1: float, y1: float, color) -> None:
     """Axis-aligned filled rectangle in POST_PIXEL coordinates."""
-    batch = batch_for_shader(
-        shader,
-        "TRI_FAN",
-        {
-            "pos": [
-                (x0, y0),
-                (x1, y0),
-                (x1, y1),
-                (x0, y1),
-            ]
-        },
-    )
+    trs = rect_trs(x0, y0, x1, y1)
+    if trs is None:
+        return
+    origin_x, origin_y, width, height = trs
     shader.bind()
     shader.uniform_float("color", color)
-    batch.draw(shader)
+    with gpu.matrix.push_pop():
+        gpu.matrix.translate((origin_x, origin_y, 0.0))
+        gpu.matrix.scale((width, height, 1.0))
+        _overlay_gpu()["unit_quad"].draw(shader)
 
 
 def _region_overlap_insets(context: bpy.types.Context) -> tuple[float, float, float, float]:
@@ -1236,6 +1304,7 @@ def _draw_callback() -> None:
         return
     gpu.state.blend_set("ALPHA")
     try:
+        _overlay_gpu()
         # Mode chrome stays up even if the user orbits out of camera view.
         _draw_interact_mode_chrome(context, workspace)
         settings = properties.active_session(context)
@@ -1343,4 +1412,5 @@ def unregister_viewport_draw_handler() -> None:
     _draw_handle = None
     _ui_visibility_handle = None
     _npanel_visible_by_area.clear()
+    _clear_overlay_gpu()
     clear_preview()
