@@ -195,6 +195,18 @@ def _update_landmark_use_in_sync(_self, context: bpy.types.Context) -> None:
     tag_sync_ui_redraw(context)
 
 
+def _update_landmarks_sort_alphabetical(self, context: bpy.types.Context) -> None:
+    if self.landmarks_sort_alphabetical:
+        self.landmarks_sort_by_error = False
+    tag_viewport_redraw(context)
+
+
+def _update_landmarks_sort_by_error(self, context: bpy.types.Context) -> None:
+    if self.landmarks_sort_by_error:
+        self.landmarks_sort_alphabetical = False
+    tag_viewport_redraw(context)
+
+
 def _update_landmark_empties(_self, context: bpy.types.Context) -> None:
     """Rebuild point Empties / line meshes when visibility or size changes."""
     from .. import scene
@@ -1299,10 +1311,22 @@ class PMWorkspace(bpy.types.PropertyGroup):
         name="Sort A–Z",
         description=(
             "When enabled, list landmarks alphabetically by name. "
-            "When disabled, restore original add order"
+            "When disabled, restore original add order (unless Sort by Error is on)"
         ),
         default=False,
         options={"SKIP_SAVE"},
+        update=_update_landmarks_sort_alphabetical,
+    )
+    landmarks_sort_by_error: bpy.props.BoolProperty(
+        name="Sort by Error",
+        description=(
+            "When enabled, list landmarks by last sync reprojection error, "
+            "highest first. When disabled, restore original add order "
+            "(unless Sort A–Z is on)"
+        ),
+        default=False,
+        options={"SKIP_SAVE"},
+        update=_update_landmarks_sort_by_error,
     )
     landmarks_filter_current_match: bpy.props.BoolProperty(
         name="Filter to Current Match",

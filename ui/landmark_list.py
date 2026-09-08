@@ -133,18 +133,26 @@ def filter_flags(
 def sort_neworder(
     rows: tuple[LandmarkRowMeta, ...],
     *,
-    sort_alphabetical: bool,
+    sort_alphabetical: bool = False,
+    sort_by_error: bool = False,
+    rmse_px: tuple[float, ...] = (),
 ) -> list[int]:
     """``neworder[old_index] = new_index``, matching ``UI_UL_list.sort_items_helper``."""
     if not rows:
         return []
     if any(row.creation_index < 0 for row in rows):
         return []
-    if sort_alphabetical:
-        keyed = list(enumerate(rows))
+    keyed = list(enumerate(rows))
+    if sort_by_error:
+        keyed.sort(
+            key=lambda item: (
+                -float(rmse_px[item[0]] if item[0] < len(rmse_px) else 0.0),
+                item[1].name.lower(),
+            )
+        )
+    elif sort_alphabetical:
         keyed.sort(key=lambda item: item[1].name.lower())
     else:
-        keyed = list(enumerate(rows))
         keyed.sort(key=lambda item: item[1].creation_index)
     neworder = [0] * len(rows)
     for new_index, (old_index, _row) in enumerate(keyed):

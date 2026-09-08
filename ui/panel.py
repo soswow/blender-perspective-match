@@ -82,9 +82,12 @@ class PM_UL_landmarks(bpy.types.UIList):
             filter_current=bool(getattr(data, "landmarks_filter_current_match", False)),
             bitflag=self.bitflag_filter_item,
         )
+        rmse_px = tuple(float(getattr(landmark, "rmse_px", 0.0) or 0.0) for landmark in landmarks)
         flt_neworder = landmark_list.sort_neworder(
             rows,
             sort_alphabetical=bool(getattr(data, "landmarks_sort_alphabetical", False)),
+            sort_by_error=bool(getattr(data, "landmarks_sort_by_error", False)),
+            rmse_px=rmse_px,
         )
         return flt_flags, flt_neworder
 
@@ -549,6 +552,13 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             "landmarks_sort_alphabetical",
             text="",
             icon="SORTALPHA",
+            toggle=True,
+        )
+        list_column.prop(
+            workspace,
+            "landmarks_sort_by_error",
+            text="",
+            icon="SORT_DESC",
             toggle=True,
         )
         list_column.prop(

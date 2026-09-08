@@ -132,6 +132,24 @@ class LandmarkListTests(unittest.TestCase):
         self.assertEqual(alpha[1], 0)
         self.assertEqual(alpha[0], 1)
 
+    def test_sort_by_error_descending(self) -> None:
+        rows = landmark_list.collect_landmark_rows(
+            (
+                _landmark(item_id="low", name="Low", creation_index=1),
+                _landmark(item_id="high", name="High", creation_index=2),
+                _landmark(item_id="mid", name="Mid", creation_index=3),
+            )
+        )
+        rmse_px = (2.0, 12.0, 5.0)
+        by_error = landmark_list.sort_neworder(
+            rows,
+            sort_by_error=True,
+            rmse_px=rmse_px,
+        )
+        self.assertEqual(by_error[1], 0)
+        self.assertEqual(by_error[2], 1)
+        self.assertEqual(by_error[0], 2)
+
     def test_legacy_creation_index_keeps_collection_order(self) -> None:
         rows = landmark_list.collect_landmark_rows(
             (
