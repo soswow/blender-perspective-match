@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- When a Perspective Match camera is moved off its stored pose, landmark px errors hide and Camera offers Restore Stored or Capture Live
 - Landmark list toggle to sort by last sync reprojection error (highest first)
 - Diagnose opens a self-contained local HTML report with actionable issues, camera connectivity, match status, sortable landmark errors, and export controls
 - Per-match **Lock Pose in Sync** keeps a trusted camera fixed while its landmark picks constrain the rest of the sync graph

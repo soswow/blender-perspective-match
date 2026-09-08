@@ -739,6 +739,17 @@ def main() -> None:
             scene.apply_camera(bpy.context.scene, session_a, scene.calibration_from_settings(session_a))
             scene.apply_camera(bpy.context.scene, session_b, scene.calibration_from_settings(session_b))
 
+            scene.set_active_match(bpy.context, root_sync_a)
+            assert not scene.matched_camera_has_drifted(session_a)
+            session_a.camera_object.location.x += 0.2
+            assert scene.matched_camera_has_drifted(session_a)
+            scene.restore_stored_matched_camera(bpy.context)
+            assert not scene.matched_camera_has_drifted(session_a)
+            session_a.camera_object.location.y -= 0.15
+            assert scene.matched_camera_has_drifted(session_a)
+            scene.capture_live_matched_camera(bpy.context)
+            assert not scene.matched_camera_has_drifted(session_a)
+
             space = properties.workspace(bpy.context)
             space.anchor_root = root_sync_a
             properties.sync_anchor_match_enum(space, root_sync_a.name)

@@ -72,6 +72,44 @@ class Calibration:
         )
 
 
+# MATCHED-mode live Camera vs stored solve. Below this, float roundtrip is noise.
+MATCHED_CAMERA_CENTER_TOL_M = 0.01
+MATCHED_CAMERA_ANGLE_TOL_DEG = 0.15
+MATCHED_CAMERA_FOCAL_RATIO = 0.005
+MATCHED_CAMERA_SCALE_TOL = 0.005
+MATCHED_CAMERA_PP_TOL_PX = 2.0
+
+
+def private_pose_is_drifted(
+    stored: Calibration,
+    live: Calibration,
+    *,
+    live_scale: float = 1.0,
+) -> bool:
+    """True when a MATCHED Blender camera no longer matches the stored solve."""
+    center_delta = float(np.linalg.norm(live.camera_center - stored.camera_center))
+    rotation_delta = stored.rotation_w2c @ live.rotation_w2c.T
+    cosine = 0.5 * (float(np.trace(rotation_delta)) - 1.0)
+    angle_deg = float(np.degrees(np.arccos(min(1.0, max(-1.0, cosine)))))
+    stored_fx = max(float(stored.intrinsics.fx), 1.0)
+    live_fx = max(float(live.intrinsics.fx), 1.0)
+    focal_ratio = abs(live_fx - stored_fx) / stored_fx
+    pp_delta = float(
+        np.hypot(
+            live.intrinsics.cx - stored.intrinsics.cx,
+            live.intrinsics.cy - stored.intrinsics.cy,
+        )
+    )
+    scale_delta = abs(float(live_scale) - 1.0)
+    return (
+        center_delta > MATCHED_CAMERA_CENTER_TOL_M
+        or angle_deg > MATCHED_CAMERA_ANGLE_TOL_DEG
+        or focal_ratio > MATCHED_CAMERA_FOCAL_RATIO
+        or pp_delta > MATCHED_CAMERA_PP_TOL_PX
+        or scale_delta > MATCHED_CAMERA_SCALE_TOL
+    )
+
+
 def focal_from_hfov(hfov_degrees: float, image_width: int) -> float:
     """Convert horizontal field of view to focal length in pixels."""
     angle = np.radians(max(1.0e-4, min(179.0, hfov_degrees)))

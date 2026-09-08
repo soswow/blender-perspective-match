@@ -70,6 +70,95 @@ def uses_adjusted_camera(settings: properties.PMSession | None) -> bool:
     )
 
 
+def matched_camera_has_drifted(settings: properties.PMSession | None) -> bool:
+    """True in MATCHED mode when the Camera object disagrees with stored RNA."""
+    if settings is None or uses_adjusted_camera(settings):
+        return False
+    if float(getattr(settings, "fx", 0.0) or 0.0) <= 0.0:
+        return False
+    camera_object = getattr(settings, "camera_object", None)
+    if camera_object is None or camera_object.type != "CAMERA":
+        return False
+    stored = _stored_calibration_from_settings(settings)
+    location = camera_object.location
+    center_delta = float(
+        np.linalg.norm(
+            np.array(
+                (
+                    float(location.x) - float(stored.camera_center[0]),
+                    float(location.y) - float(stored.camera_center[1]),
+                    float(location.z) - float(stored.camera_center[2]),
+                ),
+                dtype=np.float64,
+            )
+        )
+    )
+    scale_xyz = camera_object.scale
+    live_scale = max(
+        abs(float(scale_xyz[0])),
+        abs(float(scale_xyz[1])),
+        abs(float(scale_xyz[2])),
+    )
+    if (
+        center_delta > core.MATCHED_CAMERA_CENTER_TOL_M
+        or abs(live_scale - 1.0) > core.MATCHED_CAMERA_SCALE_TOL
+    ):
+        return True
+    try:
+        live = calibration_from_adjusted_camera(settings)
+    except (ValueError, AttributeError):
+        return False
+    return core.private_pose_is_drifted(stored, live, live_scale=live_scale)
+
+
+def restore_stored_matched_camera(context: bpy.types.Context) -> core.Calibration:
+    """Write stored MATCHED calibration onto the Blender camera."""
+    settings = properties.active_session(context)
+    if settings is None:
+        raise ValueError("Activate a match camera first")
+    if uses_adjusted_camera(settings):
+        raise ValueError("Adjusted Camera already owns the live pose")
+    calibration = _stored_calibration_from_settings(settings)
+    apply_camera(context.scene, settings, calibration)
+    settings.status = "Restored camera from stored match"
+    settings.error = ""
+    properties.tag_sync_ui_redraw(context)
+    return calibration
+
+
+def capture_live_matched_camera(context: bpy.types.Context) -> core.Calibration:
+    """Store the live MATCHED camera pose/FOV as the session calibration."""
+    settings = properties.active_session(context)
+    if settings is None:
+        raise ValueError("Activate a match camera first")
+    if uses_adjusted_camera(settings):
+        raise ValueError("Adjusted Camera already owns the live pose")
+    live = calibration_from_adjusted_camera(settings)
+    stored = _stored_calibration_from_settings(settings)
+    live.division_lambda = stored.division_lambda
+    live.lambda_saturated = stored.lambda_saturated
+    live.brown_conrady = stored.brown_conrady
+    apply_camera(context.scene, settings, live)
+    _clear_stale_sync_rmse(context)
+    settings.status = "Captured live camera as the stored match · re-run Solve Sync"
+    settings.error = ""
+    properties.tag_sync_ui_redraw(context)
+    return live
+
+
+def _clear_stale_sync_rmse(context: bpy.types.Context) -> None:
+    """Drop last-solve px errors; they were measured against a different camera."""
+    space = properties.workspace(context)
+    for landmark in space.landmarks:
+        landmark.rmse_px = 0.0
+    settings = properties.active_session(context)
+    if settings is not None:
+        settings.sync_rmse_px = 0.0
+    space.sync_status = (
+        "Camera captured from viewport · re-run Solve Sync to refresh px errors"
+    )
+
+
 def _stored_calibration_from_settings(
     settings: properties.PMSession,
 ) -> core.Calibration:

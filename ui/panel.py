@@ -60,9 +60,12 @@ class PM_UL_landmarks(bpy.types.UIList):
         count = 0 if row_meta is None else row_meta.observation_count
         weight = float(getattr(item, "sync_weight", 1.0))
         weight_mark = f" · ×{weight:g}" if abs(weight - 1.0) > 0.05 else ""
+        hide_rmse = scene.matched_camera_has_drifted(
+            properties.active_session(_context)
+        )
         if not item.use_in_sync:
             meta.label(text=f"{count} · off{weight_mark}")
-        elif item.rmse_px > 0.5:
+        elif not hide_rmse and item.rmse_px > 0.5:
             meta.label(text=f"{count} · {item.rmse_px:.0f}px{weight_mark}")
         else:
             meta.label(text=f"{count}{weight_mark}")
@@ -82,7 +85,15 @@ class PM_UL_landmarks(bpy.types.UIList):
             filter_current=bool(getattr(data, "landmarks_filter_current_match", False)),
             bitflag=self.bitflag_filter_item,
         )
-        rmse_px = tuple(float(getattr(landmark, "rmse_px", 0.0) or 0.0) for landmark in landmarks)
+        hide_rmse = scene.matched_camera_has_drifted(
+            properties.active_session(context)
+        )
+        rmse_px = tuple(
+            0.0
+            if hide_rmse
+            else float(getattr(landmark, "rmse_px", 0.0) or 0.0)
+            for landmark in landmarks
+        )
         flt_neworder = landmark_list.sort_neworder(
             rows,
             sort_alphabetical=bool(getattr(data, "landmarks_sort_alphabetical", False)),
@@ -314,6 +325,23 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
                 camera.label(
                     text="Live camera transform and FOV are preserved",
                     icon="LOCKED",
+                )
+            elif scene.matched_camera_has_drifted(settings):
+                drift = camera.box()
+                drift.alert = True
+                drift.label(
+                    text="Camera pose drifted from stored match",
+                    icon="ERROR",
+                )
+                drift.label(text="Landmark px errors hide until you choose")
+                drift_row = drift.row(align=True)
+                drift_row.operator(
+                    "perspective_match.restore_stored_camera",
+                    text="Restore Stored",
+                )
+                drift_row.operator(
+                    "perspective_match.capture_live_camera",
+                    text="Capture Live",
                 )
             # Full-width toolbar: property_split would shrink buttons to the value column.
             camera_actions = camera.column(align=True)
@@ -676,15 +704,19 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
                         row.prop(observation, "confidence", text="")
                     else:
                         row.label(text=f"{label}: —", icon="DOT")
-                if landmark.has_position or landmark.rmse_px > 0.5:
-                    detail = f"Last sync RMSE {landmark.rmse_px:.2f} px"
+                hide_rmse = scene.matched_camera_has_drifted(settings)
+                if landmark.has_position or (not hide_rmse and landmark.rmse_px > 0.5):
+                    if hide_rmse:
+                        detail = "Last sync RMSE hidden (camera pose drifted)"
+                    else:
+                        detail = f"Last sync RMSE {landmark.rmse_px:.2f} px"
                     if landmark.has_position:
                         detail += (
                             f" · ({landmark.position[0]:.2f}, "
                             f"{landmark.position[1]:.2f}, "
                             f"{landmark.position[2]:.2f})"
                         )
-                    else:
+                    elif not hide_rmse:
                         detail += " · diagnose/reject"
                     confidence_body.label(text=detail, icon="EMPTY_AXIS")
 
@@ -810,13 +842,19 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
                     icon="INFO" if index == 0 else "NONE",
                 )
         if settings is not None and settings.sync_last_ok and settings.sync_is_applied:
-            sync_body.label(
-                text=(
-                    f"This match sync RMSE {settings.sync_rmse_px:.2f} px · "
-                    f"s={settings.sync_scale:.3f}"
-                ),
-                icon="CHECKMARK",
-            )
+            if scene.matched_camera_has_drifted(settings):
+                sync_body.label(
+                    text="This match RMSE hidden — camera pose drifted",
+                    icon="ERROR",
+                )
+            else:
+                sync_body.label(
+                    text=(
+                        f"This match sync RMSE {settings.sync_rmse_px:.2f} px · "
+                        f"s={settings.sync_scale:.3f}"
+                    ),
+                    icon="CHECKMARK",
+                )
 
 
 CLASSES = (

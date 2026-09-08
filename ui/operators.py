@@ -890,6 +890,50 @@ class PM_OT_apply_manual_fov(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class PM_OT_restore_stored_camera(bpy.types.Operator):
+    """Move the Blender camera back to the stored Perspective Match pose."""
+
+    bl_idname = "perspective_match.restore_stored_camera"
+    bl_label = "Restore Stored"
+    bl_description = "Move this camera back to the stored Perspective Match pose"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        settings = _session(context)
+        return settings is not None and scene.matched_camera_has_drifted(settings)
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        try:
+            scene.restore_stored_matched_camera(context)
+        except Exception as error:
+            return _report_exception(self, error)
+        self.report({"INFO"}, "Restored camera from stored match")
+        return {"FINISHED"}
+
+
+class PM_OT_capture_live_camera(bpy.types.Operator):
+    """Save the live camera pose and FOV as the stored match."""
+
+    bl_idname = "perspective_match.capture_live_camera"
+    bl_label = "Capture Live"
+    bl_description = "Save this camera's pose and FOV as the stored match"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        settings = _session(context)
+        return settings is not None and scene.matched_camera_has_drifted(settings)
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        try:
+            scene.capture_live_matched_camera(context)
+        except Exception as error:
+            return _report_exception(self, error)
+        self.report({"INFO"}, "Captured live camera as the stored match")
+        return {"FINISHED"}
+
+
 class PM_OT_reset_camera(bpy.types.Operator):
     """Reset PP/distortion and use the current manual FOV."""
 
@@ -4040,6 +4084,8 @@ CLASSES = (
     PM_OT_refine,
     PM_OT_camera_view,
     PM_OT_apply_manual_fov,
+    PM_OT_restore_stored_camera,
+    PM_OT_capture_live_camera,
     PM_OT_reset_camera,
     PM_OT_edit_pp_offset,
     PM_OT_clear_axis,
