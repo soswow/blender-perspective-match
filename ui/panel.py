@@ -63,9 +63,19 @@ class PM_UL_landmarks(bpy.types.UIList):
         hide_rmse = scene.matched_camera_has_drifted(
             properties.active_session(_context)
         )
+        filter_local = bool(
+            getattr(_data, "landmarks_filter_current_match", False)
+        )
+        local_rmse = None
+        if filter_local and not hide_rmse:
+            local_rmse = scene.landmark_rmse_px_in_match(
+                item, properties.active_root(_context)
+            )
         if not item.use_in_sync:
             meta.label(text=f"{count} · off{weight_mark}")
-        elif not hide_rmse and item.rmse_px > 0.5:
+        elif local_rmse is not None and local_rmse > 0.5:
+            meta.label(text=f"{count} · {local_rmse:.0f}px{weight_mark}")
+        elif not hide_rmse and not filter_local and item.rmse_px > 0.5:
             meta.label(text=f"{count} · {item.rmse_px:.0f}px{weight_mark}")
         else:
             meta.label(text=f"{count}{weight_mark}")
@@ -88,10 +98,18 @@ class PM_UL_landmarks(bpy.types.UIList):
         hide_rmse = scene.matched_camera_has_drifted(
             properties.active_session(context)
         )
+        filter_local = bool(getattr(data, "landmarks_filter_current_match", False))
+        root = properties.active_root(context) if filter_local else None
         rmse_px = tuple(
             0.0
             if hide_rmse
-            else float(getattr(landmark, "rmse_px", 0.0) or 0.0)
+            else (
+                float(
+                    scene.landmark_rmse_px_in_match(landmark, root) or 0.0
+                )
+                if filter_local
+                else float(getattr(landmark, "rmse_px", 0.0) or 0.0)
+            )
             for landmark in landmarks
         )
         flt_neworder = landmark_list.sort_neworder(
@@ -705,9 +723,27 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
                     else:
                         row.label(text=f"{label}: —", icon="DOT")
                 hide_rmse = scene.matched_camera_has_drifted(settings)
-                if landmark.has_position or (not hide_rmse and landmark.rmse_px > 0.5):
+                local_rmse = (
+                    None
+                    if hide_rmse
+                    else scene.landmark_rmse_px_in_match(
+                        landmark, properties.active_root(context)
+                    )
+                )
+                if landmark.has_position or (
+                    not hide_rmse
+                    and (
+                        (local_rmse is not None and local_rmse > 0.5)
+                        or landmark.rmse_px > 0.5
+                    )
+                ):
                     if hide_rmse:
                         detail = "Last sync RMSE hidden (camera pose drifted)"
+                    elif local_rmse is not None:
+                        detail = (
+                            f"This match {local_rmse:.2f} px"
+                            f" · all views {landmark.rmse_px:.2f} px"
+                        )
                     else:
                         detail = f"Last sync RMSE {landmark.rmse_px:.2f} px"
                     if landmark.has_position:

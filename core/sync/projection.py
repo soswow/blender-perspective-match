@@ -507,6 +507,47 @@ def _line_observation_reprojection_errors(
     ]
 
 
+def observation_reprojection_rmse_px(
+    *,
+    kind: str,
+    point_a: np.ndarray,
+    point_b: np.ndarray | None,
+    u: float,
+    v: float,
+    u2: float = 0.0,
+    v2: float = 0.0,
+    calibration: core.Calibration,
+    similarity: SimilarityTransform,
+) -> float | None:
+    """RMSE of one still's pick against a solved 3D point or infinite line."""
+    if kind == "LINE":
+        if point_b is None:
+            return None
+        observation = SyncLineObservation(
+            match_id="",
+            landmark_id="",
+            u1=float(u),
+            v1=float(v),
+            u2=float(u2),
+            v2=float(v2),
+        )
+        errors = _line_observation_reprojection_errors(
+            0.5 * (np.asarray(point_a, dtype=np.float64) + np.asarray(point_b, dtype=np.float64)),
+            np.asarray(point_b, dtype=np.float64) - np.asarray(point_a, dtype=np.float64),
+            observation,
+            calibration,
+            similarity,
+        )
+        return float(np.sqrt(np.mean(np.square(errors))))
+    projected = project_private_point(
+        similarity.inverse_point(np.asarray(point_a, dtype=np.float64)),
+        calibration,
+    )
+    if projected is None:
+        return None
+    return float(np.hypot(projected[0] - float(u), projected[1] - float(v)))
+
+
 def _known_line_reprojection_errors(
     point_a: np.ndarray,
     point_b: np.ndarray,

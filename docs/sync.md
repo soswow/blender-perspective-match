@@ -33,7 +33,7 @@ The ground plane determines Z but has no preferred compass direction, so anchor 
 Each landmark keeps a stable `item_id` plus a `creation_index` (add order). UI helpers:
 
 - **A–Z** toggle: alphabetical by name vs original add order (display only).
-- **Filter** toggle: show only landmarks with a pick defined in the active match.
+- **Filter** toggle: show only landmarks with a pick defined in the active match. List px and **Sort by Error** then use this still's overlay miss instead of the all-views RMSE. The selected landmark always shows both numbers when this still can be scored.
 - **Font** toggle: show landmark names next to picks on the plate.
 - Click a pick on the plate to select it in the list (while the **Perspective Match** sidebar tab is open). The selected pick draws in red. **On Ground** picks draw in magenta; Known 3D picks in cyan.
 - **Duplicate**: copies type / On Ground / Use in Sync / Sync Weight, clears Known 3D links, parallel links, mirror links, picks, and solved positions.

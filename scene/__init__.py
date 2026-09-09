@@ -2908,6 +2908,52 @@ def observation_for_match(landmark, root: bpy.types.Object | None):
     return None
 
 
+def similarity_from_root(root: bpy.types.Object):
+    """Live Empty pose as a shared-world similarity (same as Lock Pose in Sync)."""
+    from ..core import sync as sync_module
+
+    location, rotation, scale_xyz = root.matrix_world.decompose()
+    scale = sum(abs(float(value)) for value in scale_xyz) / 3.0
+    return sync_module.SimilarityTransform(
+        scale=scale,
+        rotation=np.array(rotation.to_matrix(), dtype=np.float64),
+        translation=np.array(location, dtype=np.float64),
+    )
+
+
+def landmark_rmse_px_in_match(landmark, root: bpy.types.Object | None) -> float | None:
+    """This still's overlay miss for a landmark, or None when it cannot be scored."""
+    from ..core.sync.projection import observation_reprojection_rmse_px
+
+    if root is None or not getattr(landmark, "has_position", False):
+        return None
+    observation = observation_for_match(landmark, root)
+    if observation is None or not observation.is_set:
+        return None
+    session = getattr(root, "pm_session", None)
+    if session is None or session.image is None:
+        return None
+    if not uses_adjusted_camera(session) and float(session.fx) <= 0.0:
+        return None
+    kind = str(getattr(landmark, "kind", "POINT") or "POINT")
+    point_b = None
+    if kind == "LINE":
+        if not getattr(landmark, "has_line_segment", False):
+            return None
+        point_b = np.array(landmark.position_b, dtype=np.float64)
+    return observation_reprojection_rmse_px(
+        kind=kind,
+        point_a=np.array(landmark.position, dtype=np.float64),
+        point_b=point_b,
+        u=float(observation.x),
+        v=float(observation.y),
+        u2=float(getattr(observation, "x2", 0.0) or 0.0),
+        v2=float(getattr(observation, "y2", 0.0) or 0.0),
+        calibration=calibration_from_settings(session),
+        similarity=similarity_from_root(root),
+    )
+
+
 def _private_point_from_world(
     root: bpy.types.Object,
     world_location,

@@ -1325,9 +1325,9 @@ class PMWorkspace(bpy.types.PropertyGroup):
     landmarks_sort_by_error: bpy.props.BoolProperty(
         name="Sort by Error",
         description=(
-            "When enabled, list landmarks by last sync reprojection error, "
-            "highest first. When disabled, restore original add order "
-            "(unless Sort A–Z is on)"
+            "When enabled, list landmarks by reprojection error, highest first "
+            "(this still when Filter is on, otherwise all views). "
+            "When disabled, restore original add order (unless Sort A–Z is on)"
         ),
         default=False,
         options={"SKIP_SAVE"},
@@ -1335,7 +1335,10 @@ class PMWorkspace(bpy.types.PropertyGroup):
     )
     landmarks_filter_current_match: bpy.props.BoolProperty(
         name="Filter to Current Match",
-        description="Show only landmarks with a pick in the active match",
+        description=(
+            "Show only landmarks with a pick in the active match, "
+            "and list px error for this still instead of the all-views RMSE"
+        ),
         default=False,
         options={"SKIP_SAVE"},
     )

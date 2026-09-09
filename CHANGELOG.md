@@ -40,6 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Iterate Known 3D** repeats Auto from VPs (Use Known 3D) and Solve Sync until joint RMSE stops improving, so a moved match Empty can still pull FOV and camera
 
 ### Changed
+- Filter to Current Match lists this still's overlay px error (and Sort by Error uses it) instead of the all-views RMSE
 - Selecting a landmark in the Sync list selects its Known 3D object (or solved helper) in the viewport, including when that object is parented under another object
 - Drawing a landmark line rubber-band uses the selected-pick red, not the current VP axis color
 - Solve Sync uses a one-view **Is Mirror Of** line when placing a recovered camera, then pose-only BA of those stills
