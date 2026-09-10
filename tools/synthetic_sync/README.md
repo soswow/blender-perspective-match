@@ -148,6 +148,44 @@ a solver shortcut.
 
 ## Maintenance and CI
 
+### Evidence-placement follow-up
+
+```sh
+python3 tools/synthetic_sync/evidence.py --trials 8 --out /tmp/pm-evidence
+```
+
+This bounded experiment keeps the two overhead camera arrangements fixed and
+resamples only pick noise. It compares two predeclared new landmarks: an outer
+surface point and a central raised point. Both require three picks. A two-pick
+support-only control isolates the effect of adding the overhead observation.
+Supporting observations are identical in each paired comparison; Known 3D truth
+is never supplied. New candidates are disjoint from the unchanged withheld
+checks. The original flagged draws are reported separately from fresh draws.
+
+Use repeated `--case path.json` arguments to start from exact saved overhead
+cases. The default reads the two frozen JSON files in `cases/`, preserving the
+original inputs if the generator changes. Fresh noise seeds start at 100 and
+are reused across the two layouts, so the 16 layout/draw comparisons contain
+eight independent noise patterns rather than 16 independent scene trials.
+Output must be an empty directory. `protocol.json`
+records the candidates and decision rule before any solve; `summary.md` and
+`summary.json` retain paired improvements, failures and per-height errors.
+Every variant also has an exact replayable case/result and a withheld overlay
+in `report.html`. Baseline zero/half-noise controls scale the same error vector.
+
+The default is 94 solves (16 fresh draws × five variants, plus two original
+draws × seven variants), around several minutes locally. It is an on-demand
+experiment, not a mandatory CI sweep. Its exit status reports execution errors;
+accuracy flags remain measured outcomes in the report. Replay an individual case
+with `run.py --case ...` to enforce its accuracy contract as an exit status.
+
+The candidate policy is specified using the synthetic object's known structure;
+it is not yet advice inferred from uncertain real-world picks. The two layouts
+are small variations of one object, so they cannot establish a universal picking
+rule. See `tests/test_synthetic_evidence.py` for the paired-evidence safeguards.
+The [initial evidence-placement results](evidence-results.md) record why the
+first run did not justify a new product rule.
+
 `tests/test_synthetic_sync.py` checks the oracle and nine exact seed-zero cases.
 Run just that module with `./scripts/run-unittests.sh test_synthetic_sync`.
 The test runner explicitly loads the numerical package without Blender's entry
