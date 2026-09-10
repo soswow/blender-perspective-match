@@ -23,12 +23,23 @@ def write_report(results: list, path: Path, reference_images=None) -> None:
     sections = []
     for case, record, assessment in results:
         title = f"{case['name']} · {'PASS' if assessment['passed'] else 'FAIL'}"
+        if case["expectation"]["outcome"] != "solve":
+            title += " · expected " + case["expectation"]["outcome"]
         bits = [f"<h2>{escape(title)}</h2><p>Fitted-pick RMSE: {record['reported_rmse_px']:.3f}px. "
                 f"Runtime: {record['elapsed_s']:.2f}s. Gauge: {escape(assessment['gauge'])}.</p>"]
         bits.append(f"<p>{escape(record['message'])}</p>")
         if record.get("exception"):
             bits.append(f"<pre>{escape(record['exception'])}</pre>")
         bits.append("<ul>" + "".join(f"<li>{escape(item)}</li>" for item in assessment["violations"]) + "</ul>")
+        bits.append("<ul>" + "".join(f"<li>{escape(item)}</li>" for item in assessment.get("warnings", [])) + "</ul>")
+        geometry = assessment.get("geometry", {})
+        if any(geometry.values()):
+            bits.append("<h3>Required reconstructed geometry</h3><table><tr><th>Feature</th><th>Error / object diagonal</th><th>Line angle</th></tr>")
+            for key, metrics in geometry.get("points", {}).items():
+                bits.append(f"<tr><td>{escape(key)}</td><td>{100*metrics['error_fraction']:.4f}%</td><td>—</td></tr>")
+            for key, metrics in geometry.get("lines", {}).items():
+                bits.append(f"<tr><td>{escape(key)}</td><td>{100*metrics['offset_fraction']:.4f}%</td><td>{metrics['angle_deg']:.4f}°</td></tr>")
+            bits.append("</table>")
         for key, metrics in assessment["cameras"].items():
             camera = next(c for c in case["truth"]["cameras"] if c["id"] == key)
             bits.append(f"<h3>{escape(key)} · withheld object RMS {metrics['holdout_rmse_px']:.3f}px · "
@@ -47,7 +58,8 @@ def write_report(results: list, path: Path, reference_images=None) -> None:
         sections.append("\n".join(bits))
     path.write_text("<!doctype html><meta charset='utf-8'><title>Synthetic Sync checks</title>"
         "<style>body{font:16px system-ui;max-width:960px;margin:40px auto;background:#18212c;color:#eef3f7}"
-        "svg{width:100%;max-width:600px;background:#0e1620;border:1px solid #546574}h2{margin-top:50px}</style>"
+        "svg{width:100%;max-width:600px;background:#0e1620;border:1px solid #546574}h2{margin-top:50px}"
+        "td,th{padding:6px 12px;text-align:left}table{border-collapse:collapse}tr{border-bottom:1px solid #546574}</style>"
         "<h1>Synthetic Sync: withheld object geometry</h1><p>Green rings: true projection. Red: recovered camera. "
         "These points were never supplied to the solver. A small fitted-pick error alone is insufficient.</p>"
         + "\n".join(sections), encoding="utf-8")

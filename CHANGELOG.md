@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Solve Sync and Diagnose flag free and mirrored lines whose 3D position or direction is sensitive to small stroke edits, even when their pixel fit is good.
+
 ## [0.5.0] - 2026-09-10
 
 ### Added

@@ -33,6 +33,23 @@ def _point(match_id: str, landmark_id: str, name: str = ""):
 class SyncReportTests(unittest.TestCase):
     """The browser report should stay structured, safe, and self-contained."""
 
+    def test_low_error_weak_line_is_marked_for_review_and_escaped(self):
+        result = SimpleNamespace(success=True, similarities={"anchor":object(),"side":object()},
+            landmarks={"line":object()}, mean_reprojection_px=0.2,
+            per_match_rmse_px={"side":0.2},per_landmark_rmse_px={"line":0.1},
+            weak_line_ids=["line"],line_support_angles_deg={"line":1.2})
+        report = sync_report.build_sync_report(operation="Diagnose",source_name="synthetic.blend",
+            matches=[SimpleNamespace(match_id="anchor"),SimpleNamespace(match_id="side")],
+            observations=[],line_observations=[SimpleNamespace(match_id="side",landmark_id="line",landmark_name="<edge>")],
+            result=result,anchor_id="anchor")
+        self.assertEqual(report.severity,"warning")
+        self.assertIn("weak line",report.outcome)
+        html = sync_report.render_sync_report_html(report)
+        self.assertIn("Weak 3D support (1.2°)",html)
+        self.assertIn("&lt;edge&gt;",html)
+        self.assertNotIn("<edge>",html)
+        self.assertIn("confidence interval",html)
+
     def _partial_report(self):
         matches = [
             SimpleNamespace(match_id="anchor"),

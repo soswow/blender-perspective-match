@@ -74,7 +74,9 @@ def result_record(result, cameras: list[dict]) -> dict:
     return dict(success=bool(result.success), message=result.message,
         reported_rmse_px=float(result.mean_reprojection_px), cameras=recovered,
         landmarks={key: np.asarray(value).tolist() for key, value in result.landmarks.items()},
-        line_segments={key: [np.asarray(p).tolist() for p in value] for key, value in result.line_segments.items()})
+        line_segments={key: [np.asarray(p).tolist() for p in value] for key, value in result.line_segments.items()},
+        line_support_angles_deg=dict(getattr(result,"line_support_angles_deg",{})),
+        weak_line_ids=list(getattr(result,"weak_line_ids",[])))
 
 
 def fingerprint(request: dict) -> str:

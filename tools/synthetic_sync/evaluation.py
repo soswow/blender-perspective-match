@@ -40,7 +40,8 @@ def evaluate(case: dict, record: dict) -> dict:
     """Require camera coverage and held-out geometry; never trust reported RMSE."""
     expectation = case["expectation"]
     violations = []
-    output = dict(passed=False, violations=violations, cameras={}, gauge=expectation["gauge"])
+    output = dict(passed=False, violations=violations, cameras={}, gauge=expectation["gauge"],
+                  expected_outcome=expectation["outcome"], warnings=[])
     if record.get("exception"):
         violations.append("Solver raised an exception; this is not a useful refusal")
         return output
@@ -53,6 +54,10 @@ def evaluate(case: dict, record: dict) -> dict:
         return output
     if not record["success"]:
         violations.append("Solver rejected a constrained case: " + record["message"])
+    expected_weak = set(expectation.get("weak_lines", []))
+    reported_weak = set(record.get("weak_line_ids", []))
+    for key in sorted(expected_weak-reported_weak):
+        violations.append(f"{key}: weak geometry was not reported")
     for key in expectation["excluded_cameras"]:
         if record["success"] and key in record["cameras"]:
             violations.append(f"{key}: disconnected camera was reported as registered")
@@ -71,6 +76,42 @@ def evaluate(case: dict, record: dict) -> dict:
         return output
     output["alignment"] = dict(scale=transform[0], rotation=transform[1].tolist(), translation=transform[2].tolist())
     extent = float(np.linalg.norm(np.ptp(np.asarray(case["truth"]["mesh"]["vertices"]), axis=0)))
+    output["geometry"] = dict(points={}, lines={})
+    for field, kind in (("landmarks", "points"), ("line_segments", "lines")):
+        for key in expectation.get("excluded_" + kind, []):
+            if key in record[field]:
+                violations.append(f"{key}: reconstructed an unconstrained single-view {kind[:-1]}")
+    scale, rotation, translation = transform
+    for key in expectation.get("required_points", []):
+        if key not in record["landmarks"]:
+            violations.append(f"{key}: required reconstructed point missing")
+            continue
+        point = scale * rotation @ record["landmarks"][key] + translation
+        error = float(np.linalg.norm(point-case["truth"]["points"][key]) / extent)
+        output["geometry"]["points"][key] = dict(error_fraction=error)
+        if not np.isfinite(error) or error > expectation["point_fraction"]:
+            violations.append(f"{key}: reconstructed point error {error:.4g} of object diagonal")
+    for key in expectation.get("required_lines", []):
+        if key not in record["line_segments"]:
+            violations.append(f"{key}: required reconstructed line missing")
+            continue
+        ends = scale * np.asarray(record["line_segments"][key]) @ rotation.T + translation
+        reference = np.asarray(case["truth"]["lines"][key])
+        direction, truth_direction = ends[1]-ends[0], reference[1]-reference[0]
+        length, truth_length = np.linalg.norm(direction), np.linalg.norm(truth_direction)
+        if not np.isfinite(ends).all() or length < 1e-9 or truth_length < 1e-9:
+            violations.append(f"{key}: invalid reconstructed line")
+            continue
+        direction, truth_direction = direction/length, truth_direction/truth_length
+        angle = float(np.degrees(np.arccos(np.clip(abs(direction @ truth_direction),0,1))))
+        # Different stroke extents do not identify matching 3D endpoints.
+        distances = np.linalg.norm(np.cross(reference-ends.mean(axis=0),direction),axis=1)
+        error = float(distances.max()/extent)
+        output["geometry"]["lines"][key] = dict(angle_deg=angle, offset_fraction=error)
+        if key in expected_weak and key in reported_weak:
+            output["warnings"].append(f"{key}: expected weak geometry; actual direction error {angle:.4g}deg, offset {error:.4g} of object diagonal")
+        elif angle > expectation["line_angle_deg"] or error > expectation["line_fraction"]:
+            violations.append(f"{key}: reconstructed line angle {angle:.4g}deg, offset {error:.4g} of object diagonal")
     truth_cameras = {c["id"]: c for c in case["truth"]["cameras"]}
     for key in expectation["cameras"]:
         if key not in record["cameras"]:

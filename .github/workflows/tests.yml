@@ -74,6 +74,15 @@ jobs:
               --case "${RUNNER_TEMP}/synthetic-blender/cases/${family}-0.json" \
               --out "${RUNNER_TEMP}/synthetic-blender/${family}" --roundtrip
           done
+      - name: Constraints supply information and live removal clears stale geometry
+        run: |
+          python3 tools/synthetic_sync/constraints.py --out "${RUNNER_TEMP}/synthetic-blender/constraints"
+          for family in known_lines mirror_points mirror_lines; do
+            blender --factory-startup --disable-autoexec -b --python-exit-code 1 \
+              --python tools/synthetic_sync/blender_case.py -- \
+              --case "${RUNNER_TEMP}/synthetic-blender/constraints/constraint-${family}-0.json" \
+              --out "${RUNNER_TEMP}/synthetic-blender/constraint-${family}" --roundtrip --drop-constraint
+          done
       - uses: actions/upload-artifact@v4
         if: always()
         with:

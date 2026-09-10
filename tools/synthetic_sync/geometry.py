@@ -74,3 +74,29 @@ def surface_points(mesh, fractions) -> list[list]:
         for a, b, c, d in mesh["faces"]
         for u, v in fractions
     ]
+
+
+def stroke_plane(observation, camera):
+    """Independent interpretation plane from two rays, using an SVD nullspace."""
+    rays = np.array([
+        [(observation["u1"]-camera["cx"])/camera["fx"], (observation["v1"]-camera["cy"])/camera["fy"], 1],
+        [(observation["u2"]-camera["cx"])/camera["fx"], (observation["v2"]-camera["cy"])/camera["fy"], 1],
+    ])
+    _u, singular, vt = np.linalg.svd(rays)
+    if singular[-1] < 1e-12:
+        raise ValueError("Stroke endpoints do not define a plane")
+    normal = np.asarray(camera["rotation"]).T @ vt[-1]
+    normal /= np.linalg.norm(normal)
+    return np.r_[normal, -normal @ camera["center"]]
+
+
+def intersect_stroke_planes(planes):
+    """Least-squares reference line; separation is not a calibrated uncertainty."""
+    planes = np.asarray(planes)
+    normals = planes[:,:3]
+    _u, singular, vt = np.linalg.svd(normals)
+    if len(singular) < 2 or singular[1] < 1e-12:
+        raise ValueError("Interpretation planes do not determine a line")
+    direction = vt[-1]
+    point = np.linalg.lstsq(np.vstack([normals, direction]), np.r_[-planes[:,3],0], rcond=None)[0]
+    return point, direction

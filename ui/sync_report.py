@@ -72,6 +72,8 @@ class ReportLandmark:
     rmse_px: float
     matches: tuple[str, ...]
     downweighted: bool = False
+    weak_line: bool = False
+    line_support_angle_deg: float | None = None
 
 
 @dataclass(frozen=True)
@@ -312,6 +314,8 @@ def build_sync_report(
     downweighted = {
         str(item) for item in getattr(result, "downweighted_landmark_ids", ())
     }
+    weak_lines = set(getattr(result, "weak_line_ids", ()))
+    support_angles = getattr(result, "line_support_angles_deg", {})
     report_landmarks = [
         ReportLandmark(
             landmark_id=str(landmark_id),
@@ -320,6 +324,8 @@ def build_sync_report(
             rmse_px=float(rmse),
             matches=tuple(sorted(matches_by_landmark.get(str(landmark_id), set()))),
             downweighted=str(landmark_id) in downweighted,
+            weak_line=str(landmark_id) in weak_lines,
+            line_support_angle_deg=support_angles.get(str(landmark_id)),
         )
         for landmark_id, rmse in getattr(result, "per_landmark_rmse_px", {}).items()
     ]
@@ -333,10 +339,25 @@ def build_sync_report(
         outcome, severity = "Partial sync", "warning"
     elif float(getattr(result, "mean_reprojection_px", 0.0)) > HIGH_ERROR_PX:
         outcome, severity = "Sync completed with high error", "warning"
+    elif weak_lines:
+        outcome, severity = "Sync completed with weak line geometry", "warning"
     else:
         outcome, severity = "Sync complete", "success"
 
     issues: list[ReportIssue] = []
+    if weak_lines:
+        details = ", ".join(
+            f"{names.get(key,key)} ({float(support_angles[key]):.1f}° support)"
+            if key in support_angles else names.get(key,key)
+            for key in sorted(weak_lines)
+        )
+        issues.append(ReportIssue(
+            "warning", "Some 3D lines are sensitive to small stroke edits", details,
+            "Their supporting views constrain almost the same plane, including reflected views for mirror pairs. "
+            "A low pixel error does not establish precise 3D position or direction. "
+            "Try longer strokes or an additional stroke from a more distinct viewing angle. "
+            "This is a geometric weakness check, not a confidence interval.",
+        ))
     for item in skipped:
         if item.best_reference:
             route = (
@@ -635,6 +656,9 @@ def _render_landmark_rows(report: SyncDiagnosticReport) -> str:
     rows = []
     for item in report.landmarks:
         status = '<span class="pill warning">Downweighted</span>' if item.downweighted else ""
+        if item.weak_line:
+            angle = f" ({item.line_support_angle_deg:.1f}°)" if item.line_support_angle_deg is not None else ""
+            status += f'<span class="pill warning">Weak 3D support{angle}</span>'
         search = " ".join((item.name, item.kind, *item.matches)).casefold()
         rows.append(
             f'<tr data-search="{escape(search, quote=True)}" data-rmse="{item.rmse_px:.8f}">'

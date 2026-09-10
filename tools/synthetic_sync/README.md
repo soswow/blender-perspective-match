@@ -55,7 +55,8 @@ python3 tools/synthetic_sync/run.py --case /tmp/pm-noisy/overhead-0.json --out /
 ```
 
 Use a new output directory. The command creates `input.blend`, `solved.blend`,
-metrics and a portable HTML report. `--roundtrip` opens **input.blend** in another
+metrics, a portable oracle report, and the extension's own `product-report.html`
+for successful solves. `--roundtrip` opens **input.blend** in another
 factory-startup Blender process and repeats the solve in `reopened/`.
 `--render` adds PNG reference images and packs them in the generated files;
 without it, packed blank images supply the actual image datablocks required by
@@ -123,12 +124,12 @@ This guards against making fitted RMSE the answer by accident.
 
 - Unknown/wrong intrinsics, distorted/cropped/resized images and undistortion
   state; all current lenses are ideal pinhole cameras with square pixels.
-- Wrong landmark identities, gross outliers, soft constraint slack, mirror lines,
-  line-only initialization, and constraints essential to solving an otherwise
-  impossible graph. Mixed cases verify coexistence; existing focused tests are
-  still needed to prove individual constraints contribute the right information.
+- Wrong landmark identities, gross outliers, soft constraint slack and free-line
+  initialization. The separate constraint-contribution cases below cover Known
+  3D line-only pose and one-sided mirror points/lines, but do not exhaust sparse
+  graphs or interactions among constraints.
 - Mouse picking, drawing, undo/redo, deletion/recreation, hot reload and long edit
-  sequences. The Blender path calls the shared scene service and actual RNA;
+  sequences. Constraint removal after a solve is covered. The Blender path calls the shared scene service and actual RNA;
   it does not simulate sidebar clicks or the async operator lifecycle.
 - Large scenes and performance scaling. Timings aid diagnosis but are not a
   benchmark gate across machines.
@@ -147,6 +148,52 @@ request format and Blender collection comparison together; do not add truth as
 a solver shortcut.
 
 ## Maintenance and CI
+
+### Constraint contribution checks
+
+```sh
+python3 tools/synthetic_sync/constraints.py --out /tmp/pm-constraints
+```
+
+This adds three families with paired removal controls, separate from `run.py`'s
+nine base families:
+
+- **Known 3D lines:** a second camera has only visible strokes, with no point
+  picks or observations in other cameras. Known line geometry determines its
+  pose. Removing Known 3D leaves unconstrained single-view lines and must refuse.
+- **Mirror points:** each member of a pair has only one observation. With the
+  mirror plane, reconstruct both positions accurately. Without the link, leave
+  those points unreconstructed while retaining the supported cameras.
+- **Mirror lines:** the analogous one-sided strokes have different extents.
+  Check the recovered infinite line's direction and distance, allowing helper
+  endpoints and their order to differ. Removing the relation must not invent 3D.
+
+The reference object has an asymmetric detail; only explicitly paired features
+are mirrored. Required point/line geometry is evaluated independently, so an
+accurate camera cannot hide incorrect reconstructed landmarks. CAD endpoints
+are excluded from withheld checks in the Known 3D line case.
+
+For a live Blender edit sequence, pass `--drop-constraint` with one of these
+positive cases to `blender_case.py`. It solves, removes the relation in RNA,
+solves again, and verifies that unsupported geometry/helper objects disappear.
+A refused solve must preserve the previously valid camera matrices.
+`--roundtrip` repeats that sequence in another process. Required point Empties
+and line meshes are also checked against the solver result in world space.
+
+`tests/test_synthetic_constraints.py` covers the oracle and six exact positive/removal
+cases, plus the frozen weak-line case and its additional-view remedy. The command
+also emits a seventh exact variant with that extra view. CI runs the numerical
+checks plus the three Blender edit sequences. Noisy versions are optional
+exploration; `--noise-px 0.3 --seed 1` changes measurements without changing
+the intended constraint relationships.
+
+The [constraint investigation results](constraint-results.md) explain the weak
+mirror-line discovery and the product diagnostic it motivated. The frozen
+`cases/mirror-lines-weak.json` expects `warn`: required cameras must still pass,
+and the solver must identify both weak lines. Their direction/offset errors
+remain visible in the report, but are accepted only for those explicitly named
+weak lines. An unrequested warning cannot excuse an ordinary accuracy failure.
+Generated noisy cases keep their strict accuracy contracts for exploration.
 
 ### Evidence-placement follow-up
 

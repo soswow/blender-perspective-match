@@ -187,3 +187,6 @@ class SyncSolveResult:
     leave_one_out: list[tuple[str, float, float]] = field(default_factory=list)
     # Skipped still whose other picks fit: (match_id, landmark_name, error_px).
     inconsistent_picks: list[tuple[str, str, float]] = field(default_factory=list)
+    # Small supporting-plane separation makes free-line 3D sensitive to pick noise.
+    line_support_angles_deg: dict[str, float] = field(default_factory=dict)
+    weak_line_ids: list[str] = field(default_factory=list)

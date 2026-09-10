@@ -121,6 +121,59 @@ def _reconstruct_line_from_observations(
     return point, direction
 
 
+def line_support_angles(
+    line_segments: dict[str, tuple[np.ndarray, np.ndarray]],
+    observations_by_landmark: dict[str, list[SyncLineObservation]],
+    similarities: dict[str, SimilarityTransform],
+    matches: dict[str, SyncMatchInput],
+    *,
+    known_lines: dict[str, tuple[np.ndarray, np.ndarray]] | None = None,
+    mirror_pairs: list[tuple[str, str]] | None = None,
+    mirror_normal: np.ndarray | None = None,
+) -> dict[str, float]:
+    """Best supporting plane separation for free lines; not a confidence interval."""
+    known_ids = set(known_lines or {})
+    partners: dict[str, str] = {}
+    if mirror_normal is not None:
+        for a, b in mirror_pairs or ():
+            partners[a], partners[b] = b, a
+    normals_by_id: dict[str, list[np.ndarray]] = {}
+    for landmark_id, ends in line_segments.items():
+        point_a, point_b = ends
+        direction = point_b-point_a
+        normals = []
+        for observation in observations_by_landmark.get(landmark_id, []):
+            match = matches.get(observation.match_id)
+            similarity = similarities.get(observation.match_id)
+            if match is None or similarity is None:
+                continue
+            # A contradicting stroke must not make an unsupported line look strong.
+            residual = _line_observation_rms_px(point_a, direction, observation, match.calibration, similarity)
+            if not np.isfinite(residual) or residual > LINE_RECONSTRUCT_TRUNCATE_PX:
+                continue
+            plane = _plane_from_line_observation(observation, match.calibration, similarity)
+            if plane is not None and np.isfinite(plane).all():
+                normals.append(plane[:3])
+        normals_by_id[landmark_id] = normals
+    reflection = None
+    if mirror_normal is not None:
+        unit = np.asarray(mirror_normal, dtype=np.float64)
+        unit = unit / max(float(np.linalg.norm(unit)), 1e-12)
+        reflection = np.eye(3)-2*np.outer(unit,unit)
+    angles = {}
+    for landmark_id in line_segments:
+        partner = partners.get(landmark_id)
+        if landmark_id in known_ids or partner in known_ids:
+            continue  # Known geometry, including its reflection, supplies 3D directly.
+        normals = list(normals_by_id.get(landmark_id, []))
+        if reflection is not None and partner:
+            normals += [reflection @ n for n in normals_by_id.get(partner, [])]
+        sine = max((float(np.linalg.norm(np.cross(a,b))) for i,a in enumerate(normals)
+                    for b in normals[i+1:]), default=0.0)
+        angles[landmark_id] = float(np.degrees(np.arcsin(np.clip(sine,0,1))))
+    return angles
+
+
 def _closest_point_on_line_to_ray(
     line_point: np.ndarray,
     line_direction: np.ndarray,

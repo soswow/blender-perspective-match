@@ -130,6 +130,7 @@ def create_scene(case, out: Path, render: bool):
             root.matrix_world = Matrix(matrix)
             session.sync_lock_pose = True
     workspace = properties.workspace(bpy.context)
+    workspace.show_landmark_empties = True
     workspace.anchor_root = roots[request["anchor_id"]]
     for key in ("lock_rotation", "lock_translation", "ground_slack", "known_3d_slack", "mirror_slack"):
         setattr(workspace, key, request[key])
@@ -226,11 +227,12 @@ def verify_inputs(case):
         elif key in {"parallel_pairs", "mirror_pairs"}:
             value, actual = (sorted([sorted(pair) for pair in items]) for items in (value, actual))
         assert_equivalent(value, actual, key)
+    return prep
 
 
 def run_case(case, out):
     from match_perspective import properties, scene
-    verify_inputs(case)
+    prep = verify_inputs(case)
     started = time.perf_counter()
     try:
         result = scene.solve_and_apply_sync(bpy.context)
@@ -240,10 +242,46 @@ def run_case(case, out):
         record = dict(success=False, message=str(error), reported_rmse_px=0.0, cameras={}, landmarks={}, line_segments={})
     else:
         record = result_record(result, case["request"]["cameras"])
+        from match_perspective.ui import sync_report
+        report = sync_report.build_sync_report(
+            operation="Synthetic Solve Sync",source_name="Generated scene",
+            matches=prep.matches,observations=prep.observations,line_observations=prep.line_observations,
+            result=result,anchor_id=prep.anchor_id,known_world=prep.known_world,known_lines=prep.known_lines,
+            parallel_pairs=prep.parallel_pairs,mirror_pairs=prep.mirror_pairs,
+            fixed_match_ids=prep.fixed_similarities,
+        )
+        (out / "product-report.html").write_text(sync_report.render_sync_report_html(report))
     record.update(elapsed_s=time.perf_counter()-started, environment=environment(),
                   blender=bpy.app.version_string, request_sha256=fingerprint(case["request"]))
     assessment = evaluate(case, record)
     if record["success"]:
+        workspace = properties.workspace(bpy.context)
+        bpy.context.view_layer.update()
+        for landmark in workspace.landmarks:
+            key = landmark.item_id
+            kind = "points" if landmark.kind == "POINT" else "lines"
+            if key in case["expectation"].get("excluded_" + kind, []):
+                if landmark.has_position or landmark.has_line_segment or scene.landmark_viewport_object(landmark):
+                    assessment["violations"].append(f"{key}: unconstrained geometry remains in Blender")
+            if key not in case["expectation"].get("required_" + kind, []):
+                continue
+            helper = scene.landmark_viewport_object(landmark)
+            if not landmark.has_position or helper is None:
+                assessment["violations"].append(f"{key}: reconstructed geometry was not applied to Blender")
+                continue
+            if kind == "points":
+                expected = record["landmarks"].get(key)
+                values = [list(landmark.position), list(helper.matrix_world.translation)]
+            else:
+                expected = record["line_segments"].get(key)
+                if not landmark.has_line_segment or helper.type != "MESH":
+                    assessment["violations"].append(f"{key}: reconstructed line helper is missing")
+                    continue
+                values = [[list(landmark.position), list(landmark.position_b)],
+                          [list(helper.matrix_world @ v.co) for v in helper.data.vertices]]
+            if expected is None or any(np.shape(value) != np.shape(expected)
+                or not np.allclose(value, expected, atol=1e-5, rtol=1e-6) for value in values):
+                assessment["violations"].append(f"{key}: Blender geometry differs from the solver result")
         scale, rotation, translation = alignment(case, record)
         for root in properties.iter_match_roots():
             key = root.get("synthetic_match_id")
@@ -280,12 +318,15 @@ def main():
     parser.add_argument("--load", type=Path, help="Reopen a generated input file and verify its request fingerprint")
     parser.add_argument("--roundtrip", action="store_true", help="Also replay input.blend in a fresh Blender process")
     parser.add_argument("--render", action="store_true", help="Render and pack truth reference images")
+    parser.add_argument("--drop-constraint", action="store_true", help="After a constraint case solves, remove its constraint and verify the live state")
     args = parser.parse_args(sys.argv[sys.argv.index("--")+1:])
     args.case, args.out = args.case.resolve(), args.out.resolve()
     if args.load and args.load.resolve() in {args.out / "input.blend", args.out / "solved.blend"}:
         parser.error("Use a different output directory when reopening a generated file")
     args.out.mkdir(parents=True, exist_ok=True)
     case = read_case(args.case)
+    if args.drop_constraint and case["family"] not in {"known_lines", "mirror_points", "mirror_lines"}:
+        parser.error("--drop-constraint requires a constraint contribution case")
     register_extension()
     if args.load:
         bpy.ops.wm.open_mainfile(filepath=str(args.load.resolve()))
@@ -296,10 +337,36 @@ def main():
         bpy.ops.wm.save_as_mainfile(filepath=str(args.out / "input.blend"), check_existing=False)
     passed = run_case(case, args.out)
     bpy.ops.wm.save_as_mainfile(filepath=str(args.out / "solved.blend"), check_existing=False)
+    if args.drop_constraint:
+        from match_perspective import properties
+        from tools.synthetic_sync.constraints import remove_constraint
+        from tools.synthetic_sync.scenarios import write_case
+        removed = remove_constraint(case)
+        workspace = properties.workspace(bpy.context)
+        if case["family"] == "known_lines":
+            for landmark in workspace.landmarks:
+                landmark.known_object = landmark.known_object_b = None
+        else:
+            for landmark in workspace.landmarks:
+                landmark.mirror_of_id = "NONE"
+            workspace.mirror_object = None
+        bpy.context.scene["synthetic_sync_request"] = fingerprint(removed["request"])
+        folder = args.out / "without-constraint"
+        folder.mkdir(exist_ok=True)
+        write_case(removed, folder / "case.json")
+        bpy.ops.wm.save_as_mainfile(filepath=str(folder / "input.blend"), check_existing=False)
+        before = {root.name: root.matrix_world.copy() for root in properties.iter_match_roots()}
+        passed = run_case(removed, folder) and passed
+        if removed["expectation"]["outcome"] == "reject":
+            for root in properties.iter_match_roots():
+                if root.matrix_world != before[root.name]:
+                    raise AssertionError("Refused solve changed a previously valid camera")
+        bpy.ops.wm.save_as_mainfile(filepath=str(folder / "solved.blend"), check_existing=False)
     if args.roundtrip:
         process = subprocess.run([bpy.app.binary_path, "--factory-startup", "--disable-autoexec", "-b",
             "--python-exit-code", "1", "--python", str(Path(__file__).resolve()), "--", "--case", str(args.case),
-            "--out", str(args.out / "reopened"), "--load", str(args.load.resolve() if args.load else args.out / "input.blend")])
+            "--out", str(args.out / "reopened"), "--load", str(args.load.resolve() if args.load else args.out / "input.blend")]
+            + (["--drop-constraint"] if args.drop_constraint else []))
         passed = passed and process.returncode == 0
     if not passed:
         raise RuntimeError("Synthetic Blender verification failed; see report.html")

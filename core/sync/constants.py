@@ -71,7 +71,7 @@ SYNC_WEIGHT_PROTECT = 1.0
 
 # Free-line 3D geometry anchors to pose-locked cameras once this many see it.
 LINE_FIXED_ANCHOR_MIN = 2
-# Ignore nearly parallel interpretation planes when intersecting a free 3D line.
+# Prefer separated interpretation planes; flag free lines with only weaker support.
 LINE_PLANE_MIN_SINE = 0.12
 # Truncate per-view line RMSE when ranking reconstruction pairs.
 LINE_RECONSTRUCT_TRUNCATE_PX = 80.0

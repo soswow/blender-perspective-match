@@ -1,5 +1,5 @@
 **Perspective Match: reliability and AI development proposal**
-Investigation baseline: commit `5d876f6` / extension 0.5.0, 10 September 2026. Updated after the first synthetic Sync pilot. This is a continuing decision record; historical observations below describe the baseline unless a status update says otherwise.
+Investigation baseline: commit `5d876f6` / extension 0.5.0, 10 September 2026. Updated through the constraint-contribution investigation on 11 September 2026. This is a continuing decision record; historical observations below describe the baseline unless a status update says otherwise.
 
 **My recommendation is to make every solver decision reproducible from a complete, versioned input, and judge it with checks independent of the implementation.** Build that foundation around the existing fixtures, Blender smoke test, and diagnostics. Then use it to improve calibration ownership, quality reporting, and selected solver decisions. This would turn a debugging session into an addition to a reusable capability.
 
@@ -7,7 +7,7 @@ Your clarification is that both metric accuracy and visual alignment matter, dep
 
 The deeper product issue is that three different promises are currently close together: “these measurements fit,” “this reconstruction is well determined,” and “the Blender viewport represents that reconstruction.” The code has made substantial progress on each, but failures still occur at their boundaries. Another recurring issue is that a geometric model can be wrong for the evidence: uncertain calibration, approximate CAD, imperfect symmetry, or images of different versions of an object can make precise simultaneous agreement impossible.
 
-**Implementation status — 10 September 2026**
+**First implementation checkpoint — 10 September 2026**
 
 The user chose **synthetic Sync evidence and withheld object alignment first**. Real projects are optional sources of future cases, not a prerequisite. AprilTag/VP detection, distortion and image transformations are outside the current pilot. Generated reference images are optional; all truth comes from constructed geometry and cameras.
 
@@ -23,7 +23,15 @@ Validation at this checkpoint: **225 unit tests run, 9 skipped; suite passed**, 
 
 For future sessions, start with the [harness commands and limitations](../tools/synthetic_sync/README.md), [pilot measurements](../tools/synthetic_sync/pilot-results.md), and [oracle/regression tests](../tests/test_synthetic_sync.py). The executable case schema and evaluator define current behavior; do not treat every original proposal below as implemented or still required. Local reports and generated `.blend` files are disposable artifacts, not repository dependencies.
 
-**Follow-up:** the pilot checkpoint was committed as `55b1487`. The [evidence-placement experiment](../tools/synthetic_sync/evidence-results.md) then completed 94 solves using the two frozen overhead cases, paired support-only controls and fresh noise. A peripheral landmark gave a median 9.8% paired improvement, below the predeclared 20% promotion threshold; no new picking advice or weighting change is justified yet. Exact picks solve accurately and halving the original noise approximately halves withheld error. The next investigation is cases where a line, mirror or graph constraint is necessary, rather than merely present beside sufficient point evidence. Read the follow-up results before repeating the single-added-landmark experiment.
+**Evidence-placement follow-up (`3f6b331`):** the pilot checkpoint was committed as `55b1487`. The [evidence-placement experiment](../tools/synthetic_sync/evidence-results.md) then completed 94 solves using the two frozen overhead cases, paired support-only controls and fresh noise. A peripheral landmark gave a median 9.8% paired improvement, below the predeclared 20% promotion threshold; no new picking advice or weighting change is justified yet. Exact picks solve accurately and halving the original noise approximately halves withheld error. Read these results before repeating the single-added-landmark experiment.
+
+**Constraint-contribution follow-up — 11 September 2026:** [the new corpus and results](../tools/synthetic_sync/constraint-results.md) test cases where Known 3D lines or one-sided mirror features supply necessary information. Paired controls remove only the constraint, keeping the picks. Blender tests also remove it after solving and verify that unsupported helpers disappear, or that a refused solve preserves the previous camera poses. Required reconstructed points and infinite lines now have independent geometry checks as well as withheld camera checks.
+
+This produced the first product change from the laboratory. With 0.3 px pick noise, a mirrored line had **23.4° direction error despite 0.21 px fitted point RMSE**. An independent plane-intersection calculation reproduced the sensitivity even with true cameras. The evidence was weak: its two supporting planes differed by only 1.1°. Sync now reports weak 3D line support in its message and HTML report, using the existing line-plane separation threshold; it retains the geometry. An additional stroke from a distinct third view reduced direction error to 0.79° and cleared the warning. The frozen regression explicitly expects a warning; ordinary accuracy contracts remain unchanged. This is a limited geometric diagnostic, not a confidence interval or a general ambiguity classifier.
+
+Validation for that change: the full suite passed **241 tests, 9 skipped**, followed by **30 focused tests** after the final warning-contract assertion and report adjustments. Seven exact numerical constraint variants, generated Blender create/apply/reopen cases, three live constraint-removal sequences, the rendered weak-case replay/removal, and the existing Blender smoke passed locally. Browser availability prevented visual inspection of the HTML; content/escaping tests passed. Hosted CI remains unverified until a push is authorized.
+
+**Next boundary:** make diagnostic probes consume the same complete request as the product, then exercise nonzero slack and live locks through generated Blender state. The baseline probe omission below remains outstanding. Do not expand the random scene space until the diagnostic tools reliably replay what Blender actually submitted.
 
 **1. What I inspected and what the evidence supports**
 

@@ -24,6 +24,7 @@ from .constants import (
     GROUND_PLANE_Z_FRACTION,
     GROUND_SLACK_DEFAULT,
     KNOWN_3D_SLACK_DEFAULT,
+    LINE_PLANE_MIN_SINE,
     MIRROR_SLACK_DEFAULT,
     RECOVERED_HUBER_DELTA_PX,
     RESECT_MISMATCH_CANDIDATE_LIMIT,
@@ -35,6 +36,7 @@ from .lines import (
     _line_observation_reprojection_errors,
     _parallel_direction_error,
     _reconstruct_line_from_observations,
+    line_support_angles,
 )
 from .mirrors import (
     _dedupe_mirror_pairs,
@@ -2224,6 +2226,18 @@ def solve_landmark_sync(
             f" · parallel line miss ({bits}) — 2D drawings vs locked 3D direction"
         )
 
+    support_angles = line_support_angles(
+        line_segments, line_observations_by_landmark, similarities, match_map,
+        known_lines=known_lines, mirror_pairs=mirror_pairs,
+        mirror_normal=mirror_plane[1] if mirror_plane is not None else None,
+    )
+    weak_line_ids = sorted(key for key, angle in support_angles.items()
+                           if float(np.sin(np.radians(angle))) < LINE_PLANE_MIN_SINE)
+    if weak_line_ids:
+        weak_names = ", ".join(names.get(key,key) for key in weak_line_ids[:3])
+        message += (f" · weak 3D line support ({weak_names}) — "
+                    "small stroke edits may move these lines; add a distinct view or longer strokes")
+
     return SyncSolveResult(
         similarities=similarities,
         landmarks=landmarks,
@@ -2233,6 +2247,8 @@ def solve_landmark_sync(
         message=message,
         success=True,
         line_segments=line_segments,
+        line_support_angles_deg=support_angles,
+        weak_line_ids=weak_line_ids,
         downweighted_landmark_ids=downweighted_ids,
         bundle_adjusted=bool(did_bundle_adjust),
         inconsistent_picks=[

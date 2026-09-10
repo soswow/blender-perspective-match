@@ -19,3 +19,12 @@ python3 tools/synthetic_sync/run.py --case tools/synthetic_sync/cases/overhead-0
 
 A nonzero exit means its accuracy contract failed. Inspect the result and
 withheld-object report before concluding that a production fix is needed.
+
+`mirror-lines-weak.json` freezes the seed-one mirror-line contribution case with
+0.3 px noise. Independent reconstruction shows nearly coincident supporting
+planes and a large line-direction error even with true cameras. Its contract
+therefore expects `warn` for the two specified lines while still requiring
+accurate cameras and finite reconstructed geometry. The measured line errors
+remain in the report; the warning does not claim precise reconstruction. See
+[the investigation](../constraint-results.md). Adding a stroke from a distinct
+view restores the ordinary accuracy contract in the corresponding test.
