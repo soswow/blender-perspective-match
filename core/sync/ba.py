@@ -12,6 +12,7 @@ from .constants import (
     GROUND_Z_HARD_SLACK,
     GROUND_Z_RESIDUAL_PX,
     KNOWN_3D_RESIDUAL_PX,
+    LINE_FIXED_ANCHOR_MIN,
     MIRROR_PAIR_HARD_GAP,
     MIRROR_PAIR_RESIDUAL_PX,
     MIRROR_PLANE_RESIDUAL_PX,
@@ -1239,9 +1240,18 @@ def _bundle_adjust_registration(
     free_line_points: dict[str, np.ndarray] = {}
     fixed_line_points: dict[str, np.ndarray] = {}
     fixed_line_directions: dict[str, np.ndarray] = {}
+    line_anchor_counts: dict[str, int] = {}
+    for landmark_id, _point, _direction, observation in line_constraints:
+        if observation.match_id in fixed_similarities:
+            line_anchor_counts[landmark_id] = (
+                line_anchor_counts.get(landmark_id, 0) + 1
+            )
     for landmark_id, point, direction, _observation in line_constraints:
         fixed_line_directions[landmark_id] = np.asarray(direction, dtype=np.float64)
-        if landmark_id in known_line_ids:
+        anchored = (
+            line_anchor_counts.get(landmark_id, 0) >= LINE_FIXED_ANCHOR_MIN
+        )
+        if landmark_id in known_line_ids or anchored:
             fixed_line_points[landmark_id] = np.asarray(point, dtype=np.float64)
         elif landmark_id not in free_line_points:
             free_line_points[landmark_id] = np.asarray(point, dtype=np.float64).copy()

@@ -466,23 +466,26 @@ def _project_world_line_to_image(
     similarity: SimilarityTransform,
 ) -> np.ndarray | None:
     """Project an infinite 3D line into a match still as a homogeneous image line."""
-    # Two distant samples along the line, mapped into the match private frame.
-    samples = (point - 2.0 * direction, point + 2.0 * direction)
+    unit = direction / max(float(np.linalg.norm(direction)), 1.0e-12)
+    # Try several spans so a sample behind the camera does not drop the line.
     projected: list[tuple[float, float]] = []
-    for sample in samples:
-        private = similarity.inverse_point(sample)
-        image_point = project_private_point(private, calibration)
-        if image_point is None:
-            continue
-        projected.append((float(image_point[0]), float(image_point[1])))
-    if len(projected) < 2:
-        return None
-    return _image_line_homogeneous(
-        projected[0][0],
-        projected[0][1],
-        projected[1][0],
-        projected[1][1],
-    )
+    for scale in (0.25, 0.5, 1.0, 2.0, 8.0, 32.0):
+        for sample in (point - scale * unit, point + scale * unit):
+            private = similarity.inverse_point(sample)
+            image_point = project_private_point(private, calibration)
+            if image_point is None:
+                continue
+            projected.append((float(image_point[0]), float(image_point[1])))
+            if len(projected) >= 2:
+                line = _image_line_homogeneous(
+                    projected[0][0],
+                    projected[0][1],
+                    projected[-1][0],
+                    projected[-1][1],
+                )
+                if line is not None:
+                    return line
+    return None
 
 
 def _line_observation_reprojection_errors(
@@ -492,7 +495,13 @@ def _line_observation_reprojection_errors(
     calibration: core.Calibration,
     similarity: SimilarityTransform,
 ) -> list[float]:
-    """Pixel distances from the observed segment endpoints to the projected 3D line."""
+    """Offset and direction miss of a 2D stroke vs the projected infinite 3D line.
+
+    The two values are perpendicular pixel distances of the drawn endpoints.
+    Their RMS is ``hypot(midpoint offset, 0.5 * stroke_length * sin(angle))``,
+    so a short stroke still reports offset, and a long stroke also reports
+    heading error at pointing scale.
+    """
     projected = _project_world_line_to_image(
         point, direction, calibration, similarity
     )

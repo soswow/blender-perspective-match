@@ -8,7 +8,7 @@ User-visible work must land with a bullet under `## [Unreleased]` in `CHANGELOG.
 
 Do this when the change affects matching, sync, UI, install, OpenCV extras, or documented behavior. Skip it for refactors, tests, comments, and internal-only edits.
 
-Write one short user-facing line, not a commit subject. Do not invent a version heading or bump `blender_manifest.toml` — that happens at release.
+Write one short user-facing line, not a commit subject. Describe the product behavior, not the `.blend` or stills used to reproduce the bug. Do not name user files, match names, landmark names, or geometry that only exists in that debug scene. Do not invent a version heading or bump `blender_manifest.toml` — that happens at release.
 
 ```markdown
 ## [Unreleased]
@@ -19,7 +19,7 @@ Write one short user-facing line, not a commit subject. Do not invent a version 
 
 If `[Unreleased]` has no matching subsection yet, add it. Leave dated `## [x.y.z]` sections untouched.
 
-Do not rewrite an existing changelog bullet (Unreleased or dated). If later work revises that behavior, add a new **Fixed** / **Changed** / **Removed** line; leave the original record as it was.
+Do not rewrite a dated changelog bullet. If later work revises that behavior, add a new **Fixed** / **Changed** / **Removed** line. Rewrite an **Unreleased** bullet in place only when it leaked a debug scene (file, match, landmark, or that file’s layout); do not add a second line that still names the scene.
 
 To ship: `./scripts/release.sh 0.3.7` on a clean `main`. That cuts Unreleased, bumps `blender_manifest.toml`, tags `v0.3.7`, and pushes. GitHub Actions builds the four platform zips and creates the GitHub Release.
 
@@ -47,7 +47,7 @@ Keep this map accurate when you add a module, move a stage, or change a named co
 | Self-contained HTML sync diagnostics | `ui/sync_report.py` |
 | RNA | `properties/__init__.py` |
 
-Do not special-case a `.blend` filename in solver code or UI copy.
+Do not special-case a user `.blend` (filename, match names, landmark names, or that file’s layout) in solver code, comments, constants, tests, UI copy, changelog, or docs. Reproduce the geometry with generic synthetic fixtures; keep the motivating file in the chat, not in the repo.
 
 ### Sync package (`core/sync/`)
 
@@ -55,7 +55,7 @@ Do not special-case a `.blend` filename in solver code or UI copy.
 
 | Module | Role |
 | --- | --- |
-| `constants.py` | `WORLD_AXIS_DIRECTIONS`, `ACCEPT_RMSE_PX`, `RESECT_MISMATCH_CANDIDATE_LIMIT`, `STRETCHED_PIXEL_RATIO`, `GROUND_PLANE_Z_FRACTION`, `GROUND_SLACK_DEFAULT`, `GROUND_Z_RESIDUAL_PX`, `GROUND_Z_HARD_SLACK`, `KNOWN_3D_SLACK_DEFAULT`, `KNOWN_3D_RESIDUAL_PX`, `MIRROR_SLACK_DEFAULT`, `MIRROR_PLANE_RESIDUAL_PX`, `MIRROR_PAIR_HARD_GAP`, `MIRROR_PAIR_RESIDUAL_PX`, `LOG_SCALE_CLIP`, `BA_FREE_LANDMARK_LIMIT`, `SPATIAL_GRID_SIZE`, `SPATIAL_WEIGHT_CLIP`, `RADIAL_WEIGHT_GAIN`, `TRIANGULATION_GN_STEPS`, `TRIANGULATION_ANGLE_WEIGHT_FLOOR`, `TRIANGULATION_PARALLEL_COSINE`, `SYNC_WEIGHT_PROTECT` |
+| `constants.py` | `WORLD_AXIS_DIRECTIONS`, `ACCEPT_RMSE_PX`, `RESECT_MISMATCH_CANDIDATE_LIMIT`, `STRETCHED_PIXEL_RATIO`, `GROUND_PLANE_Z_FRACTION`, `GROUND_SLACK_DEFAULT`, `GROUND_Z_RESIDUAL_PX`, `GROUND_Z_HARD_SLACK`, `KNOWN_3D_SLACK_DEFAULT`, `KNOWN_3D_RESIDUAL_PX`, `MIRROR_SLACK_DEFAULT`, `MIRROR_PLANE_RESIDUAL_PX`, `MIRROR_PAIR_HARD_GAP`, `MIRROR_PAIR_RESIDUAL_PX`, `LOG_SCALE_CLIP`, `LINE_FIXED_ANCHOR_MIN`, `LINE_PLANE_MIN_SINE`, `LINE_RECONSTRUCT_TRUNCATE_PX`, `RECOVERED_HUBER_DELTA_PX`, `BA_FREE_LANDMARK_LIMIT`, `SPATIAL_GRID_SIZE`, `SPATIAL_WEIGHT_CLIP`, `RADIAL_WEIGHT_GAIN`, `TRIANGULATION_GN_STEPS`, `TRIANGULATION_ANGLE_WEIGHT_FLOOR`, `TRIANGULATION_PARALLEL_COSINE`, `SYNC_WEIGHT_PROTECT` |
 | `types.py` | `SimilarityTransform`, observations, `SyncSolveResult` |
 | `projection.py` | Project, rays, triangulate, image-line geometry |
 | `pose.py` | Essential / PnP / IPPE / pairwise register |
@@ -65,7 +65,7 @@ Do not special-case a `.blend` filename in solver code or UI copy.
 | `ba.py` | Joint BA, residuals, leave-one-out Diagnose |
 | `solve.py` | `solve_landmark_sync` stages |
 
-**Solve stages** (in order): seed per-match pose locks from their live root transforms → pairwise register (strongest-pair seed, then easiest-next camera, composed into the Anchor) → peel cameras above `ACCEPT_RMSE_PX` (never peel a pose-locked match) → joint BA (pose-only above `BA_FREE_LANDMARK_LIMIT`, then a thaw of free 3D if that helps; locked-match observations remain active but their similarities have no parameters) → peel again → resect skipped stills against frozen 3D (On Ground / near-Z=0 if off-plane picks disagree; a one-view Is Mirror Of line is mixed like a Known 3D line against the partner's reflected 3D, and does not fail accept via point RMSE) → triangulate landmarks now visible in recovered views and PnP stills that had no cloud support → pose-only BA of recovered cameras (3D and line midpoints frozen; Huber so a large line residual cannot dominate the cloud) → report. On Ground landmarks with `ground_slack > 0` are a soft Z spring, not a hard Z=0 pin. Known 3D points with `known_3d_slack > 0` are a soft XYZ spring toward the Empty (pairwise still uses the Empty; linked Empties are not moved). Known 3D that is also On Ground uses `min(ground_slack, known_3d_slack)` for Z so a looser Known 3D leash cannot lift a floor pin. Is Mirror Of pairs are joint-BA plus resect mixed / recovered-camera BA (not pairwise 2D↔2D); one scene Mirror Empty supplies the plane; `mirror_slack > 0` then thaws the plane along its normal with non-mirror 3D frozen (Empty stays put). Landmark Sync Weight multiplies every pick of that landmark (and Pick Confidence); values above `SYNC_WEIGHT_PROTECT` skip outlier auto-downweight. Recovered cameras must not fail the joint RMSE. Copying locked K onto a different aspect uses one scale for fx and fy unless the sizes are an exact portrait/landscape swap (same pixels, axes swapped). Solve Sync sets fy=fx when they already differ by more than `STRETCHED_PIXEL_RATIO`.
+**Solve stages** (in order): seed per-match pose locks from their live root transforms → pairwise register (strongest-pair seed, then easiest-next camera, composed into the Anchor) → peel cameras above `ACCEPT_RMSE_PX` (never peel a pose-locked match) → joint BA (pose-only above `BA_FREE_LANDMARK_LIMIT`, then a thaw of free 3D if that helps; locked-match observations remain active but their similarities have no parameters) → peel again → resect skipped stills against frozen 3D (On Ground / near-Z=0 if off-plane picks disagree; a one-view Is Mirror Of line is mixed like a Known 3D line against the partner's reflected 3D; pose accept is point RMSE so a line overlay cannot skip a still that already fits the cloud) → triangulate landmarks now visible in recovered views and PnP stills that had no cloud support → pose-only BA of recovered cameras (3D and line midpoints frozen; Huber at `RECOVERED_HUBER_DELTA_PX` so a dense inlier cluster cannot ignore isolated landmarks that pin orientation; pose accept remains point RMSE) → rebuild free 3D lines from every posed camera (a recovered stroke can pin line depth) → report. On Ground landmarks with `ground_slack > 0` are a soft Z spring, not a hard Z=0 pin. Known 3D points with `known_3d_slack > 0` are a soft XYZ spring toward the Empty (pairwise still uses the Empty; linked Empties are not moved). Known 3D that is also On Ground uses `min(ground_slack, known_3d_slack)` for Z so a looser Known 3D leash cannot lift a floor pin. Is Mirror Of pairs are joint-BA plus resect mixed / recovered-camera BA (not pairwise 2D↔2D); one scene Mirror Empty supplies the plane; `mirror_slack > 0` then thaws the plane along its normal with non-mirror 3D frozen (Empty stays put). Landmark Sync Weight multiplies every pick of that landmark (and Pick Confidence); values above `SYNC_WEIGHT_PROTECT` skip outlier auto-downweight. Recovered cameras must not fail the joint RMSE. Copying locked K onto a different aspect uses one scale for fx and fy unless the sizes are an exact portrait/landscape swap (same pixels, axes swapped). Solve Sync sets fy=fx when they already differ by more than `STRETCHED_PIXEL_RATIO`.
 
 **When you change sync:** update this map if stages or files moved; put a new threshold in `constants.py` instead of a raw `40.0`; keep function docstrings to a short contract (what / what not), not algorithm history. Tests: `tests/test_sync_pose.py`, `test_sync_ground.py`, `test_sync_ba.py`, `test_sync_lines.py`, `test_sync_mirrors.py`, `test_sync_solve.py` (helpers in `tests/sync_fixtures.py`). Pairwise covering (true camera vs stored K/pose): `tests/edge_pairs.md`, `tests/pair_fixtures.py`, `tests/test_edge_pairs.py`. Joint BA reweights picks so occupied image-grid cells share influence (a central cluster cannot ignore a few edge picks that pin camera distance).
 

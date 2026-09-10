@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 
 from .. import geometry as core
-from .constants import WORLD_AXIS_DIRECTIONS
+from .constants import (
+    LINE_FIXED_ANCHOR_MIN,
+    LINE_PLANE_MIN_SINE,
+    LINE_RECONSTRUCT_TRUNCATE_PX,
+    WORLD_AXIS_DIRECTIONS,
+)
 from .projection import (
     _image_line_homogeneous,
     _intersect_planes_to_line,
@@ -16,13 +23,57 @@ from .projection import (
 )
 from .types import SimilarityTransform, SyncLineObservation, SyncMatchInput
 
+def _line_anchor_match_ids(
+    observations: list[SyncLineObservation],
+    fixed_match_ids: set[str] | None,
+    *,
+    minimum: int = LINE_FIXED_ANCHOR_MIN,
+) -> set[str] | None:
+    """Pose-locked cameras that see this line, when there are enough to anchor 3D."""
+    if not fixed_match_ids:
+        return None
+    anchored = {
+        observation.match_id
+        for observation in observations
+        if observation.match_id in fixed_match_ids
+    }
+    if len(anchored) >= minimum:
+        return anchored
+    return None
+
+
+def _line_observation_rms_px(
+    point: np.ndarray,
+    direction: np.ndarray,
+    observation: SyncLineObservation,
+    calibration: core.Calibration,
+    similarity: SimilarityTransform,
+) -> float:
+    """Unweighted endpoint RMS of one 2D stroke vs a 3D line."""
+    stroke = replace(observation, weight=1.0)
+    errors = _line_observation_reprojection_errors(
+        point, direction, stroke, calibration, similarity
+    )
+    return float(np.sqrt(0.5 * (errors[0] * errors[0] + errors[1] * errors[1])))
+
+
 def _reconstruct_line_from_observations(
     observations: list[SyncLineObservation],
     similarities: dict[str, SimilarityTransform],
     matches: dict[str, SyncMatchInput],
+    *,
+    prefer_match_ids: set[str] | None = None,
 ) -> tuple[np.ndarray, np.ndarray] | None:
-    """Intersect back-projected planes from ≥2 registered views into a 3D line."""
-    planes: list[np.ndarray] = []
+    """Intersect back-projected planes from ≥2 registered views into a 3D line.
+
+    Uses the pair of interpretation planes with the lowest truncated RMS across
+    all strokes (near-parallel pairs skipped). ``prefer_match_ids`` is only a
+    tie-break; helper extent still uses locked views separately.
+    """
+    preferred = prefer_match_ids or set()
+    records: list[
+        tuple[SyncLineObservation, np.ndarray, core.Calibration, SimilarityTransform]
+    ] = []
     for observation in observations:
         similarity = similarities.get(observation.match_id)
         match = matches.get(observation.match_id)
@@ -32,10 +83,42 @@ def _reconstruct_line_from_observations(
             observation, match.calibration, similarity
         )
         if plane is not None:
-            planes.append(plane)
-    if len(planes) < 2:
+            records.append((observation, plane, match.calibration, similarity))
+    if len(records) < 2:
         return None
-    return _intersect_planes_to_line(planes[0], planes[1])
+
+    min_sine = float(LINE_PLANE_MIN_SINE)
+    truncate = float(LINE_RECONSTRUCT_TRUNCATE_PX)
+    best: tuple[float, float, float, np.ndarray, np.ndarray] | None = None
+    for index_a, (obs_a, plane_a, _cal_a, _sim_a) in enumerate(records):
+        for obs_b, plane_b, _cal_b, _sim_b in records[index_a + 1 :]:
+            sine = float(np.linalg.norm(np.cross(plane_a[:3], plane_b[:3])))
+            if sine < min_sine:
+                continue
+            reconstructed = _intersect_planes_to_line(plane_a, plane_b)
+            if reconstructed is None:
+                continue
+            point, direction = reconstructed
+            errors = [
+                _line_observation_rms_px(
+                    point, direction, observation, calibration, similarity
+                )
+                for observation, _plane, calibration, similarity in records
+            ]
+            truncated = [min(error, truncate) for error in errors]
+            score = float(np.mean(truncated))
+            locked_hits = int(obs_a.match_id in preferred) + int(
+                obs_b.match_id in preferred
+            )
+            key = (score, -locked_hits, -sine)
+            if best is None or key < (best[0], best[1], best[2]):
+                best = (score, -locked_hits, -sine, point, direction)
+
+    if best is None:
+        return _intersect_planes_to_line(records[0][1], records[1][1])
+
+    _score, _locked, _sine, point, direction = best
+    return point, direction
 
 
 def _closest_point_on_line_to_ray(
@@ -64,10 +147,21 @@ def _finite_segment_from_line_observations(
     observations: list[SyncLineObservation],
     similarities: dict[str, SimilarityTransform],
     matches: dict[str, SyncMatchInput],
+    *,
+    extent_match_ids: set[str] | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Project drawn 2D segment ends onto the 3D line for a visible mesh edge."""
+    pool = observations
+    if extent_match_ids:
+        filtered = [
+            observation
+            for observation in observations
+            if observation.match_id in extent_match_ids
+        ]
+        if len(filtered) >= 2:
+            pool = filtered
     samples: list[np.ndarray] = []
-    for observation in observations:
+    for observation in pool:
         similarity = similarities.get(observation.match_id)
         match = matches.get(observation.match_id)
         if similarity is None or match is None:
@@ -286,10 +380,17 @@ def _fit_line_fixed_direction(
     observations: list[SyncLineObservation],
     similarities: dict[str, SimilarityTransform],
     matches: dict[str, SyncMatchInput],
+    *,
+    prefer_match_ids: set[str] | None = None,
 ) -> tuple[np.ndarray, np.ndarray] | None:
-    """Least-squares line with fixed direction against back-projected observation planes."""
+    """Least-squares line with fixed direction against back-projected observation planes.
+
+    Uses every posed stroke. Near-parallel duplicate planes are dropped (unlocked
+    views kept first) so a locked near-duplicate cannot pull depth off a recovered
+    still. ``prefer_match_ids`` only orders that duplicate choice.
+    """
     unit = direction / max(float(np.linalg.norm(direction)), 1.0e-12)
-    planes: list[np.ndarray] = []
+    records: list[tuple[SyncLineObservation, np.ndarray]] = []
     for observation in observations:
         similarity = similarities.get(observation.match_id)
         match = matches.get(observation.match_id)
@@ -299,7 +400,19 @@ def _fit_line_fixed_direction(
             observation, match.calibration, similarity
         )
         if plane is not None:
-            planes.append(plane)
+            records.append((observation, plane))
+    if prefer_match_ids:
+        records.sort(key=lambda item: item[0].match_id in prefer_match_ids)
+    min_sine = float(LINE_PLANE_MIN_SINE)
+    planes: list[np.ndarray] = []
+    for _observation, plane in records:
+        normal = plane[:3]
+        if any(
+            float(np.linalg.norm(np.cross(normal, other[:3]))) < min_sine
+            for other in planes
+        ):
+            continue
+        planes.append(plane)
     if not planes:
         return None
     axis_a, axis_b = _orthonormal_basis_perpendicular(unit)

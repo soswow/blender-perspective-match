@@ -9,8 +9,8 @@ When a change is user-visible (matching, sync, UI, install, OpenCV extras, docum
 
 Skip refactors, tests, comments, and internal-only edits. Do not bump `blender_manifest.toml` version or add a dated `## [x.y.z]` heading — releases do that.
 
-Prefer one short user-facing line. If the workflow changed, update `docs/user-guide.md` / `docs/sync.md` / `README.md` too.
+Prefer one short user-facing line. Describe the product behavior, not the debug `.blend`. If the workflow changed, update `docs/user-guide.md` / `docs/sync.md` / `README.md` too.
 
-Do not rewrite an existing changelog bullet. Add a new Unreleased line if later work revises that behavior.
+Do not rewrite a dated changelog bullet. Add a new Unreleased line if later work revises that behavior. Rewrite an Unreleased bullet in place only when it leaked a debug scene.
 
 Full conventions: `AGENTS.md`.

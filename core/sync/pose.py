@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from functools import lru_cache
 from itertools import combinations
 import math
@@ -38,7 +39,6 @@ from .lines import (
     _reconstruct_line_from_observations,
 )
 from .projection import (
-    _known_line_reprojection_errors,
     _line_observation_reprojection_errors,
     _log_rodrigues,
     _normalized_camera_ray,
@@ -1721,14 +1721,17 @@ def _mixed_reprojection_errors(
         weighted=weighted,
     )
     for point_a, point_b, line_obs in known_line_constraints:
+        direction = point_b - point_a
+        if float(np.linalg.norm(direction)) < 1.0e-9:
+            continue
+        stroke = line_obs if weighted else replace(line_obs, weight=1.0)
         errors.extend(
-            _known_line_reprojection_errors(
-                point_a,
-                point_b,
-                line_obs,
+            _line_observation_reprojection_errors(
+                0.5 * (point_a + point_b),
+                direction,
+                stroke,
                 other,
                 similarity,
-                weighted=weighted,
             )
         )
     return errors
@@ -2160,9 +2163,16 @@ def _refine_rigid_mixed(
             point_errors[~valid] = known_scale_array[~valid] * 1.0e3
             errors.extend(point_errors.reshape(-1).tolist())
         for point_a, point_b, line_obs in line_constraints:
+            direction = point_b - point_a
+            if float(np.linalg.norm(direction)) < 1.0e-9:
+                continue
             errors.extend(
-                _known_line_reprojection_errors(
-                    point_a, point_b, line_obs, other, similarity
+                _line_observation_reprojection_errors(
+                    0.5 * (point_a + point_b),
+                    direction,
+                    line_obs,
+                    other,
+                    similarity,
                 )
             )
         # Soft parallel: weight is ~pixels at sin(angle)=1; keep << typical misfits.
@@ -2590,17 +2600,42 @@ def _compute_relative_pose_from_correspondences(
             weighted=False,
         )
         if np.isfinite(warm_rmse):
-            if warm_rmse <= ACCEPT_RMSE_PX:
+            warm_point = _mixed_reprojection_rmse(
+                warm,
+                free_pairs,
+                anchor,
+                other,
+                points_shared,
+                points_image,
+                point_weights=known_weights,
+                weighted=False,
+            )
+            seed_point = _mixed_reprojection_rmse(
+                warm_seed,
+                free_pairs,
+                anchor,
+                other,
+                points_shared,
+                points_image,
+                point_weights=known_weights,
+                weighted=False,
+            )
+            chosen = warm
+            chosen_point = warm_point
+            if np.isfinite(seed_point) and seed_point + 1.0 < warm_point:
+                chosen = warm_seed
+                chosen_point = seed_point
+            if np.isfinite(chosen_point) and chosen_point <= ACCEPT_RMSE_PX:
                 if best_candidate_out is not None:
-                    best_candidate_out.append(_copy_similarity(warm))
-                return warm, ""
+                    best_candidate_out.append(_copy_similarity(chosen))
+                return chosen, ""
             if initial_only:
                 if best_candidate_out is not None:
-                    best_candidate_out.append(_copy_similarity(warm))
+                    best_candidate_out.append(_copy_similarity(chosen))
                 return (
                     None,
                     f"Local diagnostic pose for '{other_id}' stayed at "
-                    f"{warm_rmse:.0f} px",
+                    f"{chosen_point:.0f} px",
                 )
 
     if initial_only:
@@ -2729,6 +2764,8 @@ def _compute_relative_pose_from_correspondences(
             best_pnp: SimilarityTransform | None = None
             best_pnp_rmse = float("inf")
             best_pnp_raw_rmse = float("inf")
+            best_pure: SimilarityTransform | None = None
+            best_pure_point_rmse = float("inf")
             seeds = _mixed_pose_seeds(
                 anchor,
                 other,
@@ -2752,8 +2789,22 @@ def _compute_relative_pose_from_correspondences(
                 )
                 if solved is None:
                     continue
+                point_raw = _mixed_reprojection_rmse(
+                    solved,
+                    free_pairs,
+                    anchor,
+                    other,
+                    points_shared,
+                    points_image,
+                    point_weights=known_weights,
+                    weighted=False,
+                )
+                if np.isfinite(point_raw) and point_raw < best_pure_point_rmse:
+                    best_pure_point_rmse = point_raw
+                    best_pure = solved
+                mixed_solved = solved
                 if free_pairs or known_line_constraints:
-                    solved = _refine_rigid_mixed(
+                    mixed_solved = _refine_rigid_mixed(
                         solved,
                         free_pairs,
                         points_shared,
@@ -2764,7 +2815,7 @@ def _compute_relative_pose_from_correspondences(
                         **mixed_kwargs,
                     )
                 rmse = _mixed_reprojection_rmse(
-                    solved,
+                    mixed_solved,
                     free_pairs,
                     anchor,
                     other,
@@ -2777,7 +2828,7 @@ def _compute_relative_pose_from_correspondences(
                 if not np.isfinite(rmse):
                     continue
                 raw_rmse = _mixed_reprojection_rmse(
-                    solved,
+                    mixed_solved,
                     free_pairs,
                     anchor,
                     other,
@@ -2790,14 +2841,17 @@ def _compute_relative_pose_from_correspondences(
                 if rmse < best_pnp_rmse:
                     best_pnp_rmse = rmse
                     best_pnp_raw_rmse = raw_rmse
-                    best_pnp = solved
-                if best_pnp_raw_rmse < 8.0:
+                    best_pnp = mixed_solved
+                if best_pure_point_rmse < 8.0:
                     break
-            if best_pnp is not None and best_pnp_raw_rmse <= ACCEPT_RMSE_PX:
+            if best_pure is not None:
+                candidates.append(best_pure)
+            if best_pnp is not None and best_pnp is not best_pure:
                 candidates.append(best_pnp)
+            if best_pure is not None and best_pure_point_rmse <= ACCEPT_RMSE_PX:
                 break
-            if best_pnp is not None:
-                candidates.append(best_pnp)
+            if best_pnp is not None and best_pnp_raw_rmse <= ACCEPT_RMSE_PX:
+                break
 
     if can_pnl_only:
         for seed in _mixed_pose_seeds(anchor, other, lock_rotation=lock_rotation, lock_translation=lock_translation):
@@ -2830,6 +2884,18 @@ def _compute_relative_pose_from_correspondences(
     }
     for candidate in candidates:
         _check_cancelled(cancel_check)
+        point_raw_rmse = _mixed_reprojection_rmse(
+            candidate,
+            free_pairs,
+            anchor,
+            other,
+            points_shared,
+            points_image,
+            point_weights=known_weights,
+            weighted=False,
+        )
+        if not np.isfinite(point_raw_rmse):
+            continue
         score_rmse = _mixed_reprojection_rmse(
             candidate,
             free_pairs,
@@ -2852,10 +2918,12 @@ def _compute_relative_pose_from_correspondences(
             weighted=False,
             **mixed_fit_kwargs,
         )
-        if raw_rmse < diagnostic_raw_rmse:
-            diagnostic_raw_rmse = raw_rmse
+        if point_raw_rmse < diagnostic_raw_rmse:
+            diagnostic_raw_rmse = point_raw_rmse
             diagnostic = candidate
-        if raw_rmse > ACCEPT_RMSE_PX:
+        # Pose accept is point RMSE. Line px is diagnostic / a tie-break so a
+        # long frozen edge cannot veto a camera that already fits the cloud.
+        if point_raw_rmse > ACCEPT_RMSE_PX:
             continue
         if score_rmse < best_rmse:
             best_rmse = score_rmse
@@ -3848,14 +3916,16 @@ def _register_from_relative_pose(
                     )
                     errors: list[float] = []
                     for point_a, point_b, line_obs in line_constraints:
+                        direction = point_b - point_a
+                        if float(np.linalg.norm(direction)) < 1.0e-9:
+                            continue
                         errors.extend(
-                            _known_line_reprojection_errors(
-                                point_a,
-                                point_b,
-                                line_obs,
+                            _line_observation_reprojection_errors(
+                                0.5 * (point_a + point_b),
+                                direction,
+                                replace(line_obs, weight=1.0),
                                 matches[match_id].calibration,
                                 candidate,
-                                weighted=False,
                             )
                         )
                     if errors and float(np.sqrt(np.mean(np.square(errors)))) < ACCEPT_RMSE_PX:

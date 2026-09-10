@@ -10,7 +10,7 @@ Pipeline (keep AGENTS.md in sync if this changes): register pairwise
 the frozen 3D (ground tags if off-plane picks disagree; frozen Is Mirror Of
 lines mixed like Known 3D) → triangulate landmarks now visible in recovered
 views and PnP stills that had no cloud support → pose-only BA of recovered
-cameras → report.
+cameras → rebuild free 3D lines from every posed camera → report.
 
 Package layout: ``constants``, ``types``, ``projection``, ``pose``, ``ground``,
 ``lines``, ``mirrors``, ``ba``, ``solve``. ``from match_perspective.core import sync``

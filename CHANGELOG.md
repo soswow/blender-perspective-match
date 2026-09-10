@@ -73,6 +73,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sync no longer prefers a cheap two-view pose when another candidate still fits the camera graph in pixels
 - Sync registration failures now say that five shared 2D landmarks may connect through any registered match and clarify the usable 2D↔3D alternatives
 - Undo and Redo no longer leave the match list empty after restoring dynamic dropdown state
+- Pose-locked cameras now anchor free line 3D from their picks so stills being tuned (instead of the locked mesh cameras) move to the line instead of stretching a wrong 3D edge
+- Solve Sync places a free 3D line from the best-conditioned views, so two locked near-duplicate stills cannot pin it at the wrong depth
+- Solve Sync rebuilds free 3D lines after placing a recovered camera, and no longer refits those lines from locked near-duplicates only, so that still can pin line depth
+- Recovered-camera pose polish uses a looser Huber so a dense cluster of well-fitting picks cannot ignore isolated landmarks that pin orientation
+- Solve Sync keeps a still that already fits frozen 3D even when a line overlay is still off, and scores line error as stroke offset plus heading
 - Orbiting with Sync Matches open no longer hitchs when the landmark list is large
 - On Ground Known 3D points now use the tighter of Ground Slack and Known 3D Slack for Z, so a looser Known 3D leash cannot lift a floor pin
 - Use Known 3D no longer leaves short uprights behind when FOV / principal point move, and no longer keeps a VP-only λ that wrecks an axis just to shave pin RMS

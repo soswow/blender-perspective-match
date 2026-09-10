@@ -289,13 +289,20 @@ def _store_mirror_line(
     observations: list[SyncLineObservation],
     similarities: dict[str, SimilarityTransform],
     matches: dict[str, SyncMatchInput],
+    *,
+    extent_match_ids: set[str] | None = None,
 ) -> None:
     from .lines import _finite_segment_from_line_observations
 
     unit = direction / max(float(np.linalg.norm(direction)), 1.0e-12)
     if observations:
         segment = _finite_segment_from_line_observations(
-            point, unit, observations, similarities, matches
+            point,
+            unit,
+            observations,
+            similarities,
+            matches,
+            extent_match_ids=extent_match_ids,
         )
     else:
         segment = (point - unit, point + unit)
@@ -313,9 +320,10 @@ def seed_mirror_line_segments(
     plane_point: np.ndarray,
     plane_normal: np.ndarray,
     known_lines: dict[str, tuple[np.ndarray, np.ndarray]] | None = None,
+    fixed_match_ids: set[str] | None = None,
 ) -> None:
     """Fill missing mirrored line partners by reflection or two single-view planes."""
-    from .lines import _reconstruct_line_from_observations
+    from .lines import _line_anchor_match_ids, _reconstruct_line_from_observations
 
     origin, normal = _normalize_plane(plane_point, plane_normal)
     known = known_lines or {}
@@ -363,10 +371,20 @@ def seed_mirror_line_segments(
             )
             continue
         reconstructed_a = _reconstruct_line_from_observations(
-            observations_a, similarities, matches
+            observations_a,
+            similarities,
+            matches,
+            prefer_match_ids=_line_anchor_match_ids(
+                observations_a, fixed_match_ids
+            ),
         )
         reconstructed_b = _reconstruct_line_from_observations(
-            observations_b, similarities, matches
+            observations_b,
+            similarities,
+            matches,
+            prefer_match_ids=_line_anchor_match_ids(
+                observations_b, fixed_match_ids
+            ),
         )
         if reconstructed_a is not None and landmark_b not in known:
             point, direction = reconstructed_a
@@ -472,9 +490,10 @@ def enforce_mirror_line_segments(
     similarities: dict[str, SimilarityTransform],
     matches: dict[str, SyncMatchInput],
     known_lines: dict[str, tuple[np.ndarray, np.ndarray]] | None = None,
+    fixed_match_ids: set[str] | None = None,
 ) -> None:
     """Snap free mirrored edges onto one reflected 3D line pair."""
-    from .lines import _fit_line_fixed_direction
+    from .lines import _fit_line_fixed_direction, _line_anchor_match_ids
 
     origin, normal = _normalize_plane(plane_point, plane_normal)
     known = known_lines or {}
@@ -511,10 +530,15 @@ def enforce_mirror_line_segments(
             observations = _posed_line_observations(
                 landmark_id, line_observations_by_landmark, similarities
             )
+            anchor_ids = _line_anchor_match_ids(observations, fixed_match_ids)
             fitted = None
             if len(observations) >= 2:
                 fitted = _fit_line_fixed_direction(
-                    seed_dir, observations, similarities, matches
+                    seed_dir,
+                    observations,
+                    similarities,
+                    matches,
+                    prefer_match_ids=anchor_ids,
                 )
             if fitted is None:
                 fitted = (seed_point, seed_dir)
@@ -527,6 +551,7 @@ def enforce_mirror_line_segments(
                 observations,
                 similarities,
                 matches,
+                extent_match_ids=anchor_ids,
             )
 
 

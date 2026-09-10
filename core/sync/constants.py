@@ -69,6 +69,18 @@ OUTLIER_WEIGHT_FACTOR = 0.15
 # Landmark Sync Weight above this keeps full BA pull (no outlier downweight).
 SYNC_WEIGHT_PROTECT = 1.0
 
+# Free-line 3D geometry anchors to pose-locked cameras once this many see it.
+LINE_FIXED_ANCHOR_MIN = 2
+# Ignore nearly parallel interpretation planes when intersecting a free 3D line.
+LINE_PLANE_MIN_SINE = 0.12
+# Truncate per-view line RMSE when ranking reconstruction pairs.
+LINE_RECONSTRUCT_TRUNCATE_PX = 80.0
+
+# Recovered pose-only BA Huber. Joint BA uses 6 px because outliers hide in
+# hundreds of picks. A resected still often has a tight inlier cluster plus
+# one isolated line or point that pins yaw; 6 px treats those as outliers.
+RECOVERED_HUBER_DELTA_PX = ACCEPT_RMSE_PX
+
 # Joint BA freezes 3D and refines poses only above this landmark count.
 # Triangulation stays the 3D prior so cameras move instead of a few
 # landmarks absorbing edge error.
