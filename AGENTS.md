@@ -77,6 +77,7 @@ Headless helpers under `tools/` (and `scripts/validate_addon.py`) for investigat
 - `tools/debug-sync/` — sync graph, stored vs *recovered* optical-axis tilt vs world Z, match-Empty scale (`empty_s`), homography vs mixed RMSE, `solve_landmark_sync` on a saved scene; `probe_resected.py` splits ground vs off-plane RMSE on a recovered still; `probe_graph.py` dumps overlap, stored-Empty vs pick, per-pose PnP/refine timing, per-observation residuals, inner vs outer RMSE by image radius, and optional leave-one-out timing; `probe_cameras.py` dumps per-match K, D, Blender lens/FOV, and whether the undistorted plate is active; `probe_pin_refine.py` dumps Known 3D pins vs per-axis VP residuals and runs the camera pin polish (orientation rebuilt from VP lines at the current K). See `tools/debug-sync/README.md`.
 - `tools/explore-vp-intrinsics/` — VP-line residual vs FOV / principal-point / λ (does not touch landmarks).
 - `scripts/validate_addon.py` — Blender smoke test (register, match CRUD, VP solve, origin, import).
+- `tools/synthetic_sync/` — seeded Sync cases with an independent projection/visibility oracle, withheld object checks, input-order/cache replay, and generated Blender scene/save-reopen validation. See `tools/synthetic_sync/README.md`; preserve exact JSON evidence when investigating a failure.
 
 ## Do not
 

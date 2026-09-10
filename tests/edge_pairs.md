@@ -35,7 +35,7 @@ Before changing remap / bind / copy-K / `solve_landmark_sync`: scan **Untested**
 | A swap × 180° (same W×H, upside-down JPEG) | — | N/A — size remap cannot see 180° |
 | A swap × Brown–Conrady p1/p2 axes | — | untested |
 | B leftover wrong **width-scale** K × C nadir × D raised | — | untested (old blends until YAML re-import) |
-| Two different calibrated zooms in one graph | — | untested |
+| Two different calibrated zooms in one graph | `test_synthetic_sync.SyntheticSyncCorpusTests.test_seed_zero_corpus` (`ground` and other families; independent per-view K and withheld oracle) | covered |
 | F ground-only still × C nadir | — | untested |
 
 Helpers: `tests/pair_fixtures.py`.

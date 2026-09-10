@@ -48,6 +48,25 @@ Run unit tests (works even if the checkout directory is not named `match_perspec
 ./scripts/run-unittests.sh
 ```
 
+Run a focused test without relying on test discovery order:
+
+```sh
+./scripts/run-unittests.sh test_sync_solve
+./scripts/run-unittests.sh test_core.CoreGeometryTests.test_vanishing_point_intersection
+```
+
+Generate synthetic Sync scenes and verify camera alignment on object points that
+were never used as picks:
+
+```sh
+python3 tools/synthetic_sync/run.py --family all --out /tmp/pm-synthetic
+```
+
+See [Synthetic Sync laboratory](../tools/synthetic_sync/README.md) for noisy sweeps,
+exact JSON replay, portable reports, and generated `.blend` files with optional
+reference renders. The PR/main test workflow runs numerical checks and real Blender
+save/reopen checks; artifacts are retained for 14 days.
+
 Run the Blender smoke test:
 
 ```sh
@@ -95,7 +114,7 @@ match_perspective/
   icons/                  # PNG icon assets
   wheels/                 # OpenCV wheels (gitignored; ./scripts/fetch-wheels.sh)
   scripts/                # build / link-dev / fetch-wheels / release / tests
-  .github/workflows/      # Tag-only zip build + GitHub Release
+  .github/workflows/      # PR/main tests; tag-only zip build + GitHub Release
   tests/                  # Pure geometry / sync / detect regressions
   tools/                  # Standalone helpers (AprilTag sheets, FOV plotter, sync dump)
   docs/                   # User guide, sync, development, TODOs

@@ -1,0 +1,161 @@
+# Synthetic Sync laboratory
+
+Generate Sync evidence from a known object and cameras, solve it, and check how
+the recovered cameras project **object geometry never supplied as picks**. No
+private projects, AprilTags, VP detection, OpenCV, or images are needed for the
+numerical run. Blender can create packed reference renders for inspection.
+
+This supplements `tests/sync_fixtures.py`, `tests/pair_fixtures.py` and
+`tests/edge_pairs.md`. Those tests cover specific solver branches and calibration
+pairs; this harness checks camera accuracy against an independent reference and
+compares the numerical request with evidence collected from real Blender state.
+
+## Run and inspect
+
+From the repository root, using Python with NumPy:
+
+```sh
+python3 tools/synthetic_sync/run.py --family all --out /tmp/pm-synthetic
+python3 tools/synthetic_sync/run.py --family all --permute --warm --out /tmp/pm-invariance
+python3 tools/synthetic_sync/run.py --family all --count 3 --noise-px 0.3 --out /tmp/pm-noisy
+```
+
+Open `report.html`. Green rings are true projections of withheld vertices and
+surface samples; red dots are their projections through recovered cameras.
+Each run writes exact JSON cases and result/assessment JSON with request hash,
+Git revision, dirty-tree flag, Python/NumPy/platform versions and elapsed time.
+Keep the case **and** the code revision when preserving a failure; the dirty-tree
+flag alone cannot reconstruct uncommitted code. Seeds make exploration repeatable;
+saved JSON is the regression artifact if the generator later changes.
+
+See [initial pilot observations](pilot-results.md) for the first noisy sweep and
+the distinction between a flagged experiment and a confirmed solver defect.
+
+Exit status is nonzero if any accuracy contract fails or the solver raises.
+Exceptions are recorded as failures, never accepted as a valid refusal. Reports
+include solver messages. A missing required camera fails even when the solver's
+remaining cameras fit well. Reversing inputs reruns the accuracy contract;
+`--warm` also requires successive cached solves' withheld projections to agree
+within 0.01 px. It does not claim identical internal optimization trajectories.
+
+Replay a saved case without regenerating it:
+
+```sh
+python3 tools/synthetic_sync/run.py --case /tmp/pm-noisy/overhead-0.json --out /tmp/pm-replay
+```
+
+## Real Blender path
+
+```sh
+"/Applications/Blender 5.1.app/Contents/MacOS/blender" \
+  --factory-startup --disable-autoexec -b --python-exit-code 1 \
+  --python tools/synthetic_sync/blender_case.py -- \
+  --case /tmp/pm-synthetic/partial_symmetry-0.json \
+  --out /tmp/pm-blender --roundtrip --render
+```
+
+Use a new output directory. The command creates `input.blend`, `solved.blend`,
+metrics and a portable HTML report. `--roundtrip` opens **input.blend** in another
+factory-startup Blender process and repeats the solve in `reopened/`.
+`--render` adds PNG reference images and packs them in the generated files;
+without it, packed blank images supply the actual image datablocks required by
+the extension. The reference mesh and truth cameras are in `Synthetic truth`.
+Enable the extension before inspecting the generated file in the UI. Select a
+match to compare its camera against the reference object and packed image.
+
+The Blender runner:
+
+1. Constructs truth cameras directly using Blender's camera data API. Checks
+   native Blender projections against the independent NumPy reference (0.002 px).
+2. Creates actual match hierarchies, stored calibrations, image datablocks,
+   landmark picks, Known 3D Empties, mirror links, parallel links and pose locks.
+3. Compares **every supplied solver field** with `prepare_diagnose_sync`'s
+   collected request, allowing only float32 storage rounding and ordering.
+4. Calls `scene.solve_and_apply_sync`, then switches matches and checks evaluated
+   Blender cameras against the recovered projections (0.01 px).
+5. Saves only generated files and optionally replays saved input in a fresh process.
+
+`--load /path/to/input.blend` can replay a generated file into a *different*
+output directory. It verifies a request fingerprint. Never pass a user project;
+this is a generator/replayer, not a general scene repair tool.
+
+## Current corpus and its contracts
+
+| Family | Evidence/state | Required outcome |
+| --- | --- | --- |
+| `ground` | Visible surface picks plus floor picks | All three cameras in the anchor frame |
+| `known_3d` | Known nonplanar points, no ground | All three cameras in the anchor frame |
+| `free_scale` | Free points, no ground or metric pins | Cameras correct up to one shared similarity |
+| `mixed_lines` | Ground/points, free and Known 3D vertical lines, world-axis parallel links; unequal stroke extents | All cameras accurate |
+| `partial_symmetry` | Selected mirrored point pairs on a box with an asymmetric raised detail | All cameras accurate without imposing symmetry on the whole object |
+| `locked_bridge` | Fixed live pose for the middle view; fewer picks in the anchor | Lock preserved and all cameras accurate |
+| `overhead` | Third view almost vertically above the object | All cameras accurate |
+| `disconnected` | Fourth camera with no observations | Connected three accurate; fourth excluded |
+| `collinear` | Only collinear free points in two views | Refusal with a message |
+
+Each camera has its own known focal length and off-center principal point. Except
+for the anchor and explicit pose lock, stored private poses are deliberately
+unrelated to truth. Frustum and mesh ray intersections determine visibility;
+the generator does not give a camera picks on hidden surfaces. Noise is independent
+Gaussian pixel error in each coordinate, not a realistic model of every picking
+mistake. Seeds currently jitter camera positions and focal lengths around these
+nine arrangements; this is a bounded pilot, not broad random scene search.
+
+The default exact-data contract is withheld RMS ≤1 px per required camera,
+rotation error ≤1 degree and center error ≤2% of object diagonal. The noisy
+contract uses withheld RMS ≤max(1, 6×noise) px, with the same pose limits.
+These are **provisional experiment limits**, not established product guarantees
+or statistical confidence intervals. Maximum pixel error is reported separately.
+No threshold is changed automatically to make a run pass.
+
+For free-scale cases, one proper global rotation/translation/scale is estimated
+using reconstructed **training landmarks only**. That same transform applies to
+every camera; no camera gets its own alignment and withheld points never help
+fit it. Other families use the anchor frame directly. This allows legitimate
+scale ambiguity while exposing inconsistent camera geometry.
+
+The oracle in `geometry.py` does not import Perspective Match. Its pinhole math
+has analytical tests and a native Blender cross-check. A deliberate wrong-camera
+test produces zero error on planar fitted picks but fails on withheld 3D points.
+This guards against making fitted RMSE the answer by accident.
+
+## What this still misses
+
+- Unknown/wrong intrinsics, distorted/cropped/resized images and undistortion
+  state; all current lenses are ideal pinhole cameras with square pixels.
+- Wrong landmark identities, gross outliers, soft constraint slack, mirror lines,
+  line-only initialization, and constraints essential to solving an otherwise
+  impossible graph. Mixed cases verify coexistence; existing focused tests are
+  still needed to prove individual constraints contribute the right information.
+- Mouse picking, drawing, undo/redo, deletion/recreation, hot reload and long edit
+  sequences. The Blender path calls the shared scene service and actual RNA;
+  it does not simulate sidebar clicks or the async operator lifecycle.
+- Large scenes and performance scaling. Timings aid diagnosis but are not a
+  benchmark gate across machines.
+- A general ambiguity classifier: the pilot labels one known degenerate case.
+  A useful failure message is required, but its explanation is not yet evaluated.
+- Photographic/nonrigid/model mismatch and aesthetically preferred compromises.
+  Real projects remain valuable when they reveal evidence this model omits.
+
+The most useful next step is to inspect failures before expanding the generator.
+Distinguish a harness mistake, an unfair contract, noise sensitivity and a solver
+defect. Preserve the exact case, reduce its cameras/picks/constraints while
+retaining the same independently measured failure, and add a focused regression
+when the expected behavior is established. Automatic reduction/search is not
+implemented in this pilot. Add new scene actions or evidence types to the shared
+request format and Blender collection comparison together; do not add truth as
+a solver shortcut.
+
+## Maintenance and CI
+
+`tests/test_synthetic_sync.py` checks the oracle and nine exact seed-zero cases.
+Run just that module with `./scripts/run-unittests.sh test_synthetic_sync`.
+The test runner explicitly loads the numerical package without Blender's entry
+point, so focused core tests no longer depend on an earlier detection test's
+import setup.
+
+`.github/workflows/tests.yml` runs normal tests, input-order/cache variants and
+Blender smoke/save-reopen cases on PRs and pushes to main. Reports and generated
+files are uploaded for 14 days. CI does not render reference images, install
+OpenCV wheels, change the release workflow or publish anything. Noisy sweeps are
+exploratory and intentionally separate from the passing deterministic CI corpus.

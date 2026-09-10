@@ -1,0 +1,82 @@
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  numerical:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python3 -m pip install numpy
+      - run: ./scripts/run-unittests.sh
+      - name: Reordered evidence and cache replay
+        run: python3 tools/synthetic_sync/run.py --family all --permute --warm --out "${RUNNER_TEMP}/synthetic-numerical"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: synthetic-numerical
+          path: ${{ runner.temp }}/synthetic-numerical
+          retention-days: 14
+
+  blender:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      BLENDER_VERSION: "5.1.2"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python3 -m pip install numpy
+      - name: Cache Blender tarball
+        id: blender-tarball
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/blender.tar.xz
+          key: blender-${{ env.BLENDER_VERSION }}-linux-x64
+      - name: Download Blender
+        if: steps.blender-tarball.outputs.cache-hit != 'true'
+        run: |
+          curl -fL --retry 3 -o "${RUNNER_TEMP}/blender.tar.xz" \
+            "https://download.blender.org/release/Blender${BLENDER_VERSION%.*}/blender-${BLENDER_VERSION}-linux-x64.tar.xz"
+      - name: Install Blender
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgl1 libglu1-mesa libxi6 libxrender1 libxkbcommon0 libsm6 libice6 libxxf86vm1
+          mkdir -p "${RUNNER_TEMP}/blender"
+          tar -xJf "${RUNNER_TEMP}/blender.tar.xz" -C "${RUNNER_TEMP}/blender" --strip-components=1
+          echo "${RUNNER_TEMP}/blender" >> "$GITHUB_PATH"
+      - name: Existing Blender smoke test
+        run: blender --factory-startup --disable-autoexec -b --python-exit-code 1 --python scripts/validate_addon.py
+      - name: Generate cases, collect scene evidence, apply Sync and reopen
+        run: |
+          for family in ground known_3d free_scale mixed_lines partial_symmetry locked_bridge overhead disconnected collinear; do
+            python3 tools/synthetic_sync/run.py --family "$family" --out "${RUNNER_TEMP}/synthetic-blender/cases"
+            blender --factory-startup --disable-autoexec -b --python-exit-code 1 \
+              --python tools/synthetic_sync/blender_case.py -- \
+              --case "${RUNNER_TEMP}/synthetic-blender/cases/${family}-0.json" \
+              --out "${RUNNER_TEMP}/synthetic-blender/${family}" --roundtrip
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: synthetic-blender
+          path: ${{ runner.temp }}/synthetic-blender
+          retention-days: 14
