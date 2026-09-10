@@ -33,7 +33,7 @@ PIN_ACCEPT_RMSE_PX = 25.0
 # Alternate Auto from VPs (Known 3D polish) and Solve Sync until joint RMSE
 # stops falling. Pixel floor avoids chasing noise after the overlay has settled.
 PIN_SYNC_MAX_ROUNDS = 8.
-PIN_SYNC_MIN_IMPROVE_PX = 0.02
+PIN_SYNC_MIN_IMPROVE_PX = 0.05
 _AXIS_SCORE_WEIGHT = 3.0
 _AXIS_VP_SLACK_PX = 1.5
 _HFOV_MIN_DEG = 8.0

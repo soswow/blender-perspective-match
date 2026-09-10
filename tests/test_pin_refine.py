@@ -344,6 +344,9 @@ class PinRefineTests(unittest.TestCase):
         self.assertIn("VP", result.message)
 
     def test_pin_sync_round_improved_needs_pixel_floor(self) -> None:
+        """0.04 px is overlay noise; 0.10 px is enough to keep Iterate Known 3D going."""
+        self.assertLess(0.04, pin_refine.PIN_SYNC_MIN_IMPROVE_PX)
+        self.assertGreaterEqual(0.10, pin_refine.PIN_SYNC_MIN_IMPROVE_PX)
         self.assertTrue(pin_refine.pin_sync_round_improved(float("inf"), 8.0))
         self.assertTrue(pin_refine.pin_sync_round_improved(4.0, 3.9))
         self.assertFalse(pin_refine.pin_sync_round_improved(4.0, 3.96))
