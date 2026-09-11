@@ -608,7 +608,12 @@ def pull_origin_empty_hidden(root: bpy.types.Object) -> None:
         session.hide_origin_empty = hidden
 
 
-def set_active_match(context: bpy.types.Context, root: bpy.types.Object) -> None:
+def set_active_match(
+    context: bpy.types.Context,
+    root: bpy.types.Object,
+    *,
+    record_history: bool = True,
+) -> None:
     """Activate a match root and switch the viewport to its camera."""
     if not properties.is_match_root(root):
         raise ValueError("Not a Perspective Match root")
@@ -619,6 +624,11 @@ def set_active_match(context: bpy.types.Context, root: bpy.types.Object) -> None
     space = properties.workspace(context)
     previous = space.active_root
     same_match = previous == root
+    previous_name = (
+        previous.name
+        if previous is not None and properties.is_match_root(previous)
+        else None
+    )
     # Persist live zoom/pan even when re-activating the same match, so a
     # slot shortcut cannot restore the framing from the previous switch.
     if previous is not None and properties.is_match_root(previous):
@@ -651,6 +661,10 @@ def set_active_match(context: bpy.types.Context, root: bpy.types.Object) -> None
         context.scene.render.resolution_percentage = 100
     enter_camera_view(context, restore_framing=not same_match)
     pull_origin_empty_hidden(root)
+    if record_history:
+        operators_module.record_match_history(
+            space, root.name, previous=previous_name
+        )
     properties.tag_viewport_redraw(context)
 
 
@@ -695,6 +709,7 @@ def delete_match(
     prefix = match_prefix(root)
     session = root.pm_session
     space = properties.workspace(context)
+    deleted_name = root.name
 
     operators_module.cancel_active_interact(context)
     _clear_observations_for_root(context, root)
@@ -737,6 +752,7 @@ def delete_match(
     if collection is not None and collection.name in bpy.data.collections:
         bpy.data.collections.remove(collection)
 
+    operators_module.remove_match_from_history(space, deleted_name)
     properties.tag_sync_ui_redraw(context)
     return prefix
 
@@ -834,8 +850,12 @@ def rename_match(
     if match_prefix(root) == prefix:
         return root
 
+    old_name = root.name
     _rename_match_hierarchy(root, prefix)
     space = properties.workspace(context)
+    from ..ui import operators as operators_module
+
+    operators_module.rename_match_in_history(space, old_name, root.name)
     properties.tag_sync_ui_redraw(context)
     if space.active_root == root:
         properties.sync_active_match_enum(space, root.name)

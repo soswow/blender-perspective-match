@@ -41,7 +41,7 @@ def is_dev_install() -> bool:
 
 
 def _register_keymaps() -> None:
-    """Ctrl+Alt+NumPad 1–9 / arrows, Ctrl+Cmd+A pick, plate click-to-select."""
+    """Ctrl+Alt+NumPad 1–9 / arrows / Shift+arrows, Ctrl+Cmd+A pick, plate click."""
     _unregister_keymaps()
     window_manager = bpy.context.window_manager
     if window_manager is None:
@@ -72,6 +72,20 @@ def _register_keymaps() -> None:
             "PRESS",
             ctrl=True,
             alt=True,
+        )
+        item.properties.direction = direction
+        _addon_keymaps.append((keymap, item))
+    for key, direction in (
+        ("RIGHT_ARROW", 1),
+        ("LEFT_ARROW", -1),
+    ):
+        item = keymap.keymap_items.new(
+            "perspective_match.cycle_match_history",
+            key,
+            "PRESS",
+            ctrl=True,
+            alt=True,
+            shift=True,
         )
         item.properties.direction = direction
         _addon_keymaps.append((keymap, item))

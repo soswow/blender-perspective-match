@@ -1372,6 +1372,12 @@ class PMSession(bpy.types.PropertyGroup):
     )
 
 
+class PMMatchHistoryEntry(bpy.types.PropertyGroup):
+    """One visit in the active-match selection history."""
+
+    name: bpy.props.StringProperty(options={"HIDDEN"})
+
+
 class PMWorkspace(bpy.types.PropertyGroup):
     """Scene-level UI controller for the active match session."""
 
@@ -1388,6 +1394,14 @@ class PMWorkspace(bpy.types.PropertyGroup):
         ),
         items=_active_match_items,
         update=_update_active_match,
+    )
+    match_history: bpy.props.CollectionProperty(
+        type=PMMatchHistoryEntry,
+        options={"HIDDEN"},
+    )
+    match_history_index: bpy.props.IntProperty(
+        default=-1,
+        options={"HIDDEN"},
     )
     anchor_root: bpy.props.PointerProperty(
         name="Sync Anchor Root",
@@ -1641,5 +1655,6 @@ CLASSES = (
     PMLandmarkObservation,
     PMLandmark,
     PMSession,
+    PMMatchHistoryEntry,
     PMWorkspace,
 )

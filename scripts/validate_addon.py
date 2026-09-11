@@ -76,6 +76,23 @@ def main() -> None:
             assert pick_key.type == "A" and pick_key.value == "PRESS"
             assert pick_key.ctrl and pick_key.oskey
             assert not pick_key.shift and not pick_key.alt
+            history_keys = [
+                item
+                for _keymap, item in extension._addon_keymaps
+                if item.idname == "perspective_match.cycle_match_history"
+            ]
+            assert len(history_keys) == 2, history_keys
+            for item in history_keys:
+                assert item.ctrl and item.alt and item.shift
+                assert item.type in {"LEFT_ARROW", "RIGHT_ARROW"}
+            cycle_keys = [
+                item
+                for _keymap, item in extension._addon_keymaps
+                if item.idname == "perspective_match.cycle_match"
+            ]
+            assert len(cycle_keys) == 4, cycle_keys
+            for item in cycle_keys:
+                assert item.ctrl and item.alt and not item.shift
             overlay = sys.modules["match_perspective.ui.overlay"]
             legacy_sidebar_handle = bpy.types.SpaceView3D.draw_handler_add(
                 lambda: None,

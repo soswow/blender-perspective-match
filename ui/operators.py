@@ -21,7 +21,7 @@ from ..detect import opencv as opencv_support
 from ..detect import tag_snap
 from ..detect import vp_lines as vp_line_detect
 from ..scene import distortion
-from . import overlay, overlay_hit, sync_report
+from . import match_history, overlay, overlay_hit, sync_report
 from .landmark_names import suggested_duplicate_landmark_name
 from .npanel import PERSPECTIVE_MATCH_CATEGORY
 
@@ -422,6 +422,11 @@ _ARROW_CYCLE_KEYS = {
     "DOWN_ARROW": 1,
 }
 
+_ARROW_HISTORY_KEYS = {
+    "LEFT_ARROW": -1,
+    "RIGHT_ARROW": 1,
+}
+
 
 def _clear_interact_flags(context: bpy.types.Context) -> None:
     """Reset workspace modal flags without touching a live operator."""
@@ -612,10 +617,71 @@ def _match_slot_from_event(event) -> int | None:
 
 
 def _match_cycle_from_event(event) -> int | None:
-    """Ctrl+Alt+Arrow → +1 (next) or -1 (previous), else None."""
-    if event.value != "PRESS" or not event.ctrl or not event.alt:
+    """Ctrl+Alt+Arrow (no Shift) → +1 (next) or -1 (previous), else None."""
+    if event.value != "PRESS" or not event.ctrl or not event.alt or event.shift:
         return None
     return _ARROW_CYCLE_KEYS.get(event.type)
+
+
+def _match_history_from_event(event) -> int | None:
+    """Ctrl+Alt+Shift+Left/Right → -1 (back) or +1 (forward), else None."""
+    if (
+        event.value != "PRESS"
+        or not event.ctrl
+        or not event.alt
+        or not event.shift
+    ):
+        return None
+    return _ARROW_HISTORY_KEYS.get(event.type)
+
+
+def _history_names(space) -> list[str]:
+    return [entry.name for entry in space.match_history]
+
+
+def _write_match_history(space, names: list[str], index: int) -> None:
+    space.match_history.clear()
+    for name in names:
+        space.match_history.add().name = name
+    space.match_history_index = index
+
+
+def record_match_history(space, selected: str, *, previous: str | None = None) -> None:
+    """Record an ordinary match activation in the visit list."""
+    names, index = match_history.record_visit(
+        _history_names(space),
+        int(space.match_history_index),
+        selected,
+        previous=previous,
+    )
+    _write_match_history(space, names, index)
+
+
+def rename_match_in_history(space, old_name: str, new_name: str) -> None:
+    """Keep history pointing at a renamed match root."""
+    names = match_history.rename_entries(_history_names(space), old_name, new_name)
+    _write_match_history(space, names, int(space.match_history_index))
+
+
+def remove_match_from_history(space, removed: str) -> None:
+    """Drop a deleted match from the visit list."""
+    names, index = match_history.remove_entries(
+        _history_names(space),
+        int(space.match_history_index),
+        removed,
+    )
+    _write_match_history(space, names, index)
+
+
+def _prune_match_history(space) -> tuple[list[str], int]:
+    valid = {root.name for root in properties.iter_match_roots()}
+    names, index = match_history.prune_missing(
+        _history_names(space),
+        int(space.match_history_index),
+        valid,
+    )
+    _write_match_history(space, names, index)
+    return names, index
 
 
 def cancel_active_interact(context: bpy.types.Context) -> bool:
@@ -684,6 +750,35 @@ def activate_match_by_delta(
     except ValueError:
         index = 0 if step > 0 else len(roots) - 1
     return activate_match_by_slot(context, index + 1, report=report)
+
+
+def activate_match_by_history(
+    context: bpy.types.Context,
+    delta: int,
+    *,
+    report=None,
+) -> set[str]:
+    """Activate the previous or next match in the visit history (wraps)."""
+    space = _workspace(context)
+    names, index = _prune_match_history(space)
+    next_index = match_history.step_index(names, index, delta)
+    if next_index is None:
+        if report is not None:
+            report({"WARNING"}, "No Perspective Match history yet")
+        return {"CANCELLED"}
+    root = bpy.data.objects.get(names[next_index])
+    if root is None or not properties.is_match_root(root):
+        if report is not None:
+            report({"WARNING"}, "History match is missing")
+        return {"CANCELLED"}
+    try:
+        scene.set_active_match(context, root, record_history=False)
+    except Exception as error:
+        if report is not None:
+            report({"ERROR"}, str(error))
+        return {"CANCELLED"}
+    space.match_history_index = next_index
+    return {"FINISHED"}
 
 
 def _delete_selected_item(context: bpy.types.Context) -> bool:
@@ -2298,6 +2393,14 @@ class PM_OT_interact(bpy.types.Operator):
             if result == {"FINISHED"}:
                 return {"CANCELLED"}
             return {"RUNNING_MODAL"}
+        history = _match_history_from_event(event)
+        if history is not None:
+            result = activate_match_by_history(
+                context, history, report=self.report
+            )
+            if result == {"FINISHED"}:
+                return {"CANCELLED"}
+            return {"RUNNING_MODAL"}
         cycle = _match_cycle_from_event(event)
         if cycle is not None:
             result = activate_match_by_delta(context, cycle, report=self.report)
@@ -2516,6 +2619,36 @@ class PM_OT_cycle_match(bpy.types.Operator):
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         return activate_match_by_delta(
+            context, int(self.direction), report=self.report
+        )
+
+
+class PM_OT_cycle_match_history(bpy.types.Operator):
+    """Activate the previous or next match in the recent-selection list."""
+
+    bl_idname = "perspective_match.cycle_match_history"
+    bl_label = "Cycle Match History"
+    bl_description = (
+        "Switch to the previously or next recently selected Perspective Match "
+        "(Ctrl+Alt+Shift+Left/Right). Keeps a list of the last 10 selections "
+        "and wraps"
+    )
+    bl_options = {"UNDO"}
+
+    direction: bpy.props.IntProperty(
+        name="Direction",
+        description="+1 later visit, -1 earlier visit",
+        default=-1,
+        min=-1,
+        max=1,
+    )
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        return _perspective_match_sidebar_active(context)
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        return activate_match_by_history(
             context, int(self.direction), report=self.report
         )
 
@@ -4131,6 +4264,7 @@ CLASSES = (
     PM_OT_export_sync_report,
     PM_OT_activate_match_slot,
     PM_OT_cycle_match,
+    PM_OT_cycle_match_history,
     PM_OT_interact,
     PM_OT_pick_in_active_match,
 )
