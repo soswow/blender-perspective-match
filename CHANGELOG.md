@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Solve Sync and Diagnose flag free and mirrored lines whose 3D position or direction is sensitive to small stroke edits, even when their pixel fit is good.
 
 ### Changed
+- Diagnose HTML match table columns are sortable, and the camera graph keeps the overlap tree in view with a green/gray key and hover details on shared-point counts.
 - Sync Matches **This Camera** (Solve, Lock Pose, Fit Only) replaces the Lock Pose checkbox: Solve lets Sync move this camera and 3D; Lock Pose freezes the camera while its picks still move 3D; Fit Only only places the camera. Disabled on the Anchor.
 
 ## [0.5.0] - 2026-09-10

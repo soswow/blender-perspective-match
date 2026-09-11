@@ -10,12 +10,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from html import escape
-import math
+import json
 import os
 from pathlib import Path
 import shutil
 import tempfile
 from typing import Iterable, Mapping, Sequence
+
+_VENDOR_DIR = Path(__file__).resolve().parent / "vendor"
 
 
 PAIR_POINT_REQUIREMENT = 5
@@ -28,6 +30,22 @@ def _shared_point_summary(count: int) -> str:
     if count < PAIR_POINT_REQUIREMENT:
         return f"{count} of {PAIR_POINT_REQUIREMENT} shared"
     return f"{count} shared; minimum {PAIR_POINT_REQUIREMENT}"
+
+
+def _edge_tooltip(name_a: str, name_b: str, shared_points: int) -> str:
+    """Explain one overlap link for the camera-graph hover card."""
+    if shared_points >= PAIR_POINT_REQUIREMENT:
+        support = (
+            f"{shared_points} shared ordinary points "
+            f"(pairwise 2D↔2D needs {PAIR_POINT_REQUIREMENT})."
+        )
+    else:
+        missing = PAIR_POINT_REQUIREMENT - shared_points
+        support = (
+            f"{shared_points} of {PAIR_POINT_REQUIREMENT} shared ordinary points. "
+            f"Add {missing} more for pairwise 2D↔2D."
+        )
+    return f"{name_a} ↔ {name_b}\n{support}"
 
 
 _REPORT_KEEP_COUNT = 10
@@ -523,6 +541,18 @@ def _status_label(status: str) -> str:
     }.get(status, status.title())
 
 
+def _status_rank(status: str) -> int:
+    return {"anchor": 0, "synced": 1, "skipped": 2, "disabled": 3}.get(status, 9)
+
+
+def _vendor_js(name: str) -> str:
+    return (_VENDOR_DIR / name).read_text(encoding="utf-8")
+
+
+def _html_json(value: object) -> str:
+    return json.dumps(value, ensure_ascii=True).replace("<", "\\u003c")
+
+
 def _backbone_edges(report: SyncDiagnosticReport) -> list[ReportEdge]:
     """Maximum-overlap forest for a legible graph instead of an edge hairball."""
     parent = {item.match_id: item.match_id for item in report.matches}
@@ -547,65 +577,140 @@ def _backbone_edges(report: SyncDiagnosticReport) -> list[ReportEdge]:
     return output
 
 
-def _svg_graph(report: SyncDiagnosticReport) -> str:
-    nodes = report.matches
-    if not nodes:
-        return '<p class="muted">No camera graph available.</p>'
-    width = 960
-    height = 450 if len(nodes) > 4 else 350
-    center_x, center_y = width / 2, height / 2
-    radius_x = min(360.0, max(180.0, width * 0.38))
-    radius_y = min(160.0, max(110.0, height * 0.36))
-    positions: dict[str, tuple[float, float]] = {}
-    anchor = next((item for item in nodes if item.status == "anchor"), None)
-    orbit = [item for item in nodes if item is not anchor]
-    if anchor is not None:
-        positions[anchor.match_id] = (center_x, center_y)
-    if orbit:
-        for index, item in enumerate(orbit):
-            angle = -math.pi / 2 + 2 * math.pi * index / len(orbit)
-            positions[item.match_id] = (
-                center_x + radius_x * math.cos(angle),
-                center_y + radius_y * math.sin(angle),
-            )
-    elif anchor is not None:
-        positions[anchor.match_id] = (center_x, center_y)
+def _camera_layout_positions(
+    match_ids: Sequence[str],
+    edges: Sequence[ReportEdge],
+    *,
+    anchor_id: str | None,
+) -> dict[str, tuple[float, float]]:
+    """Pack the overlap forest into rows so the viewport can fit readable nodes."""
+    adjacency: dict[str, list[str]] = {item: [] for item in match_ids}
+    for edge in edges:
+        if edge.match_a in adjacency and edge.match_b in adjacency:
+            adjacency[edge.match_a].append(edge.match_b)
+            adjacency[edge.match_b].append(edge.match_a)
+    for neighbors in adjacency.values():
+        neighbors.sort()
 
-    edge_bits: list[str] = []
-    for edge in _backbone_edges(report):
-        if edge.match_a not in positions or edge.match_b not in positions:
+    seen: set[str] = set()
+    components: list[list[list[str]]] = []
+    seeds = [anchor_id] if anchor_id in adjacency else []
+    seeds.extend(item for item in match_ids if item not in seeds)
+    for seed in seeds:
+        if seed in seen or seed not in adjacency:
             continue
-        x1, y1 = positions[edge.match_a]
-        x2, y2 = positions[edge.match_b]
-        strength = "strong" if edge.shared_points >= PAIR_POINT_REQUIREMENT else "weak"
-        midpoint_x, midpoint_y = (x1 + x2) / 2, (y1 + y2) / 2
-        edge_bits.append(
-            f'<g class="edge {strength}"><line x1="{x1:.1f}" y1="{y1:.1f}" '
-            f'x2="{x2:.1f}" y2="{y2:.1f}"/><text x="{midpoint_x:.1f}" '
-            f'y="{midpoint_y - 5:.1f}">{edge.shared_points}</text></g>'
-        )
+        layers: list[list[str]] = [[seed]]
+        depth = {seed: 0}
+        seen.add(seed)
+        queue = [seed]
+        for current in queue:
+            for neighbor in adjacency[current]:
+                if neighbor in seen:
+                    continue
+                seen.add(neighbor)
+                next_depth = depth[current] + 1
+                depth[neighbor] = next_depth
+                while len(layers) <= next_depth:
+                    layers.append([])
+                layers[next_depth].append(neighbor)
+                queue.append(neighbor)
+        rows: list[list[str]] = []
+        for layer in layers:
+            for start in range(0, len(layer), 6):
+                rows.append(layer[start : start + 6])
+        components.append(rows or [[seed]])
 
-    node_bits: list[str] = []
-    for item in nodes:
-        x_coord, y_coord = positions[item.match_id]
+    node_width, node_height, gap_x, gap_y = 200.0, 68.0, 32.0, 52.0
+    positions: dict[str, tuple[float, float]] = {}
+    x_cursor = 0.0
+    for layers in components:
+        column_width = max(
+            len(layer) * node_width + max(len(layer) - 1, 0) * gap_x for layer in layers
+        )
+        for depth_index, layer in enumerate(layers):
+            row_width = len(layer) * node_width + max(len(layer) - 1, 0) * gap_x
+            start_x = x_cursor + (column_width - row_width) / 2.0 + node_width / 2.0
+            y_coord = depth_index * (node_height + gap_y)
+            for index, match_id in enumerate(layer):
+                positions[match_id] = (start_x + index * (node_width + gap_x), y_coord)
+        x_cursor += column_width + 72.0
+    if positions:
+        xs = [point[0] for point in positions.values()]
+        ys = [point[1] for point in positions.values()]
+        center_x = (min(xs) + max(xs)) / 2.0
+        center_y = (min(ys) + max(ys)) / 2.0
+        positions = {
+            key: (x_coord - center_x, y_coord - center_y)
+            for key, (x_coord, y_coord) in positions.items()
+        }
+    return positions
+
+
+def _camera_graph_payload(report: SyncDiagnosticReport) -> dict[str, object]:
+    anchor_id = next(
+        (item.match_id for item in report.matches if item.status == "anchor"),
+        None,
+    )
+    backbone = _backbone_edges(report)
+    positions = _camera_layout_positions(
+        [item.match_id for item in report.matches],
+        backbone,
+        anchor_id=anchor_id,
+    )
+    nodes = []
+    for item in report.matches:
         short_label = item.label if len(item.label) <= 24 else item.label[:21] + "…"
         lock = " · locked" if item.locked else ""
-        node_bits.append(
-            f'<g class="node {escape(item.status)}" transform="translate({x_coord:.1f} '
-            f'{y_coord:.1f})"><rect x="-92" y="-29" width="184" height="58" '
-            f'rx="11"/><text class="node-name" text-anchor="middle" y="-4">'
-            f'{escape(short_label)}</text><text class="node-state" text-anchor="middle" '
-            f'y="16">{escape(_status_label(item.status) + lock)}</text></g>'
+        x_coord, y_coord = positions.get(item.match_id, (0.0, 0.0))
+        nodes.append(
+            {
+                "id": item.match_id,
+                "label": f"{short_label}\n{_status_label(item.status)}{lock}",
+                "status": item.status,
+                "locked": item.locked,
+                "x": round(x_coord, 1),
+                "y": round(y_coord, 1),
+            }
         )
+    labels = {item.match_id: item.label for item in report.matches}
+    edges = []
+    for edge in backbone:
+        edges.append(
+            {
+                "id": f"{edge.match_a}--{edge.match_b}",
+                "source": edge.match_a,
+                "target": edge.match_b,
+                "shared": edge.shared_points,
+                "strong": edge.shared_points >= PAIR_POINT_REQUIREMENT,
+                "tooltip": _edge_tooltip(
+                    labels.get(edge.match_a, edge.match_a),
+                    labels.get(edge.match_b, edge.match_b),
+                    edge.shared_points,
+                ),
+            }
+        )
+    return {"nodes": nodes, "edges": edges}
+
+
+def _render_camera_graph(report: SyncDiagnosticReport) -> str:
+    if not report.matches:
+        return '<p class="muted">No camera graph available.</p>'
+    height = min(720, max(380, 52 * len(report.matches)))
     return (
-        f'<svg class="camera-graph" viewBox="0 0 {width} {height}" role="img" '
-        'aria-label="Camera overlap graph">'
-        + "".join(edge_bits)
-        + "".join(node_bits)
-        + "</svg>"
-        '<p class="legend">Strongest non-cyclic 2D↔2D links · labels are ordinary '
-        'shared points <span class="swatch strong"></span>5+ '
-        '<span class="swatch weak"></span>1–4</p>'
+        f'<div class="graph-wrap"><div id="camera-graph" class="camera-graph" '
+        f'style="height:{height}px" role="img" aria-label="Camera overlap graph">'
+        "</div><img id=\"camera-graph-print\" alt=\"\"></div>"
+        f'<script type="application/json" id="camera-graph-data">'
+        f"{_html_json(_camera_graph_payload(report))}</script>"
+        '<div id="camera-graph-tooltip" class="graph-tooltip" role="tooltip" hidden></div>'
+        '<div class="legend"><p>Numbers on the links are ordinary point landmarks shared by those '
+        "two photos. Only the strongest loop-free overlap path is drawn.</p>"
+        '<ul class="legend-keys">'
+        '<li><span class="swatch strong"></span><strong>Green</strong> — 5 or more shared points, '
+        "enough for pairwise 2D↔2D registration.</li>"
+        '<li><span class="swatch weak"></span><strong>Gray</strong> — 1–4 shared points, below that '
+        "minimum on its own.</li></ul>"
+        "<p>Hover a number for the two match names. Drag a camera to move it; scroll to zoom.</p></div>"
     )
 
 
@@ -635,6 +740,7 @@ def _render_match_rows(report: SyncDiagnosticReport) -> str:
     rows = []
     for item in report.matches:
         rmse = "—" if item.rmse_px is None else f"{item.rmse_px:.2f}px"
+        rmse_sort = "" if item.rmse_px is None else f"{item.rmse_px:.8f}"
         best = (
             f"{escape(item.best_reference)} · "
             f"{escape(_shared_point_summary(item.best_shared_points))}"
@@ -642,7 +748,11 @@ def _render_match_rows(report: SyncDiagnosticReport) -> str:
             else "—"
         )
         rows.append(
-            f'<tr><td><strong>{escape(item.label)}</strong>'
+            f'<tr data-label="{escape(item.label.casefold(), quote=True)}" '
+            f'data-status="{_status_rank(item.status)}" data-rmse="{rmse_sort}" '
+            f'data-points="{item.point_picks}" data-lines="{item.line_picks}" '
+            f'data-usable="{item.usable_3d_points}">'
+            f'<td><strong>{escape(item.label)}</strong>'
             f'{"<span class=\"lock\">Locked</span>" if item.locked else ""}</td>'
             f'<td><span class="pill {escape(item.status)}">'
             f'{escape(_status_label(item.status))}</span></td>'
@@ -735,21 +845,23 @@ def render_sync_report_html(report: SyncDiagnosticReport) -> str:
     .issue .action {{ color:var(--text); margin-top:6px; }}
     .empty-state {{ display:flex; flex-direction:column; gap:3px; padding:18px; border-radius:12px;
       background:var(--success-bg); color:var(--success); }}
-    .graph-wrap {{ overflow-x:auto; }} .camera-graph {{ width:100%; min-width:720px; height:auto; }}
-    .edge line {{ stroke:var(--line); stroke-width:2; }} .edge.strong line {{ stroke:var(--success); stroke-width:3; }}
-    .edge text {{ fill:var(--muted); font-size:12px; paint-order:stroke; stroke:var(--surface); stroke-width:5; }}
-    .node rect {{ fill:var(--surface2); stroke:var(--line); stroke-width:2; }}
-    .node.anchor rect {{ stroke:var(--accent); }} .node.synced rect {{ stroke:var(--success); }}
-    .node.skipped rect {{ stroke:var(--error); }} .node.disabled {{ opacity:.55; }}
-    .node text {{ fill:var(--text); }} .node-name {{ font-size:13px; font-weight:700; }}
-    .node-state {{ font-size:11px; fill:var(--muted)!important; }} .legend {{ color:var(--muted); text-align:center; }}
-    .swatch {{ display:inline-block; width:22px; height:3px; vertical-align:middle; margin:0 6px 2px 15px;
+    .graph-wrap {{ overflow:hidden; }} .camera-graph {{ width:100%; min-height:360px; border:1px solid var(--line);
+      border-radius:12px; background:var(--surface2); }}
+    #camera-graph-print {{ display:none; width:100%; }}
+    .graph-tooltip {{ position:fixed; z-index:5; max-width:280px; padding:8px 10px; border-radius:8px;
+      border:1px solid var(--line); background:var(--surface); color:var(--text); font-size:12px;
+      line-height:1.4; white-space:pre-wrap; box-shadow:var(--shadow); pointer-events:none; }}
+    .legend {{ color:var(--muted); margin-top:12px; }} .legend p {{ margin:0 0 8px; }}
+    .legend-keys {{ list-style:none; margin:0 0 8px; padding:0; }} .legend-keys li {{ margin:4px 0; }}
+    .swatch {{ display:inline-block; width:22px; height:3px; vertical-align:middle; margin:0 8px 2px 0;
       background:var(--line); }} .swatch.strong {{ background:var(--success); }}
     .table-wrap {{ overflow:auto; border:1px solid var(--line); border-radius:12px; }}
     table {{ border-collapse:collapse; width:100%; min-width:720px; }} th,td {{ padding:10px 12px;
       border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }}
     th {{ position:sticky; top:0; background:var(--surface2); color:var(--muted); font-size:12px;
       text-transform:uppercase; letter-spacing:.04em; }} tbody tr:last-child td {{ border-bottom:0; }}
+    th button {{ padding:4px 8px; font:inherit; font-size:12px; font-weight:700; text-transform:uppercase;
+      letter-spacing:.04em; background:transparent; }}
     tbody tr:hover {{ background:var(--surface2); }} .number {{ text-align:right; font-variant-numeric:tabular-nums; }}
     .pill {{ display:inline-block; padding:2px 7px; border-radius:999px; font-size:11px; font-weight:700;
       background:var(--surface2); border:1px solid var(--line); }} .pill.synced,.pill.anchor {{ color:var(--success); }}
@@ -766,7 +878,8 @@ def render_sync_report_html(report: SyncDiagnosticReport) -> str:
     @media (max-width:760px) {{ main {{ width:min(100% - 20px,1180px); margin-top:18px; }} header {{ display:block; }}
       .toolbar {{ justify-content:flex-start; margin-top:14px; }} .summary-grid,.mini-grid {{ grid-template-columns:1fr 1fr; }} }}
     @media print {{ body {{ background:#fff; color:#111; }} main {{ width:100%; margin:0; }} .toolbar {{ display:none; }}
-      section,details.section,.hero {{ break-inside:avoid; box-shadow:none; }} details.section:not([open]) > * {{ display:block; }} }}
+      section,details.section,.hero {{ break-inside:avoid; box-shadow:none; }} details.section:not([open]) > * {{ display:block; }}
+      #camera-graph {{ display:none !important; }} #camera-graph-print {{ display:block; }} }}
   </style>
 </head>
 <body>
@@ -790,10 +903,15 @@ def render_sync_report_html(report: SyncDiagnosticReport) -> str:
   <section><h2>Camera connectivity</h2><p class="meta" style="margin-bottom:12px">
     The overlap backbone shows ordinary point landmarks shared between photos. Metric 2D↔3D
     and Known 3D line routes are summarized in the match table and issue cards.</p>
-    <div class="graph-wrap">{_svg_graph(report)}</div></section>
-  <section><h2>Matches</h2><div class="table-wrap"><table><thead><tr><th>Match</th><th>Status</th>
-    <th class="number">RMSE</th><th class="number">Point picks</th><th class="number">Lines</th>
-    <th class="number">Usable 3D</th><th>Best registered edge</th></tr></thead><tbody>
+    {_render_camera_graph(report)}</section>
+  <section><h2>Matches</h2><div class="table-wrap"><table id="match-table"><thead><tr>
+    <th><button type="button" data-sort="label" data-type="text">Match</button></th>
+    <th><button type="button" data-sort="status" data-type="number">Status</button></th>
+    <th class="number"><button type="button" data-sort="rmse" data-type="number">RMSE</button></th>
+    <th class="number"><button type="button" data-sort="points" data-type="number">Point picks</button></th>
+    <th class="number"><button type="button" data-sort="lines" data-type="number">Lines</button></th>
+    <th class="number"><button type="button" data-sort="usable" data-type="number">Usable 3D</button></th>
+    <th>Best registered edge</th></tr></thead><tbody>
     {_render_match_rows(report)}</tbody></table></div></section>
   <section><h2>Landmark errors</h2><input class="search" id="landmark-search" type="search"
     placeholder="Filter landmarks or matches…" aria-label="Filter landmarks">
@@ -808,6 +926,7 @@ def render_sync_report_html(report: SyncDiagnosticReport) -> str:
   <details class="section"><summary>Technical solver message</summary><pre id="technical-message">{escape(report.raw_message)}</pre></details>
   <footer>Generated locally by Perspective Match. No report data was uploaded.</footer>
 </main>
+<script>__VENDOR_CYTOSCAPE__</script>
 <script>
   (() => {{
     const search = document.getElementById('landmark-search');
@@ -828,6 +947,126 @@ def render_sync_report_html(report: SyncDiagnosticReport) -> str:
       rows.forEach(row => tableBody.appendChild(row));
       event.currentTarget.textContent = `RMSE ${{descending ? '↓' : '↑'}}`;
     }});
+    const matchTable = document.getElementById('match-table');
+    if (matchTable) {{
+      let active = '';
+      let matchDescending = false;
+      for (const button of matchTable.querySelectorAll('thead button[data-sort]')) {{
+        button.addEventListener('click', () => {{
+          const key = button.dataset.sort;
+          const numeric = button.dataset.type === 'number';
+          if (active === key) matchDescending = !matchDescending;
+          else {{
+            active = key;
+            matchDescending = numeric && key !== 'status';
+          }}
+          const factor = matchDescending ? -1 : 1;
+          const rows = [...matchTable.tBodies[0].rows];
+          rows.sort((left, right) => {{
+            if (!numeric) {{
+              return left.dataset[key].localeCompare(right.dataset[key], undefined, {{
+                numeric: true, sensitivity: 'base'
+              }}) * factor;
+            }}
+            const leftRaw = left.dataset[key];
+            const rightRaw = right.dataset[key];
+            const leftVal = leftRaw === '' || leftRaw == null ? NaN : Number(leftRaw);
+            const rightVal = rightRaw === '' || rightRaw == null ? NaN : Number(rightRaw);
+            const leftNa = Number.isNaN(leftVal);
+            const rightNa = Number.isNaN(rightVal);
+            if (leftNa && rightNa) return 0;
+            if (leftNa) return 1;
+            if (rightNa) return -1;
+            if (leftVal === rightVal) return 0;
+            return (leftVal < rightVal ? -1 : 1) * factor;
+          }});
+          rows.forEach(row => matchTable.tBodies[0].appendChild(row));
+          for (const other of matchTable.querySelectorAll('thead button[data-sort]')) {{
+            const base = other.textContent.replace(/ [↑↓]$/, '');
+            other.textContent = other === button ? `${{base}} ${{matchDescending ? '↓' : '↑'}}` : base;
+          }}
+        }});
+      }}
+    }}
+    const graphMount = document.getElementById('camera-graph');
+    const graphDataEl = document.getElementById('camera-graph-data');
+    if (graphMount && graphDataEl && window.cytoscape) {{
+      const payload = JSON.parse(graphDataEl.textContent);
+      const dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      const colors = dark ? {{
+        text: '#e9eef3', muted: '#a4afba', line: '#36414d', surface: '#1a2129',
+        surface2: '#202933', accent: '#77a0ff', success: '#65d39d', error: '#ff8f98'
+      }} : {{
+        text: '#17202a', muted: '#65717e', line: '#d9e0e7', surface: '#fff',
+        surface2: '#f8fafc', accent: '#356ae6', success: '#157a4b', error: '#b4232d'
+      }};
+      const cy = cytoscape({{
+        container: graphMount,
+        elements: [
+          ...payload.nodes.map(node => ({{
+            data: node,
+            classes: node.status,
+            position: {{ x: node.x, y: node.y }}
+          }})),
+          ...payload.edges.map(edge => ({{
+            data: edge, classes: edge.strong ? 'strong' : 'weak'
+          }}))
+        ],
+        minZoom: 0.3,
+        maxZoom: 2.5,
+        wheelSensitivity: 0.35,
+        layout: {{ name: 'preset', fit: false, padding: 28 }},
+        style: [
+          {{ selector: 'node', style: {{
+            shape: 'round-rectangle', width: 176, height: 52,
+            'background-color': colors.surface2, 'border-width': 2,
+            'border-color': colors.line, color: colors.text, label: 'data(label)',
+            'text-wrap': 'wrap', 'text-max-width': 176, 'text-valign': 'center',
+            'text-halign': 'center', 'font-size': 12, 'font-weight': 700, 'line-height': 1.25
+          }} }},
+          {{ selector: 'node.disabled', style: {{ opacity: 0.55 }} }},
+          {{ selector: 'node.anchor', style: {{ 'border-color': colors.accent }} }},
+          {{ selector: 'node.synced', style: {{ 'border-color': colors.success }} }},
+          {{ selector: 'node.skipped', style: {{ 'border-color': colors.error }} }},
+          {{ selector: 'edge', style: {{
+            'curve-style': 'bezier', width: 2, 'line-color': colors.line,
+            label: 'data(shared)', 'font-size': 11, color: colors.muted,
+            'text-background-color': colors.surface, 'text-background-opacity': 1,
+            'text-background-padding': 2, 'text-events': 'yes', 'overlay-padding': 10,
+            'overlay-opacity': 0
+          }} }},
+          {{ selector: 'edge.strong', style: {{ width: 3, 'line-color': colors.success }} }}
+        ]
+      }});
+      const printImg = document.getElementById('camera-graph-print');
+      const syncPrint = () => {{
+        if (printImg) printImg.src = cy.png({{ full: true, scale: 2, bg: colors.surface }});
+      }};
+      const fitGraph = () => {{
+        cy.resize();
+        if (cy.nodes().nonempty()) {{
+          cy.fit(cy.elements(), 28);
+        }}
+        syncPrint();
+      }};
+      cy.ready(fitGraph);
+      window.addEventListener('load', fitGraph);
+      window.addEventListener('beforeprint', syncPrint);
+      const tip = document.getElementById('camera-graph-tooltip');
+      const placeTip = event => {{
+        if (!tip) return;
+        const pos = event.renderedPosition;
+        const box = graphMount.getBoundingClientRect();
+        tip.hidden = false;
+        tip.textContent = event.target.data('tooltip') || '';
+        tip.style.left = `${{box.left + pos.x + 14}}px`;
+        tip.style.top = `${{box.top + pos.y + 14}}px`;
+      }};
+      cy.on('mouseover', 'edge', placeTip);
+      cy.on('mousemove', 'edge', placeTip);
+      cy.on('mouseout', 'edge', () => {{ if (tip) tip.hidden = true; }});
+      cy.on('viewport', () => {{ if (tip) tip.hidden = true; }});
+    }}
     document.getElementById('copy-report')?.addEventListener('click', async event => {{
       const text = document.getElementById('technical-message')?.textContent || '';
       try {{ await navigator.clipboard.writeText(text); event.currentTarget.textContent = 'Copied'; }}
@@ -838,7 +1077,7 @@ def render_sync_report_html(report: SyncDiagnosticReport) -> str:
 </body>
 </html>
 """
-    return html_text
+    return html_text.replace("__VENDOR_CYTOSCAPE__", _vendor_js("cytoscape.min.js"), 1)
 
 
 def _temp_report_directory(temp_root: str | Path | None = None) -> Path:

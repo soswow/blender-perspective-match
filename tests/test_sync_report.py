@@ -125,6 +125,15 @@ class SyncReportTests(unittest.TestCase):
         ]
         backbone = sync_report._backbone_edges(report)
         self.assertEqual([item.shared_points for item in backbone], [9, 7])
+        payload = sync_report._camera_graph_payload(report)
+        self.assertEqual([edge["shared"] for edge in payload["edges"]], [9, 7])
+        self.assertEqual(len(payload["nodes"]), 4)
+        xs = [node["x"] for node in payload["nodes"]]
+        ys = [node["y"] for node in payload["nodes"]]
+        self.assertLess(max(xs) - min(xs), 1200)
+        self.assertLess(max(ys) - min(ys), 800)
+        self.assertTrue(all("tooltip" in edge for edge in payload["edges"]))
+        self.assertIn("pairwise 2D↔2D", payload["edges"][0]["tooltip"])
 
     def test_failed_result_does_not_count_identity_placeholders_as_registered(self) -> None:
         matches = [
@@ -203,6 +212,15 @@ class SyncReportTests(unittest.TestCase):
         self.assertIn("Content-Security-Policy", html)
         self.assertIn("Camera connectivity", html)
         self.assertIn("landmark-search", html)
+        self.assertIn("match-table", html)
+        self.assertIn('data-sort="rmse"', html)
+        self.assertIn("camera-graph-tooltip", html)
+        self.assertIn("<strong>Green</strong>", html)
+        self.assertIn("<strong>Gray</strong>", html)
+        self.assertIn("preset", html)
+        self.assertIn("The Cytoscape Consortium", html)
+        self.assertNotIn("__VENDOR_CYTOSCAPE__", html)
+        self.assertNotIn('data-sort="best"', html)
         self.assertIn("Print / Save PDF", html)
         self.assertIn("&lt;img src=x onerror=alert(1)&gt;", html)
         self.assertNotIn("<img src=x onerror=alert(1)>", html)
