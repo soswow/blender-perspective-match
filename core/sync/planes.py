@@ -6,6 +6,7 @@ import numpy as np
 
 from .constants import (
     LINE_PLANE_MIN_SINE,
+    LINE_RECONSTRUCT_TRUNCATE_PX,
     PLANE_AXIS_ALIGNED_MIN,
     PLANE_AXIS_INDEX,
     PLANE_FREE_MIN,
@@ -13,10 +14,11 @@ from .constants import (
     PLANE_HARD_SLACK,
     PLANE_RESIDUAL_PX,
 )
-from .projection import camera_ray_private
+from .projection import _intersect_planes_to_line, _plane_from_line_observation, camera_ray_private
 from .lines import (
     _finite_segment_from_line_observations,
     _fit_line_fixed_direction,
+    _line_observation_rms_px,
 )
 from .types import SimilarityTransform, SyncLineObservation, SyncMatchInput, SyncObservation
 
@@ -473,6 +475,85 @@ def _direction_in_plane(direction: np.ndarray, normal: np.ndarray) -> np.ndarray
     return projected / length
 
 
+def supported_line_planes(
+    landmarks: dict[str, np.ndarray],
+    line_segments: dict[str, tuple[np.ndarray, np.ndarray]],
+    plane_groups: list[tuple[str, str, int]] | None,
+    known_lines: dict[str, tuple[np.ndarray, np.ndarray]],
+    *,
+    ground_landmark_ids: list[str] | None = None,
+    excluded_support_ids: set[str] | None = None,
+) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+    """Planes supported independently of the free lines being reconstructed."""
+    output = {}
+    ground_ids = set(ground_landmark_ids or ())
+    line_points = {key: 0.5 * (ends[0] + ends[1]) for key, ends in line_segments.items()}
+    free_lines = set(line_segments) - set(known_lines)
+    excluded = free_lines | set(excluded_support_ids or ())
+    for (axis, _group), members in grouped_plane_members(plane_groups).items():
+        located = [
+            (key, found[0]) for key in members if key not in excluded
+            and (found := _member_location(key, landmarks, line_points)) is not None
+        ]
+        if axis == "FREE":
+            if len(located) < PLANE_FREE_MIN - 1:
+                continue
+            fitted = fit_free_plane(np.asarray([point for _key, point in located]))
+            if fitted is None:
+                continue
+            origin, normal = fitted
+        else:
+            if len(located) < PLANE_AXIS_ALIGNED_MIN - 1:
+                continue
+            origin = np.mean([point for _key, point in located], axis=0)
+            normal = np.zeros(3, dtype=np.float64)
+            normal[PLANE_AXIS_INDEX[axis]] = 1.0
+            if axis == "Z" and any(key in ground_ids for key, _point in located):
+                origin[2] = 0.0
+        for key in members:
+            if key in free_lines:
+                output[key] = (origin, normal)
+    return output
+
+
+def _line_on_supported_plane(
+    origin: np.ndarray,
+    normal: np.ndarray,
+    observations: list[SyncLineObservation],
+    similarities: dict[str, SimilarityTransform],
+    matches: dict[str, SyncMatchInput],
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """Fit posed strokes within a fixed plane; never project an unconstrained fit."""
+    plane = np.r_[normal, -normal @ origin]
+    records = []
+    for observation in observations:
+        if observation.match_id not in similarities or observation.match_id not in matches:
+            continue
+        pose, calibration = similarities[observation.match_id], matches[observation.match_id].calibration
+        image_plane = _plane_from_line_observation(observation, calibration, pose)
+        if image_plane is not None:
+            records.append((observation, calibration, pose, image_plane))
+    best = None
+    for _observation, _calibration, _pose, image_plane in records:
+        sine = float(np.linalg.norm(np.cross(normal, image_plane[:3])))
+        if sine < LINE_PLANE_MIN_SINE:
+            continue
+        fitted = _intersect_planes_to_line(plane, image_plane)
+        if fitted is None:
+            continue
+        point, direction = fitted
+        errors = [
+            _line_observation_rms_px(point, direction, item, calibration, pose)
+            for item, calibration, pose, _plane in records
+        ]
+        if not np.isfinite(errors).all():
+            continue
+        score = float(np.mean(np.minimum(errors, LINE_RECONSTRUCT_TRUNCATE_PX)))
+        if best is None or (score, -sine) < best[:2]:
+            best = (score, -sine, point, direction)
+    return None if best is None else (best[2],best[3])
+
+
 def enforce_plane_line_segments(
     line_segments: dict[str, tuple[np.ndarray, np.ndarray]],
     landmarks: dict[str, np.ndarray],
@@ -484,11 +565,17 @@ def enforce_plane_line_segments(
     *,
     plane_slack: float,
     ground_landmark_ids: list[str] | None = None,
+    excluded_support_ids: set[str] | None = None,
 ) -> None:
-    """Project free line meshes into assigned planes when slack is a hard pin."""
+    """Fit free lines inside supported hard planes; otherwise project their geometry."""
     if max(float(plane_slack), 0.0) > 1.0e-12:
         return
     ground_ids = set(ground_landmark_ids or ())
+    independent = supported_line_planes(
+        landmarks, line_segments, plane_groups, known_lines,
+        ground_landmark_ids=ground_landmark_ids,
+        excluded_support_ids=excluded_support_ids,
+    )
     line_points = {
         landmark_id: 0.5 * (segment[0] + segment[1])
         for landmark_id, segment in line_segments.items()
@@ -531,6 +618,17 @@ def enforce_plane_line_segments(
             normal = np.zeros(3, dtype=np.float64)
             normal[axis_index] = 1.0
         for landmark_id in line_ids:
+            items = line_observations_by_landmark.get(landmark_id, [])
+            if landmark_id in independent:
+                plane_origin, plane_normal = independent[landmark_id]
+                fitted = _line_on_supported_plane(plane_origin, plane_normal, items, similarities, matches)
+                if fitted is not None:
+                    segment = _finite_segment_from_line_observations(
+                        fitted[0], fitted[1], items, similarities, matches,
+                    )
+                    line_segments[landmark_id] = segment
+                    landmarks[landmark_id] = 0.5 * (segment[0] + segment[1])
+                    continue
             point_a, point_b = line_segments[landmark_id]
             direction = point_b - point_a
             if float(np.linalg.norm(direction)) < 1.0e-9:

@@ -11,6 +11,7 @@ from .constants import (
     LINE_FIXED_ANCHOR_MIN,
     LINE_PLANE_MIN_SINE,
     LINE_RECONSTRUCT_TRUNCATE_PX,
+    PLANE_HARD_SLACK,
     WORLD_AXIS_DIRECTIONS,
 )
 from .projection import (
@@ -130,6 +131,7 @@ def line_support_angles(
     known_lines: dict[str, tuple[np.ndarray, np.ndarray]] | None = None,
     mirror_pairs: list[tuple[str, str]] | None = None,
     mirror_normal: np.ndarray | None = None,
+    support_planes: dict[str, tuple[np.ndarray, np.ndarray]] | None = None,
 ) -> dict[str, float]:
     """Best supporting plane separation for free lines; not a confidence interval."""
     known_ids = set(known_lines or {})
@@ -154,6 +156,12 @@ def line_support_angles(
             plane = _plane_from_line_observation(observation, match.calibration, similarity)
             if plane is not None and np.isfinite(plane).all():
                 normals.append(plane[:3])
+        supported = (support_planes or {}).get(landmark_id)
+        if supported is not None:
+            origin, normal = supported
+            distances = [abs(float(normal@(point-origin))) for point in (point_a,point_b)]
+            if max(distances) <= PLANE_HARD_SLACK:
+                normals.append(normal)
         normals_by_id[landmark_id] = normals
     reflection = None
     if mirror_normal is not None:

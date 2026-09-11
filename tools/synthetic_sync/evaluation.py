@@ -101,6 +101,26 @@ def evaluate(case: dict, record: dict) -> dict:
         output["geometry"]["points"][key] = dict(error_fraction=error)
         if not np.isfinite(error) or error > expectation["point_fraction"]:
             violations.append(f"{key}: reconstructed point error {error:.4g} of object diagonal")
+    if "plane_max_distance" in expectation:
+        output["plane_distances"] = {}
+        for plane in case["truth"].get("planes", []):
+            label = f"{plane['axis']}#{plane['bucket']}"
+            distances = output["plane_distances"][label] = {}
+            normal = np.asarray(plane["normal"],dtype=float)
+            normal /= np.linalg.norm(normal)
+            for key,axis,bucket in case["request"].get("plane_groups", []):
+                if (axis,bucket) != (plane["axis"],plane["bucket"]):
+                    continue
+                values = record["line_segments"].get(key)
+                if values is None and key in record["landmarks"]:
+                    values = [record["landmarks"][key]]
+                if values is None:
+                    continue
+                points = scale*np.asarray(values)@rotation.T+translation
+                distance = float(np.max(np.abs((points-plane["origin"])@normal)))
+                distances[key] = distance
+                if not np.isfinite(distance) or distance > expectation["plane_max_distance"]:
+                    violations.append(f"{key}: distance to {label} plane {distance:.4g} > {expectation['plane_max_distance']:.4g}")
     for key in expectation.get("required_lines", []):
         if key not in record["line_segments"]:
             violations.append(f"{key}: required reconstructed line missing")

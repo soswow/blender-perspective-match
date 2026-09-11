@@ -130,6 +130,12 @@ jobs:
             --out "${RUNNER_TEMP}/synthetic-blender/plane-line" --drop-constraint --roundtrip
           python3 tools/synthetic_sync/planes.py --contribution \
             --out "${RUNNER_TEMP}/synthetic-blender/plane-support"
+          python3 tools/synthetic_sync/planes.py --mirrored-line \
+            --out "${RUNNER_TEMP}/synthetic-blender/plane-mirror"
+          blender --factory-startup --disable-autoexec -b --python-exit-code 1 \
+            --python tools/synthetic_sync/blender_case.py -- \
+            --case tools/synthetic_sync/cases/mirror-lines-with-plane.json \
+            --out "${RUNNER_TEMP}/synthetic-blender/plane-mirror-removal" --drop-constraint --roundtrip
           blender --factory-startup --disable-autoexec -b --python-exit-code 1 \
             --python tools/synthetic_sync/blender_case.py -- \
             --case "${RUNNER_TEMP}/synthetic-blender/plane-support/plane-support-x-0.json" \

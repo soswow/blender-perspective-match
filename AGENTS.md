@@ -62,8 +62,8 @@ Do not special-case a user `.blend` (filename, match names, landmark names, or t
 | `pose.py` | Essential / PnP / IPPE / pairwise register; shared-ground seeds from registered location-enabled cameras |
 | `ground.py` | Calibrated On Ground plane init (`estimate_anchor_ground_plane`) |
 | `lines.py` | Free / Known 3D lines, Is-Parallel-To, supporting-plane angle diagnostics |
-| `mirrors.py` | Point/line Is-Mirror-Of pairs across one scene plane |
-| `planes.py` | Is-in-Plane buckets; preserve ground seeds and initialize one-view points from independently supported hard planes |
+| `mirrors.py` | Point/line Is-Mirror-Of pairs across one scene plane; reflected line fitting within compatible supported planes |
+| `planes.py` | Is-in-Plane buckets; preserve ground seeds, initialize one-view points, and fit existing lines in independently supported hard planes |
 | `ba.py` | Joint BA, residuals, leave-one-out Diagnose |
 | `solve.py` | `solve_landmark_sync` stages |
 
@@ -88,7 +88,7 @@ Headless helpers under `tools/` (and `scripts/validate_addon.py`) for investigat
 
 - `tools/synthetic_sync/recovery.py` — observe ground/Known 3D/mirror/plane gaps across recovered-camera 3D refinement, compare an explicit frozen-stage control, and assess healthy cameras with independent withheld geometry.
 
-- `tools/synthetic_sync/planes.py` — independent axis/Free-plane and point/line controls, hard-ground intersection, paired plane removal and Fit Only stroke checks; `--contribution` checks single-view depth from a supported plane with removal/role controls; Blender `--drop-constraint` also supports these plane cases.
+- `tools/synthetic_sync/planes.py` — independent axis/Free-plane and point/line controls, hard-ground intersection, paired plane removal and Fit Only stroke checks; `--contribution` checks single-view depth from a supported plane with removal/role controls; `--mirrored-line` tests an independently supported plane against the frozen weak mirror strokes, retaining identical Known 3D references in its removal control. Blender `--drop-constraint` also supports these plane cases. Line-support diagnostics exclude free lines and plane-seeded points from independent plane evidence, and require actual line membership before counting a plane's normal.
 
 ## Do not
 

@@ -357,7 +357,7 @@ def main():
             parser.error("--role-case may change camera participation and expectations only")
         if args.drop_constraint:
             parser.error("Choose one live transition: --role-case or --drop-constraint")
-    from tools.synthetic_sync.planes import FAMILIES as PLANE_FAMILIES, remove_planes
+    from tools.synthetic_sync.planes import REMOVABLE_PLANE_FAMILIES as PLANE_FAMILIES, remove_planes
     if args.drop_constraint and case["family"] not in {"known_lines", "mirror_points", "mirror_lines", *PLANE_FAMILIES}:
         parser.error("--drop-constraint requires a supported constraint case")
     register_extension()

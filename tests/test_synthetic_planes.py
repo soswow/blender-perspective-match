@@ -1,19 +1,72 @@
 """Shared-plane constraints must preserve independent geometry and floor pins."""
 
 import unittest
+from copy import deepcopy
 from pathlib import Path
 
 import numpy as np
 
 from tools.synthetic_sync.evaluation import evaluate
 from tools.synthetic_sync.geometry import project, visible
-from tools.synthetic_sync.planes import plane_case, plane_support_case, remove_planes
+from tools.synthetic_sync.planes import mirror_plane_reference, mirrored_line_plane_cases, plane_case, plane_support_case, remove_planes
 from tools.synthetic_sync.scenarios import read_case
-from tools.synthetic_sync.solver import calibration, load_core, solve
+from tools.synthetic_sync.solver import calibration, load_core, solve, solver_arguments
 from test_synthetic_sync import true_record
 
 
 class SyntheticPlaneTests(unittest.TestCase):
+    def test_plane_oracle_rejects_small_drift_with_true_cameras(self):
+        case, _control = mirrored_line_plane_cases()
+        result = true_record(case)
+        result["line_segments"] = deepcopy(case["truth"]["lines"])
+        self.assertTrue(evaluate(case,result)["passed"])
+        result["line_segments"]["side_edge_left"] = (np.asarray(result["line_segments"]["side_edge_left"])+[0,0,.002]).tolist()
+        assessment = evaluate(case,result)
+        self.assertFalse(assessment["passed"])
+        self.assertTrue(any("distance to FREE#1 plane" in item for item in assessment["violations"]))
+
+    def test_plane_warning_requires_independent_support_and_actual_plane_membership(self):
+        _core, sync = load_core()
+        case, control = mirrored_line_plane_cases()
+        arguments = solver_arguments(control["request"])
+        result = sync.solve_landmark_sync(**arguments)
+        support = sync.supported_line_planes(result.landmarks,result.line_segments,
+            case["request"]["plane_groups"],{})
+        self.assertEqual(set(support),set(case["truth"]["lines"]))
+        self.assertFalse(sync.supported_line_planes(result.landmarks,result.line_segments,
+            case["request"]["plane_groups"],{},excluded_support_ids={"plane_reference_2"}))
+        without_third_reference = [group for group in case["request"]["plane_groups"] if group[0] != "plane_reference_2"]
+        self.assertFalse(sync.supported_line_planes(result.landmarks,result.line_segments,without_third_reference,{}))
+        observations = {}
+        for pick in arguments["line_observations"]:
+            observations.setdefault(pick.landmark_id,[]).append(pick)
+        angles = sync.line_support_angles(result.line_segments,observations,result.similarities,
+            {match.match_id:match for match in arguments["matches"]},
+            mirror_pairs=arguments["mirror_pairs"],mirror_normal=arguments["mirror_plane"][1],support_planes=support)
+        # The old geometry misses the plane: naming that plane must not clear
+        # its warning before reconstruction actually honors the constraint.
+        self.assertTrue(all(angle < 2. for angle in angles.values()))
+
+    def test_supported_plane_survives_mirror_line_reconstruction(self):
+        case = read_case(Path(__file__).resolve().parents[1]/"tools/synthetic_sync/cases/mirror-lines-with-plane.json")
+        control = remove_planes(case)
+        for metrics in mirror_plane_reference(case).values():
+            self.assertLess(metrics["angle_error_deg"], 1.)
+            self.assertGreater(metrics["support_angle_deg"], 60.)
+        for variant in (case, control):
+            with self.subTest(case=variant["name"]):
+                result = solve(variant["request"])
+                assessment = evaluate(variant,result)
+                self.assertTrue(assessment["passed"],assessment["violations"])
+                if variant is case:
+                    self.assertFalse(result["weak_line_ids"])
+                    left = np.asarray(result["line_segments"]["side_edge_left"])
+                    right = np.asarray(result["line_segments"]["side_edge_right"])
+                    reflected = left*np.array([-1,1,1])
+                    direction = right[1]-right[0]
+                    direction /= np.linalg.norm(direction)
+                    self.assertLess(np.max(np.linalg.norm(np.cross(reflected-right[0],direction),axis=1)),1e-8)
+
     def test_plane_seed_requires_independent_support_and_a_forward_well_separated_ray(self):
         _core, sync = load_core()
         camera = dict(width=100, height=80, fx=100, fy=100, cx=50, cy=40,

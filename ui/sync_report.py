@@ -382,7 +382,7 @@ def build_sync_report(
         )
         issues.append(ReportIssue(
             "warning", "Some 3D lines are sensitive to small stroke edits", details,
-            "Their supporting views constrain almost the same plane, including reflected views for mirror pairs. "
+            "Their strokes and constraints supply nearly coincident supporting planes, including reflected views for mirror pairs. "
             "A low pixel error does not establish precise 3D position or direction. "
             "Try longer strokes or an additional stroke from a more distinct viewing angle. "
             "That camera must use Solve or Lock Pose to contribute to 3D. "

@@ -516,6 +516,62 @@ def seed_mirror_line_segments(
         )
 
 
+def _fit_mirror_line_in_plane(
+    landmark_a: str,
+    landmark_b: str,
+    direction_b: np.ndarray,
+    line_planes: dict[str, tuple[np.ndarray, np.ndarray]],
+    origin: np.ndarray,
+    normal: np.ndarray,
+    observations_by_landmark: dict[str, list[SyncLineObservation]],
+    similarities: dict[str, SimilarityTransform],
+    matches: dict[str, SyncMatchInput],
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """Fit one reflected pair inside compatible, independently supported planes."""
+    equations = []
+    for key in (landmark_a, landmark_b):
+        if key not in line_planes:
+            continue
+        point, axis = line_planes[key]
+        equation = np.r_[axis, -axis @ point]
+        if key == landmark_a:
+            equation = _reflect_plane(equation, origin, normal)
+        if equations and equation[:3] @ equations[0][:3] < 0:
+            equation = -equation
+        equations.append(equation)
+    if not equations or any(not np.allclose(equation, equations[0]) for equation in equations[1:]):
+        return None
+    plane = equations[0]
+    unit = direction_b - plane[:3] * float(plane[:3] @ direction_b)
+    length = float(np.linalg.norm(unit))
+    if length < 1e-12:
+        return None
+    unit /= length
+    point = -plane[3] * plane[:3]
+    across = np.cross(plane[:3], unit)
+    numerator = denominator = 0.0
+    for key in (landmark_a, landmark_b):
+        for item in _posed_line_observations(key, observations_by_landmark, similarities):
+            if item.match_id not in matches:
+                continue
+            image_plane = _plane_from_line_observation(
+                item, matches[item.match_id].calibration, similarities[item.match_id]
+            )
+            if image_plane is None:
+                continue
+            if key == landmark_a:
+                image_plane = _reflect_plane(image_plane, origin, normal)
+            coefficient = float(image_plane[:3] @ across)
+            residual = float(image_plane[:3] @ point + image_plane[3])
+            weight = max(float(item.weight), 0.0)
+            numerator -= weight * coefficient * residual
+            denominator += weight * coefficient * coefficient
+    if denominator < 1e-12:
+        return None
+    point = point + across * (numerator / denominator)
+    return (point, unit) if np.isfinite(point).all() else None
+
+
 def enforce_mirror_line_segments(
     line_segments: dict[str, tuple[np.ndarray, np.ndarray]],
     landmarks: dict[str, np.ndarray],
@@ -527,6 +583,8 @@ def enforce_mirror_line_segments(
     matches: dict[str, SyncMatchInput],
     known_lines: dict[str, tuple[np.ndarray, np.ndarray]] | None = None,
     fixed_match_ids: set[str] | None = None,
+    *,
+    line_planes: dict[str, tuple[np.ndarray, np.ndarray]] | None = None,
 ) -> None:
     """Snap free mirrored edges onto one reflected 3D line pair."""
     from .lines import _fit_line_fixed_direction, _line_anchor_match_ids
@@ -554,6 +612,23 @@ def enforce_mirror_line_segments(
         if float(np.linalg.norm(consensus)) < 1.0e-9:
             consensus = direction_b
         consensus = consensus / float(np.linalg.norm(consensus))
+        if line_planes and landmark_a not in known and landmark_b not in known:
+            fitted = _fit_mirror_line_in_plane(
+                landmark_a, landmark_b, consensus, line_planes, origin, normal,
+                line_observations_by_landmark, similarities, matches,
+            )
+            if fitted is not None:
+                point, direction = fitted
+                for key, position, axis in (
+                    (landmark_b, point, direction),
+                    (landmark_a, reflect_point(point, origin, normal), reflect_direction(direction, normal)),
+                ):
+                    observations = _posed_line_observations(key, line_observations_by_landmark, similarities)
+                    _store_mirror_line(
+                        key, position, axis, line_segments, landmarks, observations, similarities, matches,
+                        extent_match_ids=_line_anchor_match_ids(observations, fixed_match_ids),
+                    )
+                continue
         mid_a = 0.5 * (point_a + end_a)
         mid_b = 0.5 * (point_b + end_b)
         reflected_mid = reflect_point(mid_a, origin, normal)

@@ -412,6 +412,17 @@ The Blender runner can replay these cases with `--drop-constraint` or the paired
 change and after reopening. Results retain `plane_seeded_landmark_ids`; the
 product report explains that their depth depends on the plane and one view.
 
+`--mirrored-line` runs the frozen noisy mirrored strokes with and without a
+hard Free plane established by three separate Known 3D points, both with true
+camera locks and with cameras free to solve. The removal controls retain those
+same points, picks, mirror pairs and camera settings. They must still report
+weak line support; the positive cases must meet ordinary line-accuracy limits.
+The independent reference intersects each stroke plane with the constructed
+physical plane, using true cameras rather than production projection code.
+`cases/mirror-lines-with-plane.json` freezes the locked positive case and adds an
+explicit `plane_max_distance` contract. `--drop-constraint --roundtrip` exercises
+live plane removal and fresh-process replay in Blender.
+
 ### Evidence-placement follow-up
 
 ```sh

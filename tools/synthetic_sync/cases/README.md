@@ -67,3 +67,14 @@ The fixed solver preserves those floor seeds. `tests/test_synthetic_planes.py`
 also checks a positive nonzero Ground Slack control, so the fix cannot pass by
 disabling all ground refinement. Both the full case and plane-removal control
 are expected to pass the complete camera, geometry and floor contracts.
+
+`mirror-lines-with-plane.json` adds a hard Free plane to the frozen weak mirror
+strokes, supported independently by three Known 3D points. Camera poses are
+locked to truth to isolate line reconstruction. On `bfd122d`, cameras pass while
+line directions miss by 21.32° and leave the plane by up to 0.2355 scene units.
+The fixed solver gives about 0.075° line error and preserves both reflection and
+plane membership. The `plane_max_distance` contract checks the known physical
+plane separately from ordinary direction/offset limits. Removing only plane
+membership retains all Known 3D picks and must restore the weak-support warning.
+See [the plane investigation](../plane-results.md) for independent reconstruction,
+an unlocked-camera control and remaining limits.

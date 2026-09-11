@@ -123,3 +123,58 @@ user's physical plane assumption. Minimal Free support can be sensitive to
 noise even when it is mathematically non-collinear. The next diagnostic question
 is whether current scale/quality wording distinguishes such constraint-derived
 geometry from independent metric evidence.
+
+## Mirrored-line contribution follow-up — 12 September 2026
+
+The earlier weak mirror strokes become well determined when their lines belong
+to a hard plane independently established by three Known 3D points. The new
+construction uses `z = 0.72 + 0.8y`. Both non-anchor camera poses are locked to
+independent truth for the isolating test; their stored private poses remain
+unrelated. Removing only plane membership retains the references, their picks,
+the mirror pair and the locks. Thus the comparison measures plane information,
+not the benefit of adding CAD support or improving camera calibration.
+
+On `bfd122d`, cameras are exact and fitted point error is about 0.24 px, but both
+line directions miss by **21.32°**, with offset **10.14%** of the object diagonal.
+Their endpoints leave the physical plane by up to **0.2355 scene units**. An
+independent intersection of each image stroke plane with the constructed plane
+produces **0.170° / 0.319°** errors. Supporting-plane angles exceed **64°**: this
+is not the near-parallel ambiguity in the no-plane case.
+
+Two implementation issues mattered. Final mirror seeding could recreate lines
+after plane enforcement. Also, projecting an unconstrained line fit into a
+plane does not fit its strokes within that plane. Merely repeating the old
+projection after mirror seeding left approximately **9.5°** direction error.
+The revised route fits existing lines inside independently supported hard
+planes and fits a reflected pair's common offset inside compatible carrier
+planes. The locked case now has **0.0746°** line error and **0.0865%** offset,
+with both reflection and plane membership preserved to numerical precision.
+The unlocked-camera control also passes, at **0.0713°** / **0.0776%**. Both removal
+controls retain the expected weak-support warning and their measured large line
+errors; they are not relabeled accurate.
+
+The support diagnostic counts a hard plane only when it has independent
+support and the reconstructed line actually lies there. Free lines and
+single-view points seeded from a plane are excluded from that supporting set;
+otherwise a constraint could contribute circular evidence. A negative control
+passes the correct plane to the old off-plane lines and verifies that it cannot
+clear their warning. This remains a local geometric indicator, not a calibrated
+confidence estimate or validation of the physical plane assumption.
+
+The frozen case's optional `plane_max_distance = 1e-6` check is separate from
+camera and line accuracy. An artificial 0.002-unit line displacement fails this
+check even though it is within the ordinary object-relative geometry limit.
+All plane references and both lines are required outputs. Blender creation,
+application, live plane removal and fresh-process reopening pass the strict
+frozen contract. Exact RNA/request parity also caught and corrected a generator
+membership-order mismatch; the comparison itself was retained. Four numerical
+controls and reversed-input/cache replay pass. The full suite passed **309 tests, 9 skipped**, including the added
+plane-distance oracle check. Blender smoke also passed. Hosted CI and browser
+visual inspection remain unverified locally.
+
+This implementation does not jointly solve incompatible carrier planes on
+mirrored partners, validate an incorrect CAD plane, create ordinary one-stroke
+lines, or resolve all parallel/mirror/plane combinations. Minimal supporting
+points can still be sensitive to their own noise. A general constraint optimizer
+is not justified by this bounded failure. Next make this known line-accuracy
+failure reducible while preserving its independent evidence and other checks.

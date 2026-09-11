@@ -12,14 +12,15 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from tools.synthetic_sync.evaluation import evaluate
-from tools.synthetic_sync.geometry import look_at, project, visible
+from tools.synthetic_sync.geometry import intersect_stroke_planes, look_at, project, stroke_plane, visible
 from tools.synthetic_sync.roles import parallel_line_with_fit_only_stroke
 from tools.synthetic_sync.run import write_report
-from tools.synthetic_sync.scenarios import generate, write_case
+from tools.synthetic_sync.scenarios import generate, read_case, write_case
 from tools.synthetic_sync.solver import environment, solve
 
 
 FAMILIES = ("axis_buckets", "free_tilted", "free_ground", "plane_line")
+REMOVABLE_PLANE_FAMILIES = (*FAMILIES,"mirror_plane")
 
 
 def plane_case(family, seed=0, noise_px=0.0):
@@ -118,11 +119,13 @@ def fit_only_plane_stroke():
 
 def remove_planes(case):
     """Retain all evidence and truth; these controls are solvable without planes."""
-    if case["family"] not in FAMILIES:
+    if case["family"] not in REMOVABLE_PLANE_FAMILIES:
         raise ValueError("Plane removal requires a shared-plane control case")
     result = deepcopy(case)
     result["name"] += "-without-plane"
     result["request"]["plane_groups"] = []
+    if "plane_removal_expectation" in case:
+        result["expectation"] = deepcopy(case["plane_removal_expectation"])
     target = case.get("plane_support", {}).get("point")
     if target is not None:
         result["expectation"]["required_points"] = [key for key in result["expectation"]["required_points"] if key != target]
@@ -167,18 +170,83 @@ def plane_support_case(axis="X", *, fit_only=False, seed=0, noise_px=0.0):
     return case
 
 
+def mirrored_line_plane_cases(*, lock_poses=True):
+    """A plane fixed by CAD points supplies independent depth for weak mirror strokes."""
+    case = read_case(Path(__file__).parent/"cases/mirror-lines-weak.json")
+    case["name"] = "mirror-line-with-supported-plane"
+    case["family"] = "mirror_plane"
+    request, truth = case["request"], case["truth"]
+    plane = dict(axis="FREE", bucket=1, origin=[0,0,.72], normal=[0,-.8,1.])
+    truth["planes"] = [plane]
+    request["plane_slack"] = 0.
+    request["plane_groups"] = []
+    if not lock_poses:
+        case["name"] += "-unlocked"
+    for stored, actual in zip(request["cameras"][1:], truth["cameras"][1:]) if lock_poses else ():
+        rotation = np.asarray(actual["rotation"]).T@np.asarray(stored["rotation"])
+        request["fixed_similarities"][stored["id"]] = dict(scale=1., rotation=rotation.tolist(),
+            translation=(np.asarray(actual["center"])-rotation@stored["center"]).tolist())
+    for i, position in enumerate(([-1.2,-.3,.48], [1.2,-.3,.48], [1.2,.4,1.04])):
+        key = f"plane_reference_{i}"
+        request["points"].append(dict(id=key, ground=False, known=position))
+        case["expectation"]["required_points"].append(key)
+        truth["points"][key] = position
+        request["plane_groups"].append((key,"FREE",1))
+        for camera in truth["cameras"]:
+            if not visible(position,camera,truth["mesh"]):
+                continue
+            uv = project([position],camera)[0][0]
+            request["observations"].append(dict(match_id=camera["id"],landmark_id=key,
+                u=float(uv[0]),v=float(uv[1]),weight=1.))
+    request["plane_groups"].extend((key,"FREE",1) for key in truth["lines"])
+    case["plane_removal_expectation"] = deepcopy(case["expectation"])
+    control = remove_planes(case)
+    case["expectation"].pop("weak_lines", None)
+    case["expectation"]["outcome"] = "solve"
+    case["expectation"]["plane_max_distance"] = 1e-6
+    return case, control
+
+
+def mirror_plane_reference(case):
+    """Reconstruct each stroke independently using the known construction plane."""
+    plane = case["truth"]["planes"][0]
+    normal = np.asarray(plane["normal"],dtype=float)
+    normal /= np.linalg.norm(normal)
+    equation = np.r_[normal,-normal@plane["origin"]]
+    cameras = {c["id"]:c for c in case["truth"]["cameras"]}
+    rows = {}
+    for pick in case["request"]["line_observations"]:
+        image_plane = stroke_plane(pick,cameras[pick["match_id"]])
+        _point, direction = intersect_stroke_planes([equation,image_plane])
+        ends = np.asarray(case["truth"]["lines"][pick["landmark_id"]])
+        reference = ends[1]-ends[0]
+        reference /= np.linalg.norm(reference)
+        rows[pick["landmark_id"]] = dict(
+            angle_error_deg=float(np.degrees(np.arccos(np.clip(abs(direction@reference),0,1)))),
+            support_angle_deg=float(np.degrees(np.arccos(np.clip(abs(normal@image_plane[:3]),0,1)))))
+    return rows
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--noise-px", type=float, default=0.)
     parser.add_argument("--contribution", action="store_true", help="Explore single-view points determined by independently supported planes")
+    parser.add_argument("--mirrored-line", action="store_true", help="Explore plane information in the frozen weak mirrored-line case")
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
+    if args.mirrored_line and args.contribution:
+        parser.error("Choose the mirrored-line or single-view point experiment")
+    if args.mirrored_line and (args.seed != 0 or args.noise_px != 0.):
+        parser.error("The mirrored-line experiment reuses its frozen seed and noise")
     args.out.mkdir(parents=True, exist_ok=False)
     (args.out/"protocol.json").write_text(json.dumps(environment(), indent=2)+"\n")
     cases = []
     base = extra = None
-    if args.contribution:
+    if args.mirrored_line:
+        cases.extend(mirrored_line_plane_cases())
+        cases.extend(mirrored_line_plane_cases(lock_poses=False))
+    elif args.contribution:
         for axis in ("X", "FREE"):
             case = plane_support_case(axis, seed=args.seed, noise_px=args.noise_px)
             cases.extend((case, remove_planes(case), plane_support_case(axis, fit_only=True, seed=args.seed, noise_px=args.noise_px)))
@@ -195,6 +263,8 @@ def main():
         result = solve(case["request"])
         assessment = evaluate(case, result)
         assessment["planes"] = plane_measurements(case, result)
+        if args.mirrored_line:
+            assessment["independent_plane_reference"] = mirror_plane_reference(case)
         if case is extra:
             before = results[base["name"]]["line_segments"].get("edge_1")
             after = result["line_segments"].get("edge_1")

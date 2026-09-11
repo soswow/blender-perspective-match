@@ -56,6 +56,7 @@ from .planes import (
     active_plane_group_count,
     apply_plane_seed,
     seed_plane_points,
+    supported_line_planes,
     enforce_plane_line_segments,
     normalize_plane_groups,
     plane_slack_excesses,
@@ -621,6 +622,13 @@ def _attach_mirror_landmarks(state: _SolveState) -> None:
         state.known_lines,
         state.fixed_match_ids,
     )
+    ground_ids = sorted({item.landmark_id for item in state.valid_observations if item.on_ground})
+    enforce_plane_line_segments(
+        state.line_segments,state.landmarks,state.plane_groups,line_support,
+        state.similarities,state.match_map,state.known_lines,
+        plane_slack=state.plane_slack,ground_landmark_ids=ground_ids,
+        excluded_support_ids=state.plane_seeded_ids,
+    )
     enforce_mirror_line_segments(
         state.line_segments,
         state.landmarks,
@@ -632,6 +640,11 @@ def _attach_mirror_landmarks(state: _SolveState) -> None:
         state.match_map,
         state.known_lines,
         state.fixed_match_ids,
+        line_planes=supported_line_planes(
+            state.landmarks,state.line_segments,state.plane_groups,state.known_lines,
+            ground_landmark_ids=ground_ids,
+            excluded_support_ids=state.plane_seeded_ids,
+        ) if state.plane_slack <= 1e-12 else None,
     )
     existing = {
         (observation.match_id, observation.landmark_id)
@@ -906,6 +919,7 @@ def _rebuild_free_line_segments(state: _SolveState) -> None:
             state.known_lines,
             plane_slack=float(getattr(state, "plane_slack", 0.0) or 0.0),
             ground_landmark_ids=ground_ids,
+            excluded_support_ids=getattr(state,"plane_seeded_ids",set()),
         )
     mirror_plane = getattr(state, "mirror_plane", None)
     mirror_pairs = getattr(state, "mirror_pairs", None)
@@ -1885,6 +1899,7 @@ def solve_landmark_sync(
             known_lines,
             plane_slack=plane_slack,
             ground_landmark_ids=ground_landmark_ids,
+            excluded_support_ids=state.plane_seeded_ids,
         )
         if mirror_plane is not None and mirror_pairs:
             seed_mirror_line_segments(
@@ -2575,6 +2590,11 @@ def solve_landmark_sync(
         similarities, match_map,
         known_lines=known_lines, mirror_pairs=mirror_pairs,
         mirror_normal=mirror_plane[1] if mirror_plane is not None else None,
+        support_planes=supported_line_planes(
+            landmarks,line_segments,plane_groups,known_lines,
+            ground_landmark_ids=ground_landmark_ids,
+            excluded_support_ids=state.plane_seeded_ids,
+        ) if plane_slack <= 1e-12 else None,
     )
     weak_line_ids = sorted(key for key, angle in support_angles.items()
                            if float(np.sin(np.radians(angle))) < LINE_PLANE_MIN_SINE)
