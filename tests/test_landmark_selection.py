@@ -96,6 +96,40 @@ class LandmarkSelectionTests(unittest.TestCase):
             0,
         )
 
+    def test_exclusive_viewport_selection_ignores_multi_select(self) -> None:
+        first = _FakeObject("PM_LM_Corner")
+        second = _FakeObject("PM_LM_Other")
+        space = _FakeSpace(
+            [
+                _FakeLandmark(item_id="lm-1", name="Corner"),
+                _FakeLandmark(item_id="lm-2", name="Other"),
+            ]
+        )
+        view_layer = _FakeViewLayer(second, [first, second])
+        self.assertEqual(
+            landmark_selection.landmark_index_for_viewport_selection(space, view_layer),
+            1,
+        )
+        self.assertEqual(
+            landmark_selection.landmark_index_for_exclusive_viewport_selection(
+                space, view_layer
+            ),
+            -1,
+        )
+
+    def test_exclusive_viewport_selection_maps_single_object(self) -> None:
+        helper = _FakeObject("PM_LM_Corner")
+        space = _FakeSpace(
+            [_FakeLandmark(item_id="lm-1", name="Corner")]
+        )
+        view_layer = _FakeViewLayer(helper, [helper])
+        self.assertEqual(
+            landmark_selection.landmark_index_for_exclusive_viewport_selection(
+                space, view_layer
+            ),
+            0,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

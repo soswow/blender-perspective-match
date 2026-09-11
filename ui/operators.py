@@ -535,7 +535,7 @@ def _apply_sidebar_landmark_from_selection() -> None:
     if view_layer is None:
         return None
     space = _workspace(context)
-    index = scene.landmark_index_for_viewport_selection(space, view_layer)
+    index = scene.landmark_index_for_exclusive_viewport_selection(space, view_layer)
     if index < 0 or space.active_landmark_index == index:
         return None
     _set_active_landmark(context, index)

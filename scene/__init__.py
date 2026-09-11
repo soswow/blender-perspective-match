@@ -15,6 +15,7 @@ from .. import core, properties
 from ..core.sync.request import SyncSolveRequest
 from .landmark_selection import (
     LANDMARK_HELPER_ID_KEY,
+    landmark_index_for_exclusive_viewport_selection,
     landmark_index_for_helper,
     landmark_index_for_viewport_selection,
 )

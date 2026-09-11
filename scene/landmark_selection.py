@@ -62,3 +62,11 @@ def landmark_index_for_viewport_selection(space, view_layer) -> int:
         if index >= 0:
             return index
     return -1
+
+
+def landmark_index_for_exclusive_viewport_selection(space, view_layer) -> int:
+    """Landmark index only when a single viewport object is selected, else -1."""
+    selected = getattr(view_layer.objects, "selected", ())
+    if len(selected) != 1:
+        return -1
+    return landmark_index_for_viewport_selection(space, view_layer)
