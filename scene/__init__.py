@@ -1436,7 +1436,7 @@ def known_3d_iterate_roots(context: bpy.types.Context) -> list[bpy.types.Object]
         if (
             anchor is not None
             and root != anchor
-            and bool(getattr(settings, "sync_lock_pose", False))
+            and properties.session_sync_locks_pose(settings)
         ):
             continue
         if len(collect_known_pins(context, root)) < pin_refine.MIN_PIN_COUNT:
@@ -2000,7 +2000,7 @@ def ensure_origins_from_ground_landmarks(
         session = root.pm_session
         if not getattr(session, "sync_enabled", True):
             continue
-        if getattr(session, "sync_lock_pose", False):
+        if properties.session_sync_locks_pose(session):
             continue
         if uses_adjusted_camera(session):
             continue
@@ -2699,7 +2699,7 @@ def collect_sync_fixed_similarities(context: bpy.types.Context) -> dict:
     anchor = properties.anchor_root(context)
     fixed = {}
     for root in properties.iter_sync_enabled_roots():
-        if root == anchor or not getattr(root.pm_session, "sync_lock_pose", False):
+        if root == anchor or not properties.session_sync_locks_pose(root.pm_session):
             continue
         location, rotation, scale_xyz = root.matrix_world.decompose()
         scale = sum(abs(float(value)) for value in scale_xyz) / 3.0
@@ -2709,6 +2709,47 @@ def collect_sync_fixed_similarities(context: bpy.types.Context) -> dict:
             translation=np.array(location, dtype=np.float64),
         )
     return fixed
+
+
+def collect_sync_location_match_ids(context: bpy.types.Context) -> set[str]:
+    """Match ids whose 2D picks may move 3D. The Anchor always contributes."""
+    anchor = properties.anchor_root(context)
+    ids: set[str] = set()
+    if anchor is not None:
+        ids.add(anchor.name)
+    for root in properties.iter_sync_enabled_roots():
+        if root == anchor:
+            continue
+        if not properties.session_sync_fit_only(root.pm_session):
+            ids.add(root.name)
+    return ids
+
+
+def collect_sync_readonly_match_ids(context: bpy.types.Context) -> set[str]:
+    """Non-anchor match ids that skip pairwise and are only resected."""
+    anchor = properties.anchor_root(context)
+    ids: set[str] = set()
+    for root in properties.iter_sync_enabled_roots():
+        if root == anchor:
+            continue
+        if properties.session_sync_fit_only(root.pm_session):
+            ids.add(root.name)
+    return ids
+
+
+def collect_sync_solve_kwargs(context: bpy.types.Context) -> dict:
+    """Locks, slack, participation, and mirror kwargs for ``solve_landmark_sync``."""
+    space = properties.workspace(context)
+    return {
+        "fixed_similarities": collect_sync_fixed_similarities(context),
+        "lock_rotation": bool(space.lock_rotation),
+        "lock_translation": bool(space.lock_translation),
+        "ground_slack": float(getattr(space, "ground_slack", 0.02)),
+        "known_3d_slack": float(getattr(space, "known_3d_slack", 0.0)),
+        "location_match_ids": collect_sync_location_match_ids(context),
+        "readonly_match_ids": collect_sync_readonly_match_ids(context),
+        **_sync_mirror_kwargs(context),
+    }
 
 
 def apply_similarity_to_root(root: bpy.types.Object, similarity) -> None:
@@ -2909,7 +2950,7 @@ def observation_for_match(landmark, root: bpy.types.Object | None):
 
 
 def similarity_from_root(root: bpy.types.Object):
-    """Live Empty pose as a shared-world similarity (same as Lock Pose in Sync)."""
+    """Live Empty pose as a shared-world similarity (same as Lock Pose)."""
     from ..core import sync as sync_module
 
     location, rotation, scale_xyz = root.matrix_world.decompose()
@@ -3411,7 +3452,7 @@ def ensure_ground_frame_from_landmarks(
         if root is None or relative_rotation is None:
             continue
         session = root.pm_session
-        if getattr(session, "sync_lock_pose", False):
+        if properties.session_sync_locks_pose(session):
             continue
         line_bundles = line_bundles_from_settings(session)
         lock_focal = bool(session.lock_focal or session.vp_mode == "1")
@@ -3529,6 +3570,8 @@ class DiagnoseSyncPrep:
     fixed_similarities: dict
     ground_slack: float
     known_3d_slack: float
+    location_match_ids: set
+    readonly_match_ids: set
     mirror_pairs: list
     mirror_plane: tuple | None
     mirror_slack: float
@@ -3579,12 +3622,7 @@ def prepare_diagnose_sync(context: bpy.types.Context) -> DiagnoseSyncPrep:
             for landmark in space.landmarks
             if not getattr(landmark, "use_in_sync", True)
         ),
-        lock_rotation=bool(space.lock_rotation),
-        lock_translation=bool(space.lock_translation),
-        fixed_similarities=collect_sync_fixed_similarities(context),
-        ground_slack=float(getattr(space, "ground_slack", 0.02)),
-        known_3d_slack=float(getattr(space, "known_3d_slack", 0.0)),
-        **_sync_mirror_kwargs(context),
+        **collect_sync_solve_kwargs(context),
     )
 
 
@@ -3617,6 +3655,8 @@ def run_diagnose_sync(
         use_pose_cache=True,
         ground_slack=prep.ground_slack,
         known_3d_slack=prep.known_3d_slack,
+        location_match_ids=prep.location_match_ids,
+        readonly_match_ids=prep.readonly_match_ids,
         mirror_pairs=prep.mirror_pairs,
         mirror_plane=prep.mirror_plane,
         mirror_slack=prep.mirror_slack,
@@ -3645,6 +3685,8 @@ def run_diagnose_sync(
             lock_translation=prep.lock_translation,
             ground_slack=prep.ground_slack,
             known_3d_slack=prep.known_3d_slack,
+            location_match_ids=prep.location_match_ids,
+            readonly_match_ids=prep.readonly_match_ids,
             mirror_pairs=prep.mirror_pairs,
             mirror_plane=prep.mirror_plane,
             mirror_slack=prep.mirror_slack,
@@ -3724,13 +3766,8 @@ def solve_and_apply_sync(context: bpy.types.Context):
         line_observations=line_observations,
         known_lines=known_lines,
         parallel_pairs=parallel_pairs,
-        fixed_similarities=collect_sync_fixed_similarities(context),
-        lock_rotation=bool(space.lock_rotation),
-        lock_translation=bool(space.lock_translation),
         use_pose_cache=True,
-        ground_slack=float(getattr(space, "ground_slack", 0.02)),
-        known_3d_slack=float(getattr(space, "known_3d_slack", 0.0)),
-        **_sync_mirror_kwargs(context),
+        **collect_sync_solve_kwargs(context),
     )
     _apply_sync_landmark_diagnostics(context, result)
     message = result.message
@@ -3763,7 +3800,7 @@ def solve_and_apply_sync(context: bpy.types.Context):
         root = root_by_name.get(match_id)
         if root is None:
             continue
-        if getattr(root.pm_session, "sync_lock_pose", False) and root != anchor:
+        if properties.session_sync_locks_pose(root.pm_session) and root != anchor:
             # Preserve the live matrix byte-for-byte; only refresh persisted
             # sync metadata and diagnostics for this participating match.
             store_similarity_on_session(root.pm_session, similarity)
@@ -3857,6 +3894,8 @@ def refine_lenses_and_sync(context: bpy.types.Context):
         share_lens=prep.share_lens,
         ground_slack=prep.ground_slack,
         known_3d_slack=prep.known_3d_slack,
+        location_match_ids=prep.location_match_ids,
+        readonly_match_ids=prep.readonly_match_ids,
         mirror_pairs=prep.mirror_pairs,
         mirror_plane=prep.mirror_plane,
         mirror_slack=prep.mirror_slack,
@@ -3883,6 +3922,8 @@ class LensRefinePrep:
     share_lens: bool = True
     ground_slack: float | None = None
     known_3d_slack: float | None = None
+    location_match_ids: set | None = None
+    readonly_match_ids: set | None = None
     mirror_pairs: list | None = None
     mirror_plane: tuple | None = None
     mirror_slack: float | None = None
@@ -3894,8 +3935,6 @@ def prepare_lens_refine(context: bpy.types.Context) -> LensRefinePrep:
 
     space = properties.workspace(context)
     share_lens = bool(getattr(space, "share_lens", True))
-    ground_slack = float(getattr(space, "ground_slack", 0.02))
-    known_3d_slack = float(getattr(space, "known_3d_slack", 0.0))
     anchor = properties.anchor_root(context)
     if anchor is None:
         raise ValueError("Choose an anchor match first")
@@ -3953,7 +3992,7 @@ def prepare_lens_refine(context: bpy.types.Context) -> LensRefinePrep:
             vp_mode=settings.vp_mode,
         )
         pose_locked = bool(
-            root != anchor and getattr(settings, "sync_lock_pose", False)
+            root != anchor and properties.session_sync_locks_pose(settings)
         )
         freeze = pose_locked or (
             (not share_lens) and (settings.vp_mode == "1" or not can_orient)
@@ -3996,13 +4035,8 @@ def prepare_lens_refine(context: bpy.types.Context) -> LensRefinePrep:
         anchor_id=anchor.name,
         fx_span=max(float(space.lens_refine_span_percent), 1.0) / 100.0,
         root_by_name=root_by_name,
-        lock_rotation=bool(space.lock_rotation),
-        lock_translation=bool(space.lock_translation),
-        fixed_similarities=collect_sync_fixed_similarities(context),
         share_lens=share_lens,
-        ground_slack=ground_slack,
-        known_3d_slack=known_3d_slack,
-        **_sync_mirror_kwargs(context),
+        **collect_sync_solve_kwargs(context),
     )
 
 

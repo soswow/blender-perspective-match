@@ -21,7 +21,13 @@ if "match_perspective" not in sys.modules:
 from match_perspective import core
 from match_perspective.core import sync
 from match_perspective.core.sync import solve as solve_module
-from sync_fixtures import _look_at_rotation, _project, _rodrigues_z, _synthetic_scene
+from sync_fixtures import (
+    _look_at_rotation,
+    _project,
+    _rodrigues_z,
+    _synthetic_scene,
+    _three_view_scene,
+)
 
 
 class LineSyncTests(unittest.TestCase):
@@ -481,6 +487,58 @@ class LineSyncTests(unittest.TestCase):
         recovered = result.similarities["other"]
         self.assertTrue(np.array_equal(recovered.rotation, locked.rotation))
         self.assertTrue(np.array_equal(recovered.translation, locked.translation))
+
+    def test_line_strokes_without_influence_location_do_not_move_3d(self) -> None:
+        """A biased line stroke only pulls 3D when that camera may move 3D."""
+        matches, observations, true_sim, _center, _shared, _true_landmarks = (
+            _three_view_scene()
+        )
+        point_a = np.array((-0.8, 0.4, 0.6), dtype=np.float64)
+        point_b = np.array((0.9, 0.4, 0.6), dtype=np.float64)
+        true_mid = 0.5 * (point_a + point_b)
+        other_cal = matches[1].calibration
+        third_cal = matches[2].calibration
+        private_a = true_sim.inverse_point(point_a)
+        private_b = true_sim.inverse_point(point_b)
+        ua1, va1 = _project(point_a, matches[0].calibration)
+        ua2, va2 = _project(point_b, matches[0].calibration)
+        uo1, vo1 = _project(private_a, other_cal)
+        uo2, vo2 = _project(private_b, other_cal)
+        ut1, vt1 = _project(point_a, third_cal)
+        ut2, vt2 = _project(point_b, third_cal)
+        line_observations = [
+            sync.SyncLineObservation("anchor", "edge", ua1, va1, ua2, va2, "edge"),
+            sync.SyncLineObservation("other", "edge", uo1, vo1, uo2, vo2, "edge"),
+            sync.SyncLineObservation(
+                "third", "edge", ut1 + 35.0, vt1, ut2 + 35.0, vt2, "edge"
+            ),
+        ]
+        frozen = sync.solve_landmark_sync(
+            matches,
+            observations,
+            anchor_id="anchor",
+            line_observations=line_observations,
+            location_match_ids={"anchor", "other"},
+        )
+        pulled = sync.solve_landmark_sync(
+            matches,
+            observations,
+            anchor_id="anchor",
+            line_observations=line_observations,
+            location_match_ids={"anchor", "other", "third"},
+        )
+        self.assertTrue(frozen.success, frozen.message)
+        self.assertTrue(pulled.success, pulled.message)
+        frozen_mid = 0.5 * (
+            frozen.line_segments["edge"][0] + frozen.line_segments["edge"][1]
+        )
+        pulled_mid = 0.5 * (
+            pulled.line_segments["edge"][0] + pulled.line_segments["edge"][1]
+        )
+        frozen_err = float(np.linalg.norm(frozen_mid - true_mid))
+        pulled_err = float(np.linalg.norm(pulled_mid - true_mid))
+        self.assertLess(frozen_err, 0.35)
+        self.assertGreater(pulled_err, frozen_err + 0.05)
 
     def test_line_reconstruction_skips_near_parallel_locked_pair(self) -> None:
         """A locked near-duplicate view must not pin line depth; use a baseline pair."""

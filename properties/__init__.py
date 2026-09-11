@@ -12,6 +12,10 @@ AXIS_ITEMS = (
     ("y", "Z (Blue)", "Vertical edges parallel to Blender Z"),
 )
 
+SYNC_ROLE_SOLVE = "SOLVE"
+SYNC_ROLE_LOCK_POSE = "LOCK_POSE"
+SYNC_ROLE_FIT_ONLY = "FIT_ONLY"
+
 # Blender requires dynamic enum strings to remain referenced. Cache each count
 # combination so active_axis can keep its original expanded-list UI safely.
 _COUNTED_AXIS_ITEMS: dict[tuple[int, int, int], tuple] = {}
@@ -151,6 +155,11 @@ def _update_vp_detect_sensitivity(self, context: bpy.types.Context) -> None:
 
 
 def _redraw(_self, context: bpy.types.Context) -> None:
+    tag_viewport_redraw(context)
+
+
+def _update_sync_role(self, context: bpy.types.Context) -> None:
+    self.sync_lock_pose = self.sync_role == SYNC_ROLE_LOCK_POSE
     tag_viewport_redraw(context)
 
 
@@ -526,6 +535,29 @@ def match_sync_enabled(root: bpy.types.Object | None) -> bool:
     return bool(getattr(root.pm_session, "sync_enabled", True))
 
 
+def session_sync_role(session) -> str:
+    """This Camera role: Solve, Lock Pose, or Fit Only.
+
+    Unmigrated 0.5.0 files still store Lock Pose as ``sync_lock_pose``.
+    """
+    if session is None:
+        return SYNC_ROLE_SOLVE
+    role = str(getattr(session, "sync_role", SYNC_ROLE_SOLVE) or SYNC_ROLE_SOLVE)
+    if role == SYNC_ROLE_SOLVE and bool(getattr(session, "sync_lock_pose", False)):
+        return SYNC_ROLE_LOCK_POSE
+    return role
+
+
+def session_sync_locks_pose(session) -> bool:
+    """True when Solve Sync must keep this match's live root transform."""
+    return session_sync_role(session) == SYNC_ROLE_LOCK_POSE
+
+
+def session_sync_fit_only(session) -> bool:
+    """True when this match is only posed against 3D from the others."""
+    return session_sync_role(session) == SYNC_ROLE_FIT_ONLY
+
+
 def iter_sync_enabled_roots() -> list[bpy.types.Object]:
     """Match roots that participate in sync solves."""
     return [root for root in iter_match_roots() if match_sync_enabled(root)]
@@ -566,6 +598,42 @@ def ensure_landmark_creation_indices(space: PMWorkspace | None = None) -> None:
             landmark.creation_index = next_index
             next_index += 1
     target.next_landmark_creation_index = next_index
+
+
+def ensure_sync_roles() -> None:
+    """Copy 0.5.0 Lock Pose onto This Camera; keep the hidden bool in sync.
+
+    Safe from operators and load_post — not poll/draw. During early add-on
+    registration Blender may expose restricted data; then skip until load_post.
+    """
+    try:
+        roots = iter_match_roots()
+    except Exception:
+        return
+    for root in roots:
+        session = getattr(root, "pm_session", None)
+        if session is None:
+            continue
+        role = str(getattr(session, "sync_role", SYNC_ROLE_SOLVE) or SYNC_ROLE_SOLVE)
+        locked = bool(getattr(session, "sync_lock_pose", False))
+        if role == SYNC_ROLE_SOLVE and locked:
+            session.sync_role = SYNC_ROLE_LOCK_POSE
+            role = SYNC_ROLE_LOCK_POSE
+        elif role == SYNC_ROLE_SOLVE:
+            leftover_read_only = False
+            try:
+                leftover_read_only = bool(session.get("sync_read_only"))
+            except (AttributeError, TypeError, KeyError):
+                leftover_read_only = bool(getattr(session, "sync_read_only", False))
+            if leftover_read_only:
+                session.sync_role = SYNC_ROLE_FIT_ONLY
+                role = SYNC_ROLE_FIT_ONLY
+        session.sync_lock_pose = role == SYNC_ROLE_LOCK_POSE
+        for leftover_key in ("sync_read_only", "sync_influence_location"):
+            try:
+                del session[leftover_key]
+            except (KeyError, TypeError):
+                pass
 
 
 def ensure_mirror_pairs(space: PMWorkspace | None = None) -> None:
@@ -1228,6 +1296,36 @@ class PMSession(bpy.types.PropertyGroup):
         default=True,
         update=_redraw,
     )
+    sync_role: bpy.props.EnumProperty(
+        name="This Camera",
+        description=(
+            "How Solve Sync, Diagnose, and Refine Lenses treat this camera "
+            "and its 2D picks. The Anchor is always locked"
+        ),
+        items=(
+            (
+                SYNC_ROLE_SOLVE,
+                "Solve",
+                "Solve Sync may move this camera. Its 2D picks also move "
+                "the 3D landmarks",
+            ),
+            (
+                SYNC_ROLE_LOCK_POSE,
+                "Lock Pose",
+                "Keep this camera where it is. Its 2D picks still move 3D "
+                "landmarks and the other cameras",
+            ),
+            (
+                SYNC_ROLE_FIT_ONLY,
+                "Fit Only",
+                "Only find where this camera sits. Its 2D picks do not move "
+                "3D landmarks or the other cameras",
+            ),
+        ),
+        default=SYNC_ROLE_SOLVE,
+        update=_update_sync_role,
+    )
+    # Hidden alias for 0.5.0 files and call sites that still read the bool.
     sync_lock_pose: bpy.props.BoolProperty(
         name="Lock Pose in Sync",
         description=(
@@ -1236,6 +1334,7 @@ class PMSession(bpy.types.PropertyGroup):
             "picks still constrain the other matches"
         ),
         default=False,
+        options={"HIDDEN"},
         update=_redraw,
     )
     sync_is_applied: bpy.props.BoolProperty(default=False, options={"HIDDEN"})

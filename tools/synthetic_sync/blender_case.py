@@ -128,7 +128,22 @@ def create_scene(case, out: Path, render: bool):
             matrix[:3, :3] = np.asarray(fixed["rotation"]) * fixed["scale"]
             matrix[:3, 3] = fixed["translation"]
             root.matrix_world = Matrix(matrix)
+            session.sync_role = "LOCK_POSE"
             session.sync_lock_pose = True
+        else:
+            # Existing cases omit these keys; default Solve so Blender matches
+            # the numerical solver's "every camera may move 3D" contract.
+            location_ids = set(
+                request.get("location_match_ids")
+                or [item["id"] for item in request["cameras"]]
+            )
+            readonly_ids = set(request.get("readonly_match_ids") or [])
+            if camera["id"] in readonly_ids or camera["id"] not in location_ids:
+                session.sync_role = "FIT_ONLY"
+                session.sync_lock_pose = False
+            else:
+                session.sync_role = "SOLVE"
+                session.sync_lock_pose = False
     workspace = properties.workspace(bpy.context)
     workspace.show_landmark_empties = True
     workspace.anchor_root = roots[request["anchor_id"]]

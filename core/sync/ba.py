@@ -200,6 +200,24 @@ def _shared_ray(
     return origin_shared, direction_shared
 
 
+def observations_for_location(
+    items: list,
+    location_match_ids: set[str] | None,
+) -> list:
+    """Keep items whose cameras may move 3D. ``None`` means every camera."""
+    if location_match_ids is None:
+        return list(items)
+    return [item for item in items if item.match_id in location_match_ids]
+
+
+def _match_moves_location(
+    match_id: str,
+    location_match_ids: set[str] | None,
+) -> bool:
+    """True when this camera's 2D may pull 3D (points or line midpoints)."""
+    return location_match_ids is None or match_id in location_match_ids
+
+
 def _triangulate_landmarks(
     landmark_ids: list[str],
     observations_by_landmark: dict[str, list[SyncObservation]],
@@ -207,20 +225,26 @@ def _triangulate_landmarks(
     matches: dict[str, SyncMatchInput],
     *,
     min_views: int = 2,
+    location_match_ids: set[str] | None = None,
 ) -> dict[str, np.ndarray]:
     """Triangulate landmarks that have enough registered-match rays.
 
     Observations from matches that are not registered yet are skipped.
-    ``min_views=2`` (default) refuses single-ray depth guesses so a later PnP
-    cannot pretend to know metric structure from the anchor alone.
+    ``location_match_ids`` limits which cameras contribute rays; ``None``
+    keeps every registered view. ``min_views=2`` (default) refuses single-ray
+    depth guesses so a later PnP cannot pretend to know metric structure from
+    the anchor alone.
     """
     landmarks: dict[str, np.ndarray] = {}
     for landmark_id in landmark_ids:
-        registered_observations = [
-            observation
-            for observation in observations_by_landmark[landmark_id]
-            if observation.match_id in similarities
-        ]
+        registered_observations = observations_for_location(
+            [
+                observation
+                for observation in observations_by_landmark[landmark_id]
+                if observation.match_id in similarities
+            ],
+            location_match_ids,
+        )
         if len(registered_observations) < min_views:
             continue
         origins: list[np.ndarray] = []
@@ -676,6 +700,7 @@ def _ba_raw_residuals_and_jacobian(
     mirror_plane: tuple[np.ndarray, np.ndarray] | None = None,
     mirror_slack: float = 0.0,
     free_plane_offset: bool = False,
+    location_match_ids: set[str] | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Unweighted BA residuals and block-analytic Jacobian."""
     free_line_ids = free_line_ids or []
@@ -770,7 +795,9 @@ def _ba_raw_residuals_and_jacobian(
         inv_scale = 1.0 / max(float(similarity.scale), 1.0e-12)
         rotation_t = similarity.rotation.T
         d_private_d_shared = inv_scale * rotation_t
-        if observation.landmark_id in landmark_offset:
+        if observation.landmark_id in landmark_offset and _match_moves_location(
+            match_id, location_match_ids
+        ):
             start = landmark_offset[observation.landmark_id]
             block = d_uv_d_private @ d_private_d_shared
             row_u[start : start + 3] = block[0]
@@ -930,7 +957,9 @@ def _ba_raw_residuals_and_jacobian(
         if match_id in match_offset:
             start = match_offset[match_id]
             columns.extend(range(start, start + stride))
-        if landmark_id in line_offset:
+        if landmark_id in line_offset and _match_moves_location(
+            match_id, location_match_ids
+        ):
             start = line_offset[landmark_id]
             columns.extend(range(start, start + 3))
         for column in columns:
@@ -1005,6 +1034,7 @@ def _ba_residual_vector(
     mirror_plane: tuple[np.ndarray, np.ndarray] | None = None,
     mirror_slack: float = 0.0,
     free_plane_offset: bool = False,
+    location_match_ids: set[str] | None = None,
 ) -> np.ndarray:
     """Joint reprojection residuals for free poses + free landmarks (+ lines)."""
     residual_array, _jacobian = _ba_raw_residuals_and_jacobian(
@@ -1034,6 +1064,7 @@ def _ba_residual_vector(
         mirror_plane=mirror_plane,
         mirror_slack=mirror_slack,
         free_plane_offset=free_plane_offset,
+        location_match_ids=location_match_ids,
     )
     return residual_array * _robust_weights(residual_array, huber_delta)
 
@@ -1160,6 +1191,7 @@ def _bundle_adjust_registration(
     mirror_plane: tuple[np.ndarray, np.ndarray] | None = None,
     mirror_slack: float = 0.0,
     free_plane_offset: bool = False,
+    location_match_ids: set[str] | None = None,
 ) -> tuple[
     dict[str, SimilarityTransform],
     dict[str, np.ndarray],
@@ -1171,7 +1203,9 @@ def _bundle_adjust_registration(
     Pairwise registration seeds the solve; this pass couples every match and
     landmark into one reprojection objective (Huber-weighted). Free line
     midpoints move; directions stay fixed from the seed (parallel enforcement
-    can still lock families afterward).
+    can still lock families afterward). Observations from cameras not in
+    ``location_match_ids`` still pull pose, not 3D. ``None`` keeps every
+    camera contributing to 3D.
     """
     known_line_ids = known_line_ids or set()
     fixed_similarities = {
@@ -1300,6 +1334,7 @@ def _bundle_adjust_registration(
         "mirror_plane": mirror_plane,
         "mirror_slack": float(mirror_slack),
         "free_plane_offset": bool(free_plane_offset),
+        "location_match_ids": location_match_ids,
     }
     damping = 1.0e-2
     previous_cost = float("inf")
@@ -1508,6 +1543,8 @@ def leave_one_out_landmark_report(
     mirror_pairs: list[tuple[str, str]] | None = None,
     mirror_plane: tuple[np.ndarray, np.ndarray] | None = None,
     mirror_slack: float | None = None,
+    location_match_ids: set[str] | None = None,
+    readonly_match_ids: set[str] | None = None,
     cancel_check: Callable[[], bool] | None = None,
     progress_callback: Callable[[int, int, str], None] | None = None,
 ) -> list[tuple[str, float, float]]:
@@ -1538,6 +1575,8 @@ def leave_one_out_landmark_report(
             mirror_pairs=mirror_pairs,
             mirror_plane=mirror_plane,
             mirror_slack=mirror_slack,
+            location_match_ids=location_match_ids,
+            readonly_match_ids=readonly_match_ids,
             use_pose_cache=True,
             cancel_check=cancel_check,
         )
@@ -1631,6 +1670,8 @@ def leave_one_out_landmark_report(
             mirror_pairs=filtered_mirror,
             mirror_plane=mirror_plane,
             mirror_slack=mirror_slack,
+            location_match_ids=location_match_ids,
+            readonly_match_ids=readonly_match_ids,
             use_pose_cache=True,
             cancel_check=cancel_check,
         )

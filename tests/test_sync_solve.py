@@ -10,7 +10,7 @@ import numpy as np
 from match_perspective import core
 from match_perspective.core import sync
 from match_perspective.core.sync import solve as solve_module
-from sync_fixtures import _look_at_rotation, _project, _rodrigues_z, _synthetic_scene
+from sync_fixtures import _look_at_rotation, _project, _rodrigues_z, _synthetic_scene, _three_view_scene
 
 
 class SolveSyncTests(unittest.TestCase):
@@ -118,6 +118,114 @@ class SolveSyncTests(unittest.TestCase):
         self.assertTrue(np.array_equal(recovered.rotation, locked.rotation))
         self.assertTrue(np.array_equal(recovered.translation, locked.translation))
         self.assertIn("1 pose locked", result.message)
+
+
+    def test_location_anchor_only_keeps_ground_and_skips_free_triangulation(self) -> None:
+        """Default-like: only the Anchor's 2D may move 3D."""
+        matches, observations, true_sim, _center, _shared = _synthetic_scene(
+            with_ground=True
+        )
+        result = sync.solve_landmark_sync(
+            matches,
+            observations,
+            anchor_id="anchor",
+            location_match_ids={"anchor"},
+        )
+        self.assertTrue(result.success, result.message)
+        self.assertIn("other", result.similarities)
+        recovered = result.similarities["other"]
+        self.assertAlmostEqual(recovered.scale, true_sim.scale, places=2)
+        self.assertIn("p0", result.landmarks)
+        self.assertNotIn("p4", result.landmarks)
+
+    def test_influence_off_picks_do_not_move_landmarks(self) -> None:
+        """A biased still omitted from location_match_ids must not drag 3D."""
+        matches, observations, _true, _center, _shared, true_landmarks = (
+            _three_view_scene()
+        )
+        for observation in observations:
+            if (
+                observation.match_id == "third"
+                and observation.landmark_id == "p4"
+            ):
+                observation.u += 45.0
+                break
+        pulled = sync.solve_landmark_sync(
+            matches,
+            observations,
+            anchor_id="anchor",
+            location_match_ids={"anchor", "other", "third"},
+        )
+        frozen = sync.solve_landmark_sync(
+            matches,
+            observations,
+            anchor_id="anchor",
+            location_match_ids={"anchor", "other"},
+        )
+        self.assertTrue(pulled.success, pulled.message)
+        self.assertTrue(frozen.success, frozen.message)
+        self.assertIn("third", frozen.similarities)
+        truth = true_landmarks["p4"]
+        pulled_err = float(np.linalg.norm(pulled.landmarks["p4"] - truth))
+        frozen_err = float(np.linalg.norm(frozen.landmarks["p4"] - truth))
+        self.assertLess(frozen_err, 0.08)
+        self.assertGreater(pulled_err, frozen_err + 0.05)
+
+    def test_read_only_skips_pairwise_and_still_poses(self) -> None:
+        """Fit Only cameras are resected after the others have a cloud."""
+        matches, observations, _true, _center, _shared, _landmarks = (
+            _three_view_scene()
+        )
+        with mock.patch.object(
+            solve_module,
+            "_register_from_relative_pose",
+            wraps=solve_module._register_from_relative_pose,
+        ) as register:
+            result = sync.solve_landmark_sync(
+                matches,
+                observations,
+                anchor_id="anchor",
+                readonly_match_ids={"third"},
+            )
+        self.assertTrue(result.success, result.message)
+        self.assertIn("third", result.similarities)
+        self.assertIn("fit only", result.message)
+        self.assertNotIn("third", register.call_args[0][1])
+        self.assertIn("other", register.call_args[0][1])
+
+    def test_read_only_with_influence_location_moves_3d_after_resect(self) -> None:
+        """Both flags: skip pairwise, then let those picks pull 3D."""
+        matches, observations, _true, _center, _shared, true_landmarks = (
+            _three_view_scene()
+        )
+        for observation in observations:
+            if (
+                observation.match_id == "third"
+                and observation.landmark_id == "p4"
+            ):
+                observation.u += 45.0
+                break
+        frozen = sync.solve_landmark_sync(
+            matches,
+            observations,
+            anchor_id="anchor",
+            location_match_ids={"anchor", "other"},
+            readonly_match_ids={"third"},
+        )
+        pulled = sync.solve_landmark_sync(
+            matches,
+            observations,
+            anchor_id="anchor",
+            location_match_ids={"anchor", "other", "third"},
+            readonly_match_ids={"third"},
+        )
+        self.assertTrue(frozen.success, frozen.message)
+        self.assertTrue(pulled.success, pulled.message)
+        truth = true_landmarks["p4"]
+        frozen_err = float(np.linalg.norm(frozen.landmarks["p4"] - truth))
+        pulled_err = float(np.linalg.norm(pulled.landmarks["p4"] - truth))
+        self.assertLess(frozen_err, 0.08)
+        self.assertGreater(pulled_err, frozen_err + 0.05)
 
 
     def test_low_confidence_outlier_softens_pose_pull(self) -> None:

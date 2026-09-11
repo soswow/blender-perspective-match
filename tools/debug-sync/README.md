@@ -1,6 +1,6 @@
 # Dump Perspective Match sync state
 
-Headless diagnostic for a `.blend`: match calibrations, optical-axis tilt vs world Z, landmark overlap, pairwise registration RMSE, and a Diagnose-style solve. Does not write the blend.
+Headless diagnostic for a `.blend`: match calibrations, optical-axis tilt vs world Z, landmark overlap, pairwise registration RMSE, and a Diagnose-style solve. Does not write the blend. `dump_sync.py`, `probe_graph.py`, and `probe_resected.py` pass the same sidebar locks, slack, and **This Camera** role as Solve Sync.
 
 Agents: if you invent another dump or probe while debugging, check it in here (or under `tools/`) and add a line in `AGENTS.md`.
 

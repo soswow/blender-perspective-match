@@ -17,6 +17,7 @@ from .ba import (
     _point_landmark_rmse_snapshot,
     _residual_vector,
     _triangulate_landmarks,
+    observations_for_location,
 )
 from .constants import (
     ACCEPT_RMSE_PX,
@@ -398,6 +399,8 @@ class _SolveState:
     skipped_unregistered: list[str]
     failure_detail: str
     connected: set[str]
+    location_match_ids: set[str] | None = None
+    readonly_match_ids: set[str] = field(default_factory=set)
     landmarks: dict[str, np.ndarray] = field(default_factory=dict)
     consistent_metric: dict[str, np.ndarray] = field(default_factory=dict)
     line_segments: dict[str, tuple[np.ndarray, np.ndarray]] = field(
@@ -458,6 +461,7 @@ class _SolveState:
             self.observations_by_landmark,
             self.similarities,
             self.match_map,
+            location_match_ids=self.location_match_ids,
         )
         metric_points = _metric_landmarks(
             self.observations_by_landmark,
@@ -474,6 +478,10 @@ class _SolveState:
         rebuilt.update(consistent)
         for landmark_id, point in self.known_world.items():
             rebuilt[landmark_id] = point
+        # Slack leaves On Ground unpinned; still seed them when no second
+        # location view could triangulate.
+        for landmark_id, point in metric_points.items():
+            rebuilt.setdefault(landmark_id, point)
         self.landmarks = rebuilt
         self.consistent_metric = consistent
         _rebuild_free_line_segments(self)
@@ -632,6 +640,7 @@ def _expand_landmarks_after_resect(state: _SolveState) -> None:
         observations_posed,
         state.similarities,
         state.match_map,
+        location_match_ids=state.location_match_ids,
     )
     added_ids: set[str] = set()
     for landmark_id, point in extra.items():
@@ -694,6 +703,7 @@ def _expand_landmarks_after_resect(state: _SolveState) -> None:
         observations_posed,
         state.similarities,
         state.match_map,
+        location_match_ids=state.location_match_ids,
     )
     for landmark_id, point in refined.items():
         if landmark_id not in state.landmarks or landmark_id in added_ids:
@@ -728,7 +738,7 @@ def _rebuild_usable_observations(state: _SolveState) -> None:
 
 
 def _rebuild_free_line_segments(state: _SolveState) -> None:
-    """Re-intersect free 3D lines from every camera that currently has a pose."""
+    """Re-intersect free 3D lines from cameras allowed to move 3D."""
     segments: dict[str, tuple[np.ndarray, np.ndarray]] = {}
     for landmark_id, (point_a, point_b) in state.known_lines.items():
         segments[landmark_id] = (point_a.copy(), point_b.copy())
@@ -736,9 +746,10 @@ def _rebuild_free_line_segments(state: _SolveState) -> None:
     for landmark_id, items in state.line_observations_by_landmark.items():
         if landmark_id in segments:
             continue
-        posed_items = [
-            item for item in items if item.match_id in state.similarities
-        ]
+        posed_items = observations_for_location(
+            [item for item in items if item.match_id in state.similarities],
+            getattr(state, "location_match_ids", None),
+        )
         anchor_ids = _line_anchor_match_ids(posed_items, state.fixed_match_ids)
         reconstructed = _reconstruct_line_from_observations(
             posed_items,
@@ -930,6 +941,7 @@ def _polish_recovered_poses(state: _SolveState) -> None:
         max_iterations=12,
         max_free_lines=0,
         huber_delta=RECOVERED_HUBER_DELTA_PX,
+        location_match_ids=getattr(state, "location_match_ids", None),
     )
     if not ran:
         return
@@ -955,6 +967,72 @@ def _polish_recovered_poses(state: _SolveState) -> None:
         return
     if _mean_rmse(post_combo) > _mean_rmse(pre_combo) + 2.0:
         state.similarities = pre_similarities
+        return
+    state.similarities = similarities
+    state.landmarks = landmarks
+    state.line_segments = line_segments
+
+
+def _thaw_recovered_location(state: _SolveState) -> None:
+    """Rebuild 3D from recovered stills that are allowed to move landmarks."""
+    location_ids = state.location_match_ids
+    if location_ids is None:
+        return
+    if not any(
+        match_id in location_ids and match_id in state.similarities
+        for match_id in state.recovered
+    ):
+        return
+    state.rebuild_landmarks()
+    _rebuild_usable_observations(state)
+    free_match_ids = [
+        match_id
+        for match_id in state.free_match_ids
+        if match_id in state.similarities
+    ]
+    free_landmark_ids = [
+        landmark_id
+        for landmark_id in state.landmark_ids
+        if landmark_id in state.landmarks and landmark_id not in state.known_world
+    ]
+    if len(free_landmark_ids) > BA_FREE_LANDMARK_LIMIT:
+        free_landmark_ids = []
+    line_constraints = _collect_ba_line_constraints(
+        state.line_segments,
+        state.known_lines,
+        state.line_observations_by_landmark,
+        set(state.similarities),
+    )
+    if not state.usable_observations and not line_constraints:
+        return
+    fixed_landmarks = {
+        landmark_id: point.copy()
+        for landmark_id, point in state.landmarks.items()
+        if landmark_id not in set(free_landmark_ids)
+    }
+    similarities, landmarks, line_segments, ran = _bundle_adjust_registration(
+        free_match_ids,
+        free_landmark_ids,
+        fixed_landmarks,
+        state.similarities,
+        state.landmarks,
+        state.anchor_id,
+        state.match_map,
+        state.usable_observations,
+        line_constraints,
+        known_line_ids=set(state.known_lines),
+        line_segments=state.line_segments,
+        lock_rotation=state.lock_rotation,
+        lock_translation=state.lock_translation,
+        fixed_similarities={
+            match_id: state.similarities[match_id]
+            for match_id in state.fixed_match_ids
+            if match_id in state.similarities
+        },
+        max_iterations=8,
+        location_match_ids=location_ids,
+    )
+    if not ran:
         return
     state.similarities = similarities
     state.landmarks = landmarks
@@ -1044,6 +1122,7 @@ def _resect_skipped_matches(state: _SolveState) -> None:
     _attach_mirror_landmarks(state)
     _rebuild_free_line_segments(state)
     _polish_recovered_poses(state)
+    _thaw_recovered_location(state)
     _rebuild_free_line_segments(state)
     _attach_mirror_landmarks(state)
     _rebuild_usable_observations(state)
@@ -1068,6 +1147,8 @@ def solve_landmark_sync(
     mirror_pairs: list[tuple[str, str]] | None = None,
     mirror_plane: tuple[np.ndarray, np.ndarray] | None = None,
     mirror_slack: float | None = None,
+    location_match_ids: set[str] | None = None,
+    readonly_match_ids: set[str] | None = None,
     cancel_check: Callable[[], bool] | None = None,
     progress_callback: Callable[[str], None] | None = None,
 ) -> SyncSolveResult:
@@ -1088,7 +1169,10 @@ def solve_landmark_sync(
     joint BA and, after that, mixed resection of a one-view partner line.
     ``fixed_similarities`` keeps those non-anchor
     match transforms unchanged while their observations still constrain the
-    solve. ``mirror_plane`` is ``(point, normal)``;
+    solve. ``location_match_ids`` is which cameras' 2D may move 3D (points
+    and lines); ``None`` keeps every camera. The Anchor always contributes
+    when a set is given. ``readonly_match_ids`` skip pairwise and are
+    resected against the frozen cloud. ``mirror_plane`` is ``(point, normal)``;
     ``mirror_slack`` is how far that plane may slide along the normal (the
     Empty is not moved).
     """
@@ -1292,9 +1376,31 @@ def solve_landmark_sync(
     _report_progress(progress_callback, "Registering cameras")
     registration_seeds = dict(initial_similarities or {})
     registration_seeds.update(fixed_similarities)
+    if location_match_ids is None:
+        resolved_location = None
+    else:
+        resolved_location = {
+            match_id
+            for match_id in location_match_ids
+            if match_id in match_map
+        }
+        resolved_location.add(anchor_id)
+    readonly_ids = {
+        match_id
+        for match_id in (readonly_match_ids or ())
+        if match_id in match_map and match_id != anchor_id
+    }
+    readonly_unlocked = {
+        match_id
+        for match_id in readonly_ids
+        if match_id not in fixed_similarities
+    }
+    pairwise_ids = [
+        match_id for match_id in free_match_ids if match_id not in readonly_unlocked
+    ]
     similarities, failure_detail = _register_from_relative_pose(
         anchor_id,
-        free_match_ids,
+        pairwise_ids,
         observations_by_landmark,
         match_map,
         known_world,
@@ -1378,6 +1484,8 @@ def solve_landmark_sync(
         skipped_unregistered=skipped_unregistered,
         failure_detail=failure_detail or "",
         connected=connected,
+        location_match_ids=resolved_location,
+        readonly_match_ids=readonly_ids,
     )
     # 1. register (done)  2. peel weak cameras  3. BA  4. peel  5. resect
     _check_cancelled(cancel_check)
@@ -1514,6 +1622,9 @@ def solve_landmark_sync(
         for landmark_id, items in line_observations_by_landmark.items():
             if landmark_id in known_lines:
                 continue
+            items = observations_for_location(items, state.location_match_ids)
+            if not items:
+                continue
             anchor_ids = _line_anchor_match_ids(items, state.fixed_match_ids)
             if landmark_id in line_segments:
                 point_a, point_b = line_segments[landmark_id]
@@ -1636,6 +1747,7 @@ def solve_landmark_sync(
                 mirror_plane=mirror_plane,
                 mirror_slack=mirror_slack,
                 free_plane_offset=free_plane_offset,
+                location_match_ids=state.location_match_ids,
             )
         )
         if ran:
@@ -1951,7 +2063,9 @@ def solve_landmark_sync(
             point = point_a
         else:
             reconstructed = _reconstruct_line_from_observations(
-                items, similarities, match_map
+                observations_for_location(items, state.location_match_ids),
+                similarities,
+                match_map,
             )
             if reconstructed is None:
                 continue
@@ -2084,6 +2198,8 @@ def solve_landmark_sync(
     )
     if state.fixed_match_ids:
         message += f" · {len(state.fixed_match_ids)} pose locked"
+    if state.readonly_match_ids:
+        message += f" · {len(state.readonly_match_ids)} fit only"
     scale_bits = []
     if known_count:
         scale_bits.append(f"{known_count} known 3D")

@@ -39,6 +39,19 @@ def _project(point, calibration: core.Calibration) -> tuple[float, float]:
     return float(projected[0]), float(projected[1])
 
 
+def _true_landmarks() -> dict[str, np.ndarray]:
+    """Shared-world points used by the two- and three-view sync fixtures."""
+    return {
+        "p0": np.array((0.0, 0.0, 0.0), dtype=np.float64),
+        "p1": np.array((2.0, 0.0, 0.0), dtype=np.float64),
+        "p2": np.array((0.0, 2.5, 0.0), dtype=np.float64),
+        "p3": np.array((1.5, 1.0, 0.0), dtype=np.float64),
+        "p4": np.array((1.0, 0.5, 2.0), dtype=np.float64),
+        "p5": np.array((-0.5, 1.2, 1.5), dtype=np.float64),
+        "p6": np.array((0.8, -0.4, 0.9), dtype=np.float64),
+    }
+
+
 def _synthetic_scene(*, with_ground: bool, yaw: float = 0.35) -> tuple:
     """Build two calibrated matches + landmark observations for sync tests."""
     intrinsics = core.CameraIntrinsics(
@@ -49,15 +62,7 @@ def _synthetic_scene(*, with_ground: bool, yaw: float = 0.35) -> tuple:
         image_width=800,
         image_height=600,
     )
-    true_landmarks = {
-        "p0": np.array((0.0, 0.0, 0.0), dtype=np.float64),
-        "p1": np.array((2.0, 0.0, 0.0), dtype=np.float64),
-        "p2": np.array((0.0, 2.5, 0.0), dtype=np.float64),
-        "p3": np.array((1.5, 1.0, 0.0), dtype=np.float64),
-        "p4": np.array((1.0, 0.5, 2.0), dtype=np.float64),
-        "p5": np.array((-0.5, 1.2, 1.5), dtype=np.float64),
-        "p6": np.array((0.8, -0.4, 0.9), dtype=np.float64),
-    }
+    true_landmarks = _true_landmarks()
     ground_ids = {"p0", "p1", "p2", "p3"} if with_ground else set()
 
     true_sim = sync.SimilarityTransform(
@@ -110,4 +115,41 @@ def _synthetic_scene(*, with_ground: bool, yaw: float = 0.35) -> tuple:
             )
         )
     return matches, observations, true_sim, center_private, shared_center
+
+
+def _three_view_scene(*, with_ground: bool = True) -> tuple:
+    """Two-view fixture plus a third camera already in the anchor world."""
+    matches, observations, true_sim, center_private, shared_center = _synthetic_scene(
+        with_ground=with_ground
+    )
+    true_landmarks = _true_landmarks()
+    ground_ids = {"p0", "p1", "p2", "p3"} if with_ground else set()
+    third_center = np.array((-4.0, 3.0, 2.2), dtype=np.float64)
+    third_rotation = _look_at_rotation(third_center, np.array((0.5, 0.5, 0.5)))
+    third_calibration = core.Calibration(
+        matches[0].calibration.intrinsics,
+        rotation_w2c=third_rotation,
+        camera_center=third_center,
+    )
+    matches = list(matches)
+    matches.append(sync.SyncMatchInput("third", third_calibration))
+    observations = list(observations)
+    for landmark_id, shared_point in true_landmarks.items():
+        observations.append(
+            sync.SyncObservation(
+                "third",
+                landmark_id,
+                *_project(shared_point, third_calibration),
+                on_ground=landmark_id in ground_ids,
+            )
+        )
+    return (
+        matches,
+        observations,
+        true_sim,
+        center_private,
+        shared_center,
+        true_landmarks,
+    )
+
 

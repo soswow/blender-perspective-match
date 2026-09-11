@@ -3587,6 +3587,8 @@ class PM_OT_refine_lenses(bpy.types.Operator):
                     share_lens=prep.share_lens,
                     ground_slack=prep.ground_slack,
                     known_3d_slack=prep.known_3d_slack,
+                    location_match_ids=prep.location_match_ids,
+                    readonly_match_ids=prep.readonly_match_ids,
                     mirror_pairs=prep.mirror_pairs,
                     mirror_plane=prep.mirror_plane,
                     mirror_slack=prep.mirror_slack,

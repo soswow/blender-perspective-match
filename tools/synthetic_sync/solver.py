@@ -57,6 +57,10 @@ def solver_arguments(request: dict) -> dict:
         arguments[key] = deepcopy(request[key])
     for key in ("mirror_pairs", "parallel_pairs"):
         arguments[key] = [tuple(pair) for pair in arguments[key]]
+    if request.get("location_match_ids") is not None:
+        arguments["location_match_ids"] = set(request["location_match_ids"])
+    if request.get("readonly_match_ids") is not None:
+        arguments["readonly_match_ids"] = set(request["readonly_match_ids"])
     return arguments
 
 

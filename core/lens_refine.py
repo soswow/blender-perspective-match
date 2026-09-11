@@ -289,6 +289,8 @@ def _run_sync(
     mirror_pairs: list | None = None,
     mirror_plane: tuple | None = None,
     mirror_slack: float | None = None,
+    location_match_ids: set[str] | None = None,
+    readonly_match_ids: set[str] | None = None,
 ) -> sync_module.SyncSolveResult:
     sync_matches = [
         sync_module.SyncMatchInput(match_id=match_id, calibration=calibrations[match_id])
@@ -311,6 +313,8 @@ def _run_sync(
         mirror_pairs=mirror_pairs,
         mirror_plane=mirror_plane,
         mirror_slack=mirror_slack,
+        location_match_ids=location_match_ids,
+        readonly_match_ids=readonly_match_ids,
     )
 
 
@@ -341,6 +345,8 @@ def refine_lenses_from_landmarks(
     mirror_pairs: list | None = None,
     mirror_plane: tuple | None = None,
     mirror_slack: float | None = None,
+    location_match_ids: set[str] | None = None,
+    readonly_match_ids: set[str] | None = None,
     cancel_check=None,
     progress_callback=None,
 ) -> LensRefineResult:
@@ -426,6 +432,8 @@ def refine_lenses_from_landmarks(
             mirror_pairs=mirror_pairs,
             mirror_plane=mirror_plane,
             mirror_slack=mirror_slack,
+            location_match_ids=location_match_ids,
+            readonly_match_ids=readonly_match_ids,
         )
         cost = _joint_cost(
             cals,

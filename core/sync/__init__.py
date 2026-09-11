@@ -5,12 +5,14 @@ transform ``X_shared = R X_private + t`` (scale 1) per non-anchor match, and
 falls back to a similarity with free scale when a rigid pose cannot lock.
 
 Pipeline (keep AGENTS.md in sync if this changes): register pairwise
-(strongest-pair seed, then easiest-next camera) → peel cameras above
-``ACCEPT_RMSE_PX`` → joint BA → peel again → resect skipped stills against
-the frozen 3D (ground tags if off-plane picks disagree; frozen Is Mirror Of
+(strongest-pair seed, then easiest-next camera; Fit Only stills skipped)
+→ peel cameras above ``ACCEPT_RMSE_PX`` → joint BA (Fit Only 2D pulls pose,
+not 3D) → peel again → resect skipped and Fit Only stills against the
+frozen 3D (ground tags if off-plane picks disagree; frozen Is Mirror Of
 lines mixed like Known 3D) → triangulate landmarks now visible in recovered
-views and PnP stills that had no cloud support → pose-only BA of recovered
-cameras → rebuild free 3D lines from every posed camera → report.
+views that may move 3D and PnP stills that had no cloud support → pose-only
+BA of recovered cameras → thaw 3D from recovered stills that may move 3D
+→ rebuild free 3D lines from those cameras → report.
 
 Package layout: ``constants``, ``types``, ``projection``, ``pose``, ``ground``,
 ``lines``, ``mirrors``, ``ba``, ``solve``. ``from match_perspective.core import sync``
