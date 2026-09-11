@@ -868,29 +868,42 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
         origin_hide_row = sync_body.row(align=True)
         origin_hide_row.use_property_split = False
         origin_hide_row.prop(settings, "hide_origin_empty", text="Hide Origin Empty")
-        if workspace.sync_status:
-            status_column = sync_body.column(align=True)
-            # Blender labels do not wrap; keep word boundaries in the compact status.
-            status_lines = textwrap.wrap(workspace.sync_status, width=48)
-            for index, line in enumerate(status_lines):
-                status_column.label(
-                    text=line,
-                    icon="INFO" if index == 0 else "NONE",
-                )
-        if settings is not None and settings.sync_last_ok and settings.sync_is_applied:
-            if scene.matched_camera_has_drifted(settings):
-                sync_body.label(
-                    text="This match RMSE hidden — camera pose drifted",
-                    icon="ERROR",
-                )
-            else:
-                sync_body.label(
-                    text=(
-                        f"This match sync RMSE {settings.sync_rmse_px:.2f} px · "
-                        f"s={settings.sync_scale:.3f}"
-                    ),
-                    icon="CHECKMARK",
-                )
+        has_sync_status = bool(workspace.sync_status)
+        has_rmse = bool(
+            settings is not None and settings.sync_last_ok and settings.sync_is_applied
+        )
+        if has_sync_status or has_rmse:
+            _info_header, info_body = _section(
+                sync_body,
+                "PM_sync_info",
+                "Info",
+                "INFO",
+                default_closed=True,
+            )
+            if info_body is not None:
+                if has_sync_status:
+                    status_column = info_body.column(align=True)
+                    # Blender labels do not wrap; keep word boundaries in the compact status.
+                    status_lines = textwrap.wrap(workspace.sync_status, width=48)
+                    for index, line in enumerate(status_lines):
+                        status_column.label(
+                            text=line,
+                            icon="INFO" if index == 0 else "NONE",
+                        )
+                if has_rmse:
+                    if scene.matched_camera_has_drifted(settings):
+                        info_body.label(
+                            text="This match RMSE hidden — camera pose drifted",
+                            icon="ERROR",
+                        )
+                    else:
+                        info_body.label(
+                            text=(
+                                f"This match sync RMSE {settings.sync_rmse_px:.2f} px · "
+                                f"s={settings.sync_scale:.3f}"
+                            ),
+                            icon="CHECKMARK",
+                        )
 
 
 CLASSES = (
