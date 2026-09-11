@@ -356,6 +356,7 @@ def build_sync_report(
             "Their supporting views constrain almost the same plane, including reflected views for mirror pairs. "
             "A low pixel error does not establish precise 3D position or direction. "
             "Try longer strokes or an additional stroke from a more distinct viewing angle. "
+            "That camera must use Solve or Lock Pose to contribute to 3D. "
             "This is a geometric weakness check, not a confidence interval.",
         ))
     for item in skipped:

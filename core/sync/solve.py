@@ -489,13 +489,22 @@ class _SolveState:
 
 
 def _attach_mirror_landmarks(state: _SolveState) -> None:
-    """Seed missing mirror partners and include their picks in the joint graph."""
+    """Seed mirror geometry from location-enabled views; retain all posed picks."""
     if state.mirror_plane is None or not state.mirror_pairs:
         return
     plane_point, plane_normal = state.mirror_plane
+    location_ids = getattr(state, "location_match_ids", None)
+    point_support = {
+        key: observations_for_location(items, location_ids)
+        for key, items in state.observations_by_landmark_all.items()
+    }
+    line_support = {
+        key: observations_for_location(items, location_ids)
+        for key, items in state.line_observations_by_landmark.items()
+    }
     seed_mirror_landmarks(
         state.landmarks,
-        state.observations_by_landmark_all,
+        point_support,
         state.similarities,
         state.match_map,
         state.mirror_pairs,
@@ -505,7 +514,7 @@ def _attach_mirror_landmarks(state: _SolveState) -> None:
     seed_mirror_line_segments(
         state.line_segments,
         state.landmarks,
-        state.line_observations_by_landmark,
+        line_support,
         state.similarities,
         state.match_map,
         state.mirror_pairs,
@@ -520,7 +529,7 @@ def _attach_mirror_landmarks(state: _SolveState) -> None:
         state.mirror_pairs,
         plane_point,
         plane_normal,
-        state.line_observations_by_landmark,
+        line_support,
         state.similarities,
         state.match_map,
         state.known_lines,
@@ -739,17 +748,18 @@ def _rebuild_usable_observations(state: _SolveState) -> None:
 
 def _rebuild_free_line_segments(state: _SolveState) -> None:
     """Re-intersect free 3D lines from cameras allowed to move 3D."""
+    line_support = {
+        key: observations_for_location(items, getattr(state, "location_match_ids", None))
+        for key, items in state.line_observations_by_landmark.items()
+    }
     segments: dict[str, tuple[np.ndarray, np.ndarray]] = {}
     for landmark_id, (point_a, point_b) in state.known_lines.items():
         segments[landmark_id] = (point_a.copy(), point_b.copy())
         state.landmarks[landmark_id] = 0.5 * (point_a + point_b)
-    for landmark_id, items in state.line_observations_by_landmark.items():
+    for landmark_id, items in line_support.items():
         if landmark_id in segments:
             continue
-        posed_items = observations_for_location(
-            [item for item in items if item.match_id in state.similarities],
-            getattr(state, "location_match_ids", None),
-        )
+        posed_items = [item for item in items if item.match_id in state.similarities]
         anchor_ids = _line_anchor_match_ids(posed_items, state.fixed_match_ids)
         reconstructed = _reconstruct_line_from_observations(
             posed_items,
@@ -774,7 +784,7 @@ def _rebuild_free_line_segments(state: _SolveState) -> None:
         segments,
         state.landmarks,
         state.parallel_pairs,
-        state.line_observations_by_landmark,
+        line_support,
         state.similarities,
         state.match_map,
         state.known_lines,
@@ -1619,10 +1629,13 @@ def solve_landmark_sync(
         }
 
     def _refresh_free_lines() -> None:
-        for landmark_id, items in line_observations_by_landmark.items():
+        line_support = {
+            key: observations_for_location(items, state.location_match_ids)
+            for key, items in line_observations_by_landmark.items()
+        }
+        for landmark_id, items in line_support.items():
             if landmark_id in known_lines:
                 continue
-            items = observations_for_location(items, state.location_match_ids)
             if not items:
                 continue
             anchor_ids = _line_anchor_match_ids(items, state.fixed_match_ids)
@@ -1679,7 +1692,7 @@ def solve_landmark_sync(
             line_segments,
             landmarks,
             parallel_pairs,
-            line_observations_by_landmark,
+            line_support,
             similarities,
             match_map,
             known_lines,
@@ -1688,7 +1701,7 @@ def solve_landmark_sync(
             seed_mirror_line_segments(
                 line_segments,
                 landmarks,
-                line_observations_by_landmark,
+                line_support,
                 similarities,
                 match_map,
                 mirror_pairs,
@@ -1703,7 +1716,7 @@ def solve_landmark_sync(
                 mirror_pairs,
                 mirror_plane[0],
                 mirror_plane[1],
-                line_observations_by_landmark,
+                line_support,
                 similarities,
                 match_map,
                 known_lines,
@@ -2343,7 +2356,10 @@ def solve_landmark_sync(
         )
 
     support_angles = line_support_angles(
-        line_segments, line_observations_by_landmark, similarities, match_map,
+        line_segments,
+        {key: observations_for_location(items, state.location_match_ids)
+         for key, items in line_observations_by_landmark.items()},
+        similarities, match_map,
         known_lines=known_lines, mirror_pairs=mirror_pairs,
         mirror_normal=mirror_plane[1] if mirror_plane is not None else None,
     )

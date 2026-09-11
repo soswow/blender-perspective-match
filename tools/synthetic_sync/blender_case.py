@@ -334,12 +334,22 @@ def main():
     parser.add_argument("--roundtrip", action="store_true", help="Also replay input.blend in a fresh Blender process")
     parser.add_argument("--render", action="store_true", help="Render and pack truth reference images")
     parser.add_argument("--drop-constraint", action="store_true", help="After a constraint case solves, remove its constraint and verify the live state")
+    parser.add_argument("--role-case", type=Path, help="After solving, change only camera roles to this case and verify the live scene")
     args = parser.parse_args(sys.argv[sys.argv.index("--")+1:])
     args.case, args.out = args.case.resolve(), args.out.resolve()
     if args.load and args.load.resolve() in {args.out / "input.blend", args.out / "solved.blend"}:
         parser.error("Use a different output directory when reopening a generated file")
     args.out.mkdir(parents=True, exist_ok=True)
     case = read_case(args.case)
+    role_case = read_case(args.role_case.resolve()) if args.role_case else None
+    if role_case is not None:
+        role_fields = {"location_match_ids", "readonly_match_ids"}
+        before = {key: value for key, value in case["request"].items() if key not in role_fields}
+        after = {key: value for key, value in role_case["request"].items() if key not in role_fields}
+        if before != after or case["truth"] != role_case["truth"]:
+            parser.error("--role-case may change camera participation and expectations only")
+        if args.drop_constraint:
+            parser.error("Choose one live transition: --role-case or --drop-constraint")
     if args.drop_constraint and case["family"] not in {"known_lines", "mirror_points", "mirror_lines"}:
         parser.error("--drop-constraint requires a constraint contribution case")
     register_extension()
@@ -352,6 +362,28 @@ def main():
         bpy.ops.wm.save_as_mainfile(filepath=str(args.out / "input.blend"), check_existing=False)
     passed = run_case(case, args.out)
     bpy.ops.wm.save_as_mainfile(filepath=str(args.out / "solved.blend"), check_existing=False)
+    if role_case is not None:
+        from match_perspective import properties
+        from tools.synthetic_sync.scenarios import write_case
+        request = role_case["request"]
+        location_ids = request.get("location_match_ids")
+        location_ids = set(camera["id"] for camera in request["cameras"]) if location_ids is None else set(location_ids)
+        readonly_ids = set(request.get("readonly_match_ids") or [])
+        for root in properties.iter_match_roots():
+            key = root.get("synthetic_match_id")
+            if key in request["fixed_similarities"]:
+                root.pm_session.sync_role = "LOCK_POSE"
+            elif key in readonly_ids or key not in location_ids:
+                root.pm_session.sync_role = "FIT_ONLY"
+            else:
+                root.pm_session.sync_role = "SOLVE"
+        bpy.context.scene["synthetic_sync_request"] = fingerprint(request)
+        folder = args.out / "after-role-change"
+        folder.mkdir(exist_ok=True)
+        write_case(role_case, folder / "case.json")
+        bpy.ops.wm.save_as_mainfile(filepath=str(folder / "input.blend"), check_existing=False)
+        passed = run_case(role_case, folder) and passed
+        bpy.ops.wm.save_as_mainfile(filepath=str(folder / "solved.blend"), check_existing=False)
     if args.drop_constraint:
         from match_perspective import properties
         from tools.synthetic_sync.constraints import remove_constraint
@@ -381,7 +413,8 @@ def main():
         process = subprocess.run([bpy.app.binary_path, "--factory-startup", "--disable-autoexec", "-b",
             "--python-exit-code", "1", "--python", str(Path(__file__).resolve()), "--", "--case", str(args.case),
             "--out", str(args.out / "reopened"), "--load", str(args.load.resolve() if args.load else args.out / "input.blend")]
-            + (["--drop-constraint"] if args.drop_constraint else []))
+            + (["--drop-constraint"] if args.drop_constraint else [])
+            + (["--role-case", str(args.role_case.resolve())] if args.role_case else []))
         passed = passed and process.returncode == 0
     if not passed:
         raise RuntimeError("Synthetic Blender verification failed; see report.html")

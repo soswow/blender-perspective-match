@@ -217,6 +217,35 @@ remain visible in the report, but are accepted only for those explicitly named
 weak lines. An unrequested warning cannot excuse an ordinary accuracy failure.
 Generated noisy cases keep their strict accuracy contracts for exploration.
 
+### Fit Only reconstruction boundaries
+
+```sh
+python3 tools/synthetic_sync/roles.py --out /tmp/pm-roles
+```
+
+Six cases check that Fit Only observations cannot supply missing mirror geometry,
+repair a weak mirrored line, or move a parallel line. Supporting cameras are
+locked in paired stroke controls so their permitted pose changes cannot explain
+3D drift. Required cameras and withheld geometry still have accuracy checks.
+The unit suite also verifies that a Known 3D partner can legitimately supply a
+reflected feature seen only by Fit Only; excluded observations do not erase known
+geometry.
+
+Pass `--role-case /tmp/pm-roles/fit-only-mirror_points.json` to `blender_case.py`
+while starting with the corresponding positive constraint case. The runner
+solves, changes the role in RNA, and solves again. Unsupported helpers must
+disappear. `--roundtrip` repeats this live transition after reopening the original
+input. The two cases must differ only in participation and expectations.
+
+The two mirror exclusions and weak-line control failed before the role filtering
+fix. The parallel-line control already preserved geometry; it guards the same
+boundary without being presented as a reproduced defect. An exploratory
+`--stroke-offset-px 4` draw preserved line geometry but moved the Fit Only camera
+enough to cross the provisional 1 px withheld limit (about 1.92 px). That is a
+measurement-conflict flag, not proof of a solver bug. The default 0.3 px stroke
+bias passes the unchanged camera limits. Role ownership and geometric accuracy
+are different checks; the tool reports both.
+
 ### Evidence-placement follow-up
 
 ```sh
