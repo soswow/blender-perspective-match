@@ -402,6 +402,16 @@ See [the plane measurements and limitations](plane-results.md). These checks do
 not establish general uncertainty, prove a plane's physical correctness from
 images alone, or cover arbitrary mirror/parallel/plane combinations.
 
+`--contribution` instead runs X and Free-plane single-view point cases, each
+with a no-plane and Fit Only control. The permitted point must be recovered
+accurately; the controls must omit it. A separate linear ray/plane calculation
+checks that its depth is determined without using the production projector.
+`--noise-px 0.3` adds noise to every camera's picks while preserving the truth.
+The Blender runner can replay these cases with `--drop-constraint` or the paired
+`--role-case`, checking that the unsupported helper disappears after a live
+change and after reopening. Results retain `plane_seeded_landmark_ids`; the
+product report explains that their depth depends on the plane and one view.
+
 ### Evidence-placement follow-up
 
 ```sh

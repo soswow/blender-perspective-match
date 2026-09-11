@@ -55,6 +55,7 @@ from .mirrors import (
 from .planes import (
     active_plane_group_count,
     apply_plane_seed,
+    seed_plane_points,
     enforce_plane_line_segments,
     normalize_plane_groups,
     plane_slack_excesses,
@@ -428,6 +429,7 @@ class _SolveState:
     downweighted_ids: list[str] = field(default_factory=list)
     did_bundle_adjust: bool = False
     kept_joint_geometry: bool = False
+    plane_seeded_ids: set[str] = field(default_factory=set)
     pre_ba_match_rmse: dict[str, float] = field(default_factory=dict)
     inconsistent_picks: dict[str, list[tuple[str, str, float]]] = field(
         default_factory=dict
@@ -487,6 +489,7 @@ class _SolveState:
 
     def rebuild_landmarks(self) -> None:
         """Triangulate points/lines; pin Known 3D and consistent On Ground."""
+        self.plane_seeded_ids.clear()
         rebuilt = _triangulate_landmarks(
             self.landmark_ids,
             self.observations_by_landmark,
@@ -536,6 +539,17 @@ class _SolveState:
             ground_ids=ground_ids,
         )
         _snap_mirror_landmarks(self)
+        self.seed_plane_landmarks()
+
+    def seed_plane_landmarks(self) -> None:
+        """Use already reconstructed planes for permitted single-view points."""
+        seeded = seed_plane_points(
+            self.landmarks, self.line_segments, self.plane_groups,
+            self.observations_by_landmark_all, self.similarities, self.match_map,
+            plane_slack=self.plane_slack, location_match_ids=self.location_match_ids,
+        )
+        self.landmarks.update(seeded)
+        self.plane_seeded_ids.update(seeded)
 
 
 def _snap_mirror_landmarks(state: _SolveState) -> None:
@@ -1285,6 +1299,7 @@ def _resect_skipped_matches(state: _SolveState) -> None:
     )
     state.recovered = recovered
     _expand_landmarks_after_resect(state)
+    state.seed_plane_landmarks()
     _rebuild_usable_observations(state)
     _attach_mirror_landmarks(state)
     _rebuild_free_line_segments(state)
@@ -2409,6 +2424,16 @@ def solve_landmark_sync(
             message += " (thaw 3D)"
     if state.kept_joint_geometry:
         message += " · kept existing geometry after camera recovery"
+    plane_seeded_ids = sorted(
+        key for key in state.plane_seeded_ids if key in landmarks and len([
+            observation for observation in observations_for_location(
+                state.observations_by_landmark_all.get(key, []), state.location_match_ids
+            ) if observation.match_id in similarities
+        ]) == 1
+    )
+    if plane_seeded_ids:
+        noun = "point" if len(plane_seeded_ids) == 1 else "points"
+        message += f" · {len(plane_seeded_ids)} {noun} from plane + one view"
     if ground_slack > 1.0e-12:
         drifted = []
         for landmark_id, items in observations_by_landmark.items():
@@ -2571,6 +2596,7 @@ def solve_landmark_sync(
         line_segments=line_segments,
         line_support_angles_deg=support_angles,
         weak_line_ids=weak_line_ids,
+        plane_seeded_landmark_ids=plane_seeded_ids,
         downweighted_landmark_ids=downweighted_ids,
         bundle_adjusted=bool(did_bundle_adjust),
         inconsistent_picks=[

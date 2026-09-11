@@ -190,3 +190,5 @@ class SyncSolveResult:
     # Small supporting-plane separation makes free-line 3D sensitive to pick noise.
     line_support_angles_deg: dict[str, float] = field(default_factory=dict)
     weak_line_ids: list[str] = field(default_factory=list)
+    # Depth supplied by a shared plane and one location-enabled camera pick.
+    plane_seeded_landmark_ids: list[str] = field(default_factory=list)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 from .constants import (
+    LINE_PLANE_MIN_SINE,
     PLANE_AXIS_ALIGNED_MIN,
     PLANE_AXIS_INDEX,
     PLANE_FREE_MIN,
@@ -12,11 +13,12 @@ from .constants import (
     PLANE_HARD_SLACK,
     PLANE_RESIDUAL_PX,
 )
+from .projection import camera_ray_private
 from .lines import (
     _finite_segment_from_line_observations,
     _fit_line_fixed_direction,
 )
-from .types import SimilarityTransform, SyncLineObservation, SyncMatchInput
+from .types import SimilarityTransform, SyncLineObservation, SyncMatchInput, SyncObservation
 
 PLANE_AXES = frozenset(PLANE_AXIS_INDEX) | {"FREE"}
 
@@ -305,6 +307,63 @@ def apply_plane_seed(
             delta = np.zeros(3, dtype=np.float64)
             delta[axis_index] = reference - float(point[axis_index])
             _shift_member(landmark_id, kind, delta, landmarks, line_segments)
+
+
+def seed_plane_points(
+    landmarks: dict[str, np.ndarray],
+    line_segments: dict[str, tuple[np.ndarray, np.ndarray]],
+    plane_groups: list[tuple[str, str, int]] | None,
+    observations_by_landmark: dict[str, list[SyncObservation]],
+    similarities: dict[str, SimilarityTransform],
+    matches: dict[str, SyncMatchInput],
+    *,
+    plane_slack: float,
+    location_match_ids: set[str] | None = None,
+) -> dict[str, np.ndarray]:
+    """Seed missing one-view points on supported hard planes; exclude Fit Only."""
+    if max(float(plane_slack), 0.0) > 1.0e-12:
+        return {}
+    line_points = {key: 0.5*(ends[0]+ends[1]) for key, ends in line_segments.items()}
+    seeds = {}
+    for (axis, _bucket), members in grouped_plane_members(plane_groups).items():
+        located = [found[0] for key in members
+                   if (found := _member_location(key, landmarks, line_points)) is not None]
+        # The new point activates the bucket but does not define its seed plane.
+        minimum = PLANE_FREE_MIN-1 if axis == "FREE" else PLANE_AXIS_ALIGNED_MIN-1
+        if len(located) < minimum:
+            continue
+        if axis == "FREE":
+            fitted = fit_free_plane(np.asarray(located))
+            if fitted is None:
+                continue
+            origin, normal = fitted
+        else:
+            origin = np.mean(located, axis=0)
+            normal = np.zeros(3, dtype=np.float64)
+            normal[PLANE_AXIS_INDEX[axis]] = 1.0
+        for key in members:
+            if key in landmarks or key in line_points:
+                continue
+            items = [item for item in observations_by_landmark.get(key, ())
+                     if item.match_id in similarities and item.match_id in matches
+                     and (location_match_ids is None or item.match_id in location_match_ids)]
+            # Leave failed multi-view triangulation to its existing diagnostics.
+            if len(items) != 1:
+                continue
+            item = items[0]
+            private_origin, private_ray = camera_ray_private(item.u, item.v, matches[item.match_id].calibration)
+            pose = similarities[item.match_id]
+            camera_origin = pose.transform_point(private_origin)
+            ray = pose.rotation @ private_ray
+            denominator = float(normal@ray)
+            # Reuse the existing angular-separation budget for plane geometry.
+            if abs(denominator) < LINE_PLANE_MIN_SINE:
+                continue
+            distance = float(normal@(origin-camera_origin))/denominator
+            candidate = camera_origin + distance*ray
+            if distance > 0.0 and np.isfinite(candidate).all():
+                seeds[key] = candidate
+    return seeds
 
 
 def _shift_member(

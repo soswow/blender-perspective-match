@@ -72,3 +72,54 @@ physically wrong plane constraint. Plane distance alone does not establish
 camera accuracy; both remain in the recorded results. The next useful question
 is whether a plane supported by other views can recover a feature picked only
 once, with an explicit no-plane and Fit Only control.
+
+## Single-view contribution follow-up — 12 September 2026
+
+The preservation checkpoint was committed as `19373fe`. The next experiment
+adds a fourth, independently posed camera and one extra surface point seen
+only in that camera. X and tilted Free variants have other reconstructed
+members that establish the plane. A separate linear ray/plane calculation
+recovers the known point without calling the production projector. The
+baseline omitted that point in both variants; this was a capability gap in
+the previous joint-BA-only behavior, not a broken accuracy promise.
+
+Sync now seeds missing points from a supported **hard** plane and exactly one
+posed camera allowed to contribute 3D. An axis bucket needs one other located
+member; a Free bucket needs three non-collinear members. The new point supplies
+no evidence for its own seed plane. Fit Only observations, unsupported planes,
+backward intersections and grazing rays are excluded. Grazing uses the existing
+plane-geometry angular budget (`LINE_PLANE_MIN_SINE = 0.12`, about 6.9 degrees
+from the plane); it is not a calibrated confidence bound. Soft planes and
+single-view lines retain their prior behavior.
+
+This runs during initial reconstruction and after cameras are recovered, with
+the existing constrained joint adjustment still refining the result. Capture
+and replay retain the new `plane_seeded_landmark_ids` result metadata. Diagnose
+labels the affected points **Plane + one view** and explains that fitting the
+one pick cannot independently verify depth.
+
+Both axes, no-plane controls and Fit Only controls pass across two exact seeds:
+**12 cases**, maximum withheld camera RMS below **0.000003 px**. The one-point
+positions agree with construction to numerical precision. Six corresponding
+0.3 px noise cases pass unchanged accuracy contracts, with maximum camera RMS
+**1.469 px** and target point errors of **0.158% / 0.225%** of the object diagonal
+for X / Free. Each six-case batch took about 36–41 seconds locally while other
+checks were running. Those samples establish a useful bounded capability, not
+a general noise guarantee.
+
+Blender X-plane removal and Free-plane Solve→Fit Only transitions both pass
+creation, application and fresh-process reopening, including disappearance of
+the unsupported point helper. The final report metadata also passes that Free
+transition. Maximum withheld RMS is below 0.00004 px in Blender. Reversed-input
+and cold/warm replay pass; HTML content and escaping are checked, but a browser
+visual review was unavailable in this session.
+
+The full suite passes **304 tests, 9 skipped**, after correcting a missing
+argument in the new report test fixture. The report-only rerun also passes.
+
+The route does not initialize an unposed camera, establish absolute scale from
+an unknown plane, resolve failed multi-view triangulation, or validate the
+user's physical plane assumption. Minimal Free support can be sensitive to
+noise even when it is mathematically non-collinear. The next diagnostic question
+is whether current scale/quality wording distinguishes such constraint-derived
+geometry from independent metric evidence.

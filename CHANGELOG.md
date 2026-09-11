@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Solve Sync keeps **Is Mirror Of** pairs even when those landmarks also share an **Is in Plane** bucket
 
 ### Added
+- With zero Plane Slack, a supported Is in Plane bucket can place a point from one Solve or Lock Pose pick; diagnostics identify when the plane supplies its depth.
 - Ctrl+Alt+Shift+Left/Right steps through the last 10 selected matches (back/forward; wraps).
 - Solve Sync and Diagnose flag free and mirrored lines whose 3D position or direction is sensitive to small stroke edits, even when their pixel fit is good.
 - Point and line landmarks can share a plane: **Is in Plane** chooses X, Y, Z, or Free and a #1–#10 bucket; **Plane Slack** is how far they may leave that plane

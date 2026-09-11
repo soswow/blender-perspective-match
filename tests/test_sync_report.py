@@ -33,6 +33,19 @@ def _point(match_id: str, landmark_id: str, name: str = ""):
 class SyncReportTests(unittest.TestCase):
     """The browser report should stay structured, safe, and self-contained."""
 
+    def test_plane_derived_point_explains_its_depth_source(self):
+        result = SimpleNamespace(success=True, similarities={"anchor":object(),"side":object()},
+            landmarks={"point":object()}, mean_reprojection_px=0., per_match_rmse_px={"side":0.},
+            per_landmark_rmse_px={"point":0.}, plane_seeded_landmark_ids=["point"])
+        report = sync_report.build_sync_report(operation="Diagnose", source_name="synthetic.blend",
+            matches=[SimpleNamespace(match_id="anchor"),SimpleNamespace(match_id="side")],
+            observations=[_point("side","point","<surface point>")], line_observations=[], result=result, anchor_id="anchor")
+        html = sync_report.render_sync_report_html(report)
+        self.assertIn("Plane + one view", html)
+        self.assertIn("does not independently verify depth", html)
+        self.assertIn("&lt;surface point&gt;", html)
+        self.assertNotIn("<surface point>", html)
+
     def test_low_error_weak_line_is_marked_for_review_and_escaped(self):
         result = SimpleNamespace(success=True, similarities={"anchor":object(),"side":object()},
             landmarks={"line":object()}, mean_reprojection_px=0.2,

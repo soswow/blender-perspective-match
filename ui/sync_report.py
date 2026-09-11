@@ -92,6 +92,7 @@ class ReportLandmark:
     downweighted: bool = False
     weak_line: bool = False
     line_support_angle_deg: float | None = None
+    plane_seeded: bool = False
 
 
 @dataclass(frozen=True)
@@ -333,6 +334,7 @@ def build_sync_report(
         str(item) for item in getattr(result, "downweighted_landmark_ids", ())
     }
     weak_lines = set(getattr(result, "weak_line_ids", ()))
+    plane_seeded = set(getattr(result, "plane_seeded_landmark_ids", ()))
     support_angles = getattr(result, "line_support_angles_deg", {})
     report_landmarks = [
         ReportLandmark(
@@ -344,6 +346,7 @@ def build_sync_report(
             downweighted=str(landmark_id) in downweighted,
             weak_line=str(landmark_id) in weak_lines,
             line_support_angle_deg=support_angles.get(str(landmark_id)),
+            plane_seeded=str(landmark_id) in plane_seeded,
         )
         for landmark_id, rmse in getattr(result, "per_landmark_rmse_px", {}).items()
     ]
@@ -363,6 +366,14 @@ def build_sync_report(
         outcome, severity = "Sync complete", "success"
 
     issues: list[ReportIssue] = []
+    if plane_seeded:
+        issues.append(ReportIssue(
+            "info", "Some points use a plane to determine depth",
+            ", ".join(names.get(key,key) for key in sorted(plane_seeded)),
+            "These points use one Solve or Lock Pose view and your shared-plane constraint. "
+            "Their pixel error does not independently verify depth. A pick in another permitted view "
+            "can check the position against additional image evidence.",
+        ))
     if weak_lines:
         details = ", ".join(
             f"{names.get(key,key)} ({float(support_angles[key]):.1f}° support)"
@@ -770,6 +781,8 @@ def _render_landmark_rows(report: SyncDiagnosticReport) -> str:
         if item.weak_line:
             angle = f" ({item.line_support_angle_deg:.1f}°)" if item.line_support_angle_deg is not None else ""
             status += f'<span class="pill warning">Weak 3D support{angle}</span>'
+        if item.plane_seeded:
+            status += '<span class="pill">Plane + one view</span>'
         search = " ".join((item.name, item.kind, *item.matches)).casefold()
         rows.append(
             f'<tr data-search="{escape(search, quote=True)}" data-rmse="{item.rmse_px:.8f}">'

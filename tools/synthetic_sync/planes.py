@@ -12,7 +12,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from tools.synthetic_sync.evaluation import evaluate
-from tools.synthetic_sync.geometry import project, visible
+from tools.synthetic_sync.geometry import look_at, project, visible
 from tools.synthetic_sync.roles import parallel_line_with_fit_only_stroke
 from tools.synthetic_sync.run import write_report
 from tools.synthetic_sync.scenarios import generate, write_case
@@ -123,26 +123,72 @@ def remove_planes(case):
     result = deepcopy(case)
     result["name"] += "-without-plane"
     result["request"]["plane_groups"] = []
+    target = case.get("plane_support", {}).get("point")
+    if target is not None:
+        result["expectation"]["required_points"] = [key for key in result["expectation"]["required_points"] if key != target]
+        result["expectation"]["excluded_points"] = [target]
     return result
+
+
+def plane_support_case(axis="X", *, fit_only=False, seed=0, noise_px=0.0):
+    """A supported plane determines depth for one permitted view's extra point."""
+    if axis not in {"X", "FREE"}:
+        raise ValueError("The contribution experiment supports X or FREE")
+    case = plane_case("axis_buckets" if axis == "X" else "free_tilted", seed, noise_px)
+    case["name"] = f"plane-support-{axis.lower()}-{seed}" + ("-fit-only" if fit_only else "")
+    request, truth, expected = (case[key] for key in ("request", "truth", "expectation"))
+    actual = deepcopy(truth["cameras"][1])
+    actual.update(id="detail_view", center=[4.6,-4.,3.6], rotation=look_at(np.array([4.6,-4.,3.6]), [0,0,.7]))
+    truth["cameras"].append(actual)
+    stored = deepcopy(request["cameras"][1])
+    stored["id"] = "detail_view"
+    request["cameras"].append(stored)
+    for point in truth["checks"]:
+        if visible(point["position"], actual, truth["mesh"]):
+            point["views"].append("detail_view")
+    target = "single_pick_detail"
+    position = [1.2,.12,.844 if axis == "FREE" else .83]
+    request["points"].append(dict(id=target, ground=False, known=None))
+    truth["points"][target] = position
+    rng = np.random.default_rng(seed+22000)
+    for point in request["points"]:
+        position = truth["points"][point["id"]]
+        if visible(position, actual, truth["mesh"]):
+            uv = project([position], actual)[0][0]+rng.normal(0,noise_px,2)
+            request["observations"].append(dict(match_id="detail_view", landmark_id=point["id"],
+                u=float(uv[0]), v=float(uv[1]), weight=1.0))
+    request["plane_groups"].append((target,axis,1))
+    request["location_match_ids"] = ["view_0", "view_1", "view_2"] + ([] if fit_only else ["detail_view"])
+    request["readonly_match_ids"] = ["detail_view"] if fit_only else []
+    expected["cameras"].append("detail_view")
+    expected["excluded_points" if fit_only else "required_points"].append(target)
+    case["plane_support"] = dict(point=target, camera="detail_view", axis=axis,
+        interpretation="plane-plus-ray determines depth; the no-plane and Fit Only controls must omit the point")
+    return case
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--noise-px", type=float, default=0.)
+    parser.add_argument("--contribution", action="store_true", help="Explore single-view points determined by independently supported planes")
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=False)
     (args.out/"protocol.json").write_text(json.dumps(environment(), indent=2)+"\n")
     cases = []
-    for family in FAMILIES:
-        case = plane_case(family, args.seed, args.noise_px)
-        control = remove_planes(case)
-        # These are already solvable without the plane: removal is a safety
-        # control, not a claim that planes contributed indispensable evidence.
-        cases.extend((case, control))
-    base, extra = fit_only_plane_stroke()
-    cases.extend((base, extra))
+    base = extra = None
+    if args.contribution:
+        for axis in ("X", "FREE"):
+            case = plane_support_case(axis, seed=args.seed, noise_px=args.noise_px)
+            cases.extend((case, remove_planes(case), plane_support_case(axis, fit_only=True, seed=args.seed, noise_px=args.noise_px)))
+    else:
+        for family in FAMILIES:
+            case = plane_case(family, args.seed, args.noise_px)
+            # Already solvable without the plane: a preservation control.
+            cases.extend((case, remove_planes(case)))
+        base, extra = fit_only_plane_stroke()
+        cases.extend((base, extra))
     reports, results = [], {}
     for case in cases:
         write_case(case, args.out/(case["name"]+".json"))

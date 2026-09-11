@@ -86,7 +86,8 @@ def result_record(result, cameras: list[dict]) -> dict:
         landmarks={key: np.asarray(value).tolist() for key, value in result.landmarks.items()},
         line_segments={key: [np.asarray(p).tolist() for p in value] for key, value in result.line_segments.items()},
         line_support_angles_deg=dict(getattr(result,"line_support_angles_deg",{})),
-        weak_line_ids=list(getattr(result,"weak_line_ids",[])))
+        weak_line_ids=list(getattr(result,"weak_line_ids",[])),
+        plane_seeded_landmark_ids=list(getattr(result,"plane_seeded_landmark_ids",[])))
 
 
 def fingerprint(request: dict) -> str:
