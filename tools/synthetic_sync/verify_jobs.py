@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
+import hashlib
 import inspect
 import json
 from pathlib import Path
@@ -12,11 +14,13 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import bpy
+import numpy as np
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
-from tools.synthetic_sync.blender_case import assert_equivalent, create_scene, register_extension
+from tools.synthetic_sync.blender_case import assert_equivalent, blender_pixels, create_scene, register_extension
 from tools.synthetic_sync.evaluation import evaluate
+from tools.synthetic_sync.geometry import project
 from tools.synthetic_sync.planes import plane_case
 from tools.synthetic_sync.scenarios import write_case
 from tools.synthetic_sync.solver import environment, result_record
@@ -91,7 +95,8 @@ def verify_lens_inputs(out):
     for label, values in zip(("blocking", "background"), captured):
         (out / (label+"-lens-input.json")).write_text(json.dumps(values, indent=2, allow_nan=False)+"\n")
     # Check every prepared numerical field independently of route-to-route parity.
-    expected = {key: value for key, value in vars(prep).items() if key != "root_by_name"}
+    expected = {key: value for key, value in vars(prep).items()
+                if key not in {"root_by_name", "source_scene_uid", "source_request_sha256"}}
     expected["matches"] = expected.pop("lens_inputs")
     expected = json_values(expected)
     for label, values in zip(("blocking", "background"), captured):
@@ -130,6 +135,7 @@ def verify_diagnose_ownership(case, out):
         other_scene = None
         try:
             with patch.object(operators, "threading", SimpleNamespace(Thread=DeferredWorker, Event=threading.Event)), \
+                    patch.object(operators, "_report_exception", wraps=operators._report_exception) as failure, \
                     patch.object(operators, "_write_diagnose_report",
                                  return_value=(SimpleNamespace(severity="success"), None, False)) as publish, \
                     patch.object(operators.sync_report, "compact_status", return_value="Captured report"):
@@ -166,10 +172,13 @@ def verify_diagnose_ownership(case, out):
                 assessment = evaluate(case, result_record(result, case["request"]["cameras"]))
                 if not assessment["passed"]:
                     raise AssertionError(assessment["violations"])
-                with patch.object(scene, "ensure_ground_frame_from_landmarks", side_effect=AssertionError("Apply ran ground preparation")), \
-                        patch.object(scene, "ensure_origins_from_ground_landmarks", side_effect=AssertionError("Apply ran origin preparation")):
+                with patch.object(scene, "ensure_ground_frame_from_landmarks", side_effect=AssertionError("Apply ran ground preparation")) as ground_prepare, \
+                        patch.object(scene, "ensure_origins_from_ground_landmarks", side_effect=AssertionError("Apply ran origin preparation")) as origin_prepare:
                     status = operators.PM_OT_diagnose_sync._finish_job(operator, context, cancelled=False)
-                rejected = status == {"CANCELLED"} and not publish.called and landmark.rmse_px == 73.0
+                if ground_prepare.called or origin_prepare.called:
+                    raise AssertionError("Diagnose application attempted preparation")
+                rejected = (status == {"CANCELLED"} and not publish.called and landmark.rmse_px == 73.0
+                            and failure.called and isinstance(failure.call_args.args[1], scene.StaleSyncResult))
                 accepted = status == {"FINISHED"} and publish.called and landmark.rmse_px != 73.0
                 expected_changed = action not in {"unchanged", "unrelated_object"}
                 if changed != expected_changed or not (rejected if expected_changed else accepted):
@@ -196,19 +205,163 @@ def verify_diagnose_ownership(case, out):
         raise AssertionError("; ".join(violations))
 
 
+def verify_lens_ownership(case, out):
+    """Replay one real lens-search result across controlled edits and actual apply."""
+    from match_perspective import properties, scene
+    from match_perspective.core.sync.request import json_values
+    from match_perspective.ui import operators
+
+    workspace = properties.workspace(bpy.context)
+    workspace.share_lens = True
+    workspace.lens_refine_span_percent = 12.5
+    source = out / "input.blend"
+    bpy.ops.wm.save_as_mainfile(filepath=str(source), check_existing=False)
+    source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
+    prepared = scene.prepare_lens_refine(bpy.context)
+    wanted = json_values(prepared.solver_kwargs())
+    refined = scene.run_lens_refine(prepared)
+    if not refined.improved or not refined.sync_result.success:
+        raise AssertionError("The positive control needs a real, improved lens result")
+    print("Real lens search completed", refined.initial_sync_rmse, refined.final_sync_rmse, flush=True)
+    (out / "lens-input.json").write_text(json.dumps(wanted, indent=2)+"\n")
+    (out / "refined-calibrations.json").write_text(json.dumps(json_values(refined.calibrations), indent=2)+"\n")
+    results, violations = [], []
+    controls = {"unchanged", "unrelated_object", "active_match"}
+    for action in ("unchanged", "unrelated_object", "active_match", "plane", "role", "pick", "focal",
+                   "search", "origin", "vp_stroke", "live_camera", "root_pose", "missing_camera", "other_scene"):
+        bpy.ops.wm.open_mainfile(filepath=str(source), load_ui=False)
+        workspace = properties.workspace(bpy.context)
+        root = next(item for item in properties.iter_match_roots() if item.name == "view_1")
+        landmark = next(item for item in workspace.landmarks if item.plane_axis == "FREE")
+        context = HeadlessContext()
+        operator = SimpleNamespace(_timer=None, report=lambda *_: None)
+        pending = []
+
+        class DeferredWorker(InlineWorker):
+            def start(self):
+                pending.append(self.target)
+
+        def completed_search(prep, **_kwargs):
+            assert_equivalent(wanted, json_values(prep.solver_kwargs()), "replayed lens input")
+            return deepcopy(refined)
+
+        def applied_state():
+            return json_values(dict(
+                cameras={item.name: scene.calibration_from_settings(item.pm_session) for item in properties.iter_match_roots()},
+                camera_objects={item.name: dict(lens=item.pm_session.camera_object.data.lens,
+                                matrix=[list(row) for row in item.pm_session.camera_object.matrix_local])
+                                if item.pm_session.camera_object is not None else None
+                                for item in properties.iter_match_roots()},
+                transforms={item.name: [list(row) for row in item.matrix_world] for item in properties.iter_match_roots()},
+                landmarks={item.item_id: [list(item.position), list(item.position_b), item.has_position,
+                           item.has_line_segment, item.rmse_px] for item in workspace.landmarks},
+            ))
+
+        with patch.object(operators, "threading", SimpleNamespace(Thread=DeferredWorker, Event=threading.Event)), \
+                patch.object(operators, "_report_exception", wraps=operators._report_exception) as failure, \
+                patch.object(scene, "run_lens_refine", side_effect=completed_search):
+            status = operators.PM_OT_refine_lenses.invoke(operator, context, None)
+            if status != {"RUNNING_MODAL"} or len(pending) != 1:
+                raise AssertionError(f"Lens invocation failed: {status}")
+            if action == "plane":
+                landmark.plane_axis = "NONE"
+            elif action == "role":
+                root.pm_session.sync_role = "FIT_ONLY"
+            elif action == "pick":
+                landmark.observations[0].x += 25
+            elif action == "focal":
+                root.pm_session.fx *= 1.02
+            elif action == "search":
+                workspace.lens_refine_span_percent = 9
+            elif action == "origin":
+                root.pm_session.origin_image[0] += 3
+            elif action == "vp_stroke":
+                stroke = root.pm_session.lines.add()
+                stroke.axis = "z"
+                stroke.x1, stroke.y1, stroke.x2, stroke.y2 = 100, 200, 130, 300
+            elif action == "live_camera":
+                root.pm_session.camera_object.data.lens *= 1.02
+            elif action == "root_pose":
+                matrix = root.matrix_world.copy()
+                matrix.translation.x += .1
+                root.matrix_world = matrix
+            elif action == "missing_camera":
+                bpy.data.objects.remove(root.pm_session.camera_object, do_unlink=True)
+            elif action == "other_scene":
+                bpy.context.window.scene = bpy.data.scenes.new("Another generated scene")
+            elif action == "active_match":
+                scene.set_active_match(context, root)
+            elif action == "unrelated_object":
+                unrelated = bpy.data.objects.new("Unrelated modeling edit", None)
+                bpy.context.scene.collection.objects.link(unrelated)
+            before = applied_state()
+            pending[0]()
+            error = operators._lens_refine_result_box.get("error")
+            if error is not None:
+                raise error
+            # Valid apply invokes Solve Sync, which can prepare origins. A stale
+            # result must be rejected before any such preparation or write.
+            expected_rejection = action not in controls
+            if expected_rejection:
+                with patch.object(scene, "ensure_origins_from_ground_landmarks", side_effect=AssertionError("Stale apply prepared origins")) as origin_prepare:
+                    status = operators.PM_OT_refine_lenses._finish_job(operator, context, cancelled=False)
+                if origin_prepare.called:
+                    raise AssertionError("Stale lens application attempted preparation")
+            else:
+                status = operators.PM_OT_refine_lenses._finish_job(operator, context, cancelled=False)
+            after = applied_state()
+            rejected = (status == {"CANCELLED"} and before == after and failure.called
+                        and isinstance(failure.call_args.args[1], scene.StaleSyncResult))
+            passed = rejected if expected_rejection else status == {"FINISHED"}
+            worst = None
+            if not expected_rejection:
+                errors = []
+                for camera in case["truth"]["cameras"]:
+                    points = [p["position"] for p in case["truth"]["checks"] if camera["id"] in p["views"]]
+                    obj = bpy.data.objects[camera["id"]].pm_session.camera_object
+                    delta = blender_pixels(obj, camera, points)-project(points, camera)[0]
+                    errors.append(float(np.sqrt(np.mean(np.sum(delta*delta, axis=1)))))
+                worst = max(errors)
+                passed = passed and worst <= case["expectation"]["holdout_rmse_px"]
+            row = dict(action=action, passed=passed, status=sorted(status), application_changed_state=before != after,
+                       worst_withheld_rms_px=worst, message=properties.workspace(context).sync_status)
+            results.append(row)
+            if not passed:
+                violations.append(action)
+            (out / (action+"-application.json")).write_text(json.dumps(dict(before=before, after=after, result=row), indent=2)+"\n")
+            print(row, flush=True)
+    if hashlib.sha256(source.read_bytes()).hexdigest() != source_hash:
+        raise AssertionError("Generated source was modified during replay")
+    (out / "lens-ownership.json").write_text(json.dumps(dict(results=results, violations=violations), indent=2)+"\n")
+    if violations:
+        raise AssertionError("Lens ownership failed: " + ", ".join(violations))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--ownership", action="store_true", help="Check Diagnose results after controlled evidence edits")
+    parser.add_argument("--lens-ownership", action="store_true", help="Check real lens-result application after controlled edits")
     args = parser.parse_args(sys.argv[sys.argv.index("--")+1:])
     args.out.mkdir(parents=True, exist_ok=False)
     (args.out / "environment.json").write_text(json.dumps(environment(), indent=2)+"\n")
     register_extension()
-    case = plane_case("free_tilted") if args.ownership else state_case("fit_only")
+    if args.ownership and args.lens_ownership:
+        parser.error("Choose one job ownership experiment")
+    case = plane_case("free_tilted") if args.ownership or args.lens_ownership else state_case("fit_only")
+    if args.lens_ownership:
+        for point in case["request"]["points"]:
+            point["known"] = list(case["truth"]["points"][point["id"]])
+        for camera in case["request"]["cameras"]:
+            camera["fx"] /= .875
+            camera["fy"] /= .875
     write_case(case, args.out / "case.json")
     create_scene(case, args.out, False)
     if args.ownership:
         verify_diagnose_ownership(case, args.out)
+        return 0
+    if args.lens_ownership:
+        verify_lens_ownership(case, args.out)
         return 0
     from match_perspective import properties
     for share_lens in (True, False):

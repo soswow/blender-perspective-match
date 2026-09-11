@@ -12,7 +12,7 @@ from bpy_extras import view3d_utils
 from mathutils import Matrix, Quaternion, Vector
 
 from .. import core, properties
-from ..core.sync.request import SyncSolveRequest
+from ..core.sync.request import SyncSolveRequest, json_values, request_fingerprint
 from .landmark_selection import (
     LANDMARK_HELPER_ID_KEY,
     landmark_index_for_exclusive_viewport_selection,
@@ -3705,6 +3705,10 @@ def run_diagnose_sync(
     return result
 
 
+class StaleSyncResult(ValueError):
+    """Completed job inputs or application targets no longer match live state."""
+
+
 def apply_diagnose_sync_result(
     context: bpy.types.Context,
     prep: DiagnoseSyncPrep,
@@ -3718,7 +3722,7 @@ def apply_diagnose_sync_result(
         except (ValueError, ReferenceError, RuntimeError):
             pass
     if current != prep.source_request_sha256:
-        raise ValueError("Sync inputs changed while Diagnose was running. Run Diagnose again.")
+        raise StaleSyncResult("Sync inputs changed while Diagnose was running. Run Diagnose again.")
     space = properties.workspace(context)
     _apply_sync_landmark_diagnostics(context, result)
 
@@ -3864,7 +3868,7 @@ def refine_lenses_and_sync(context: bpy.types.Context):
     """
     prep = prepare_lens_refine(context)
     refine_result = run_lens_refine(prep)
-    return apply_lens_refine_result(context, refine_result, prep.root_by_name)
+    return apply_lens_refine_result(context, refine_result, prep)
 
 
 @dataclass
@@ -3893,11 +3897,13 @@ class LensRefinePrep:
     mirror_slack: float | None = None
     plane_groups: list | None = None
     plane_slack: float | None = None
+    source_scene_uid: int = 0
+    source_request_sha256: str = ""
 
     def solver_kwargs(self) -> dict:
         """Forward every numerical field, keeping Blender apply targets out."""
         arguments = {item.name: getattr(self, item.name) for item in fields(LensRefinePrep)
-                     if item.name != "root_by_name"}
+                     if item.name not in {"root_by_name", "source_scene_uid", "source_request_sha256"}}
         arguments["matches"] = arguments.pop("lens_inputs")
         return arguments
 
@@ -3917,7 +3923,32 @@ def run_lens_refine(
 
 
 def prepare_lens_refine(context: bpy.types.Context) -> LensRefinePrep:
-    """Validate sync state and build pure-data inputs for lens refine."""
+    """Prepare origins, then collect the lens job's inputs and apply targets."""
+    if properties.anchor_root(context) is None:
+        raise ValueError("Choose an anchor match first")
+    ensure_origins_from_ground_landmarks(context)
+    return collect_lens_refine_inputs(context)
+
+
+def _lens_input_fingerprint(prep: LensRefinePrep) -> str:
+    """Identify numerical lens evidence and the camera targets a result will write."""
+    targets = {}
+    for match in prep.lens_inputs:
+        root = prep.root_by_name[match.match_id]
+        camera = root.pm_session.camera_object
+        targets[match.match_id] = dict(
+            root_uid=int(root.session_uid), root_matrix=np.asarray(root.matrix_world),
+            camera_uid=int(camera.session_uid) if camera is not None else None,
+            camera_matrix=np.asarray(camera.matrix_local) if camera is not None else None,
+            camera_data={key: getattr(camera.data, key) for key in
+                         ("type", "lens", "shift_x", "shift_y", "sensor_fit", "sensor_width", "sensor_height")}
+                         if camera is not None else None,
+        )
+    return request_fingerprint(json_values(dict(inputs=prep.solver_kwargs(), targets=targets)))
+
+
+def collect_lens_refine_inputs(context: bpy.types.Context) -> LensRefinePrep:
+    """Read and validate current lens inputs without changing origins or cameras."""
     from ..core import lens_refine
 
     space = properties.workspace(context)
@@ -3931,7 +3962,6 @@ def prepare_lens_refine(context: bpy.types.Context) -> LensRefinePrep:
         if uses_adjusted_camera(root.pm_session)
     }
 
-    ensure_origins_from_ground_landmarks(context)
     matches_pack, observations, known_world, line_observations, known_lines, parallel_pairs = (
         build_sync_problem(context)
     )
@@ -4012,7 +4042,7 @@ def prepare_lens_refine(context: bpy.types.Context) -> LensRefinePrep:
     if not lens_inputs:
         raise ValueError("No matches available for lens refine")
 
-    return LensRefinePrep(
+    prep = LensRefinePrep(
         lens_inputs=lens_inputs,
         observations=observations,
         known_world=known_world,
@@ -4025,9 +4055,12 @@ def prepare_lens_refine(context: bpy.types.Context) -> LensRefinePrep:
         share_lens=share_lens,
         **collect_sync_solve_kwargs(context),
     )
+    prep.source_scene_uid = int(context.scene.session_uid)
+    prep.source_request_sha256 = _lens_input_fingerprint(prep)
+    return prep
 
 
-def apply_lens_refine_result(context: bpy.types.Context, refine_result, root_by_name: dict):
+def apply_lens_refine_result(context: bpy.types.Context, refine_result, prep: LensRefinePrep):
     """Write refined calibrations and re-run Solve Sync (main thread only)."""
     space = properties.workspace(context)
     if refine_result.cancelled:
@@ -4036,6 +4069,19 @@ def apply_lens_refine_result(context: bpy.types.Context, refine_result, root_by_
         properties.tag_viewport_redraw(context)
         return refine_result, None
 
+    current = None
+    if int(context.scene.session_uid) == prep.source_scene_uid:
+        try:
+            current = collect_lens_refine_inputs(context).source_request_sha256
+        except (ValueError, ReferenceError, RuntimeError):
+            pass
+    if current != prep.source_request_sha256:
+        message = "Inputs or cameras changed while Refine Lenses was running. Run Refine Lenses again."
+        space.sync_status = message
+        space.lens_refine_progress = 0.0
+        raise StaleSyncResult(message)
+
+    root_by_name = prep.root_by_name
     # Write private calibrations without flipping the scene camera each time.
     active_root = properties.active_root(context)
     for match_id, calibration in refine_result.calibrations.items():

@@ -310,8 +310,27 @@ The apply check is also forbidden from rerunning automatic origin/ground
 preparation. Only the operator's thread launcher is substituted: the solver's
 own pairwise worker pool remains intact. Report launching and modal window
 plumbing are simulated; this does not validate interactive scheduling, file-load
-cancellation or UI appearance. The guard covers Diagnose; stale lens-result
-application remains a separate follow-up.
+cancellation or UI appearance. Use `--lens-ownership` for lens-result application. That case biases all focal
+lengths, with independently constructed Known 3D points and a shared plane. A
+real Same Lens search recovers the correct scale; the test reuses that exact
+result after confirming that each newly prepared numerical input is identical.
+This isolates application ownership from search randomness and avoids rerunning
+the search for every edit. All controls reload the same generated input file,
+whose checksum must remain unchanged.
+
+Fourteen controls cover plane, role, pick, focal, search-range, origin, VP-stroke,
+live-camera, root-pose, deleted-camera and scene changes. Unchanged, unrelated
+modeling and active-match switches still apply, with withheld object RMS below
+0.00027 px in the recorded local run. Rejected jobs must leave calibrations,
+actual camera data, transforms and landmark diagnostics unchanged; an unrelated
+exception cannot pass as the typed `StaleSyncResult`. Read-only collection is
+checked by forbidding automatic origin preparation on the rejection path.
+
+The lens stamp includes its extra numerical settings and identities/transforms
+of the cameras it will write. These are job-local ownership records, separate
+from portable numerical requests. They do not replace cancellation on file load,
+prove thread safety, or make successful application transactional if a later
+Blender operation fails.
 
 ### Reducing a confirmed regression
 

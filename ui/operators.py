@@ -3783,7 +3783,7 @@ class PM_OT_refine_lenses(bpy.types.Operator):
             _refine, sync_result = scene.apply_lens_refine_result(
                 context,
                 refine_result,
-                prep.root_by_name,
+                prep,
             )
         except Exception as error:
             return _report_exception(self, error)
