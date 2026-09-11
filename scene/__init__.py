@@ -3604,6 +3604,22 @@ class DiagnoseSyncPrep(SyncSolveRequest):
     warnings: list[str]
     skipped_matches: int
     excluded_landmarks: int
+    source_scene_uid: int
+    source_request_sha256: str
+
+
+def collect_sync_request(context: bpy.types.Context) -> SyncSolveRequest:
+    """Read current Sync evidence without automatic origin or ground preparation."""
+    anchor = properties.anchor_root(context)
+    if anchor is None:
+        raise ValueError("Choose an anchor match first")
+    matches, observations, known_world, line_observations, known_lines, parallel_pairs = build_sync_problem(context)
+    return SyncSolveRequest(
+        matches=matches, observations=observations, known_world=known_world,
+        line_observations=line_observations, known_lines=known_lines,
+        parallel_pairs=parallel_pairs, anchor_id=anchor.name,
+        **collect_sync_solve_kwargs(context),
+    )
 
 
 def prepare_diagnose_sync(context: bpy.types.Context) -> DiagnoseSyncPrep:
@@ -3616,9 +3632,8 @@ def prepare_diagnose_sync(context: bpy.types.Context) -> DiagnoseSyncPrep:
     ground_frame_note = ensure_ground_frame_from_landmarks(context)
     auto_origin_notes = ensure_origins_from_ground_landmarks(context)
     warnings = known_anchor_pick_warnings(context)
-    matches, observations, known_world, line_observations, known_lines, parallel_pairs = (
-        build_sync_problem(context)
-    )
+    request = collect_sync_request(context)
+    matches = request.matches
     if not getattr(anchor.pm_session, "sync_enabled", True):
         raise ValueError(
             "Anchor match has sync disabled — enable it or choose another anchor"
@@ -3631,13 +3646,9 @@ def prepare_diagnose_sync(context: bpy.types.Context) -> DiagnoseSyncPrep:
         raise ValueError("Anchor match needs a solved camera")
 
     return DiagnoseSyncPrep(
-        matches=matches,
-        observations=observations,
-        known_world=known_world,
-        line_observations=line_observations,
-        known_lines=known_lines,
-        parallel_pairs=parallel_pairs,
-        anchor_id=anchor.name,
+        **request.solver_kwargs(),
+        source_scene_uid=int(context.scene.session_uid),
+        source_request_sha256=request.to_record()["sha256"],
         ground_frame_note=ground_frame_note,
         auto_origin_notes=auto_origin_notes,
         warnings=warnings,
@@ -3651,7 +3662,6 @@ def prepare_diagnose_sync(context: bpy.types.Context) -> DiagnoseSyncPrep:
             for landmark in space.landmarks
             if not getattr(landmark, "use_in_sync", True)
         ),
-        **collect_sync_solve_kwargs(context),
     )
 
 
@@ -3701,6 +3711,14 @@ def apply_diagnose_sync_result(
     result,
 ):
     """Write Diagnose RMSE/status onto Blender data on the main thread."""
+    current = None
+    if int(context.scene.session_uid) == prep.source_scene_uid:
+        try:
+            current = collect_sync_request(context).to_record()["sha256"]
+        except (ValueError, ReferenceError, RuntimeError):
+            pass
+    if current != prep.source_request_sha256:
+        raise ValueError("Sync inputs changed while Diagnose was running. Run Diagnose again.")
     space = properties.workspace(context)
     _apply_sync_landmark_diagnostics(context, result)
 

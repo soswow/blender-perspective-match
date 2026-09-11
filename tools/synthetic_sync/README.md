@@ -293,7 +293,25 @@ the blocking path retained both. `LensRefinePrep.solver_kwargs()` and
 `scene.run_lens_refine()` now own forwarding for both paths. Comparing only the
 shared preparation had missed this duplicate call site. This is a routing
 regression, not a benchmark of lens accuracy, live UI scheduling or cancellation
-latency. Scene edits during a job remain a separate lifecycle question.
+latency.
+
+Add `--ownership` to run real numerical Diagnose jobs with a deliberately delayed
+worker callback. After preparation, the command makes one controlled edit before
+running and finishing the job. Plane membership, a camera role and a pick are
+changed separately; invalid-anchor and active-scene changes are also checked.
+The previous implementation published the old result and replaced current
+landmark errors after all three evidence edits. The new guard preserves those
+errors and refuses to publish. Unchanged and unrelated-object controls still
+apply successfully. The old result must pass independent camera/geometry checks
+in every case, so rejecting a faulty numerical result cannot satisfy the test.
+
+`ownership.json` and per-action prepared/current requests retain the evidence.
+The apply check is also forbidden from rerunning automatic origin/ground
+preparation. Only the operator's thread launcher is substituted: the solver's
+own pairwise worker pool remains intact. Report launching and modal window
+plumbing are simulated; this does not validate interactive scheduling, file-load
+cancellation or UI appearance. The guard covers Diagnose; stale lens-result
+application remains a separate follow-up.
 
 ### Reducing a confirmed regression
 

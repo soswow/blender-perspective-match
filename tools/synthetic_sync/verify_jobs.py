@@ -7,6 +7,7 @@ import inspect
 import json
 from pathlib import Path
 import sys
+import threading
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -15,8 +16,10 @@ import bpy
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 from tools.synthetic_sync.blender_case import assert_equivalent, create_scene, register_extension
+from tools.synthetic_sync.evaluation import evaluate
+from tools.synthetic_sync.planes import plane_case
 from tools.synthetic_sync.scenarios import write_case
-from tools.synthetic_sync.solver import environment
+from tools.synthetic_sync.solver import environment, result_record
 from tools.synthetic_sync.verify_requests import state_case
 
 
@@ -72,7 +75,7 @@ def verify_lens_inputs(out):
     operator = SimpleNamespace(_timer=None, report=lambda *_: None)
     with patch.object(lens_refine, "refine_lenses_from_landmarks", side_effect=capture), \
             patch.object(scene, "apply_lens_refine_result", return_value=(None, None)), \
-            patch.object(operators.threading, "Thread", InlineWorker):
+            patch.object(operators, "threading", SimpleNamespace(Thread=InlineWorker, Event=threading.Event)):
         scene.refine_lenses_and_sync(context)
         try:
             status = operators.PM_OT_refine_lenses.invoke(operator, context, None)
@@ -100,16 +103,113 @@ def verify_lens_inputs(out):
     print("Lens inputs PASS: blocking and background preserve every prepared field", flush=True)
 
 
+def verify_diagnose_ownership(case, out):
+    """Finish real prepared jobs after controlled edits, without thread races."""
+    from match_perspective import properties, scene
+    from match_perspective.ui import operators
+
+    workspace = properties.workspace(bpy.context)
+    landmark = next(item for item in workspace.landmarks if item.plane_axis == "FREE")
+    root = next(item for item in properties.iter_match_roots() if item.name == "view_1")
+    pick = landmark.observations[0]
+    results, violations = [], []
+    for action in ("unchanged", "unrelated_object", "plane", "role", "pick", "missing_anchor", "other_scene"):
+        pending = []
+
+        class DeferredWorker(InlineWorker):
+            def start(self):
+                pending.append(self.target)
+
+        folder = out / action
+        folder.mkdir()
+        context = HeadlessContext()
+        operator = SimpleNamespace(_timer=None, report=lambda *_: None)
+        before = dict(plane_axis=landmark.plane_axis, role=root.pm_session.sync_role,
+                      x=pick.x, anchor=workspace.anchor_root, scene=context.scene)
+        unrelated = None
+        other_scene = None
+        try:
+            with patch.object(operators, "threading", SimpleNamespace(Thread=DeferredWorker, Event=threading.Event)), \
+                    patch.object(operators, "_write_diagnose_report",
+                                 return_value=(SimpleNamespace(severity="success"), None, False)) as publish, \
+                    patch.object(operators.sync_report, "compact_status", return_value="Captured report"):
+                status = operators.PM_OT_diagnose_sync.invoke(operator, context, None)
+                if status != {"RUNNING_MODAL"} or len(pending) != 1:
+                    raise AssertionError(f"Diagnose invocation failed: {status}")
+                prepared = operator._prep.to_record()
+                if action == "plane":
+                    landmark.plane_axis = "NONE"
+                elif action == "role":
+                    root.pm_session.sync_role = "FIT_ONLY"
+                elif action == "pick":
+                    pick.x += 25
+                elif action == "unrelated_object":
+                    unrelated = bpy.data.objects.new("Unrelated modeling edit", None)
+                    bpy.context.scene.collection.objects.link(unrelated)
+                    unrelated.location.x = 2
+                elif action == "missing_anchor":
+                    workspace.anchor_root = None
+                elif action == "other_scene":
+                    other_scene = bpy.data.scenes.new("Another generated scene")
+                    bpy.context.window.scene = other_scene
+                try:
+                    current = scene.collect_sync_request(context).to_record()
+                except ValueError as error:
+                    current = {"error": str(error)}
+                changed = prepared["sha256"] != current.get("sha256")
+                landmark.rmse_px = 73.0
+                pending[0]()
+                error = operators._diagnose_sync_result_box.get("error")
+                if error is not None:
+                    raise error
+                result = operators._diagnose_sync_result_box["result"]
+                assessment = evaluate(case, result_record(result, case["request"]["cameras"]))
+                if not assessment["passed"]:
+                    raise AssertionError(assessment["violations"])
+                with patch.object(scene, "ensure_ground_frame_from_landmarks", side_effect=AssertionError("Apply ran ground preparation")), \
+                        patch.object(scene, "ensure_origins_from_ground_landmarks", side_effect=AssertionError("Apply ran origin preparation")):
+                    status = operators.PM_OT_diagnose_sync._finish_job(operator, context, cancelled=False)
+                rejected = status == {"CANCELLED"} and not publish.called and landmark.rmse_px == 73.0
+                accepted = status == {"FINISHED"} and publish.called and landmark.rmse_px != 73.0
+                expected_changed = action not in {"unchanged", "unrelated_object"}
+                if changed != expected_changed or not (rejected if expected_changed else accepted):
+                    violations.append(f"{action}: changed={changed}, status={status}, published={publish.called}, rmse={landmark.rmse_px}")
+                results.append(dict(action=action, inputs_changed=changed, rejected=rejected, accepted=accepted,
+                                    status=sorted(status), published=publish.called, rmse=landmark.rmse_px,
+                                    message=properties.workspace(context).sync_status))
+                (folder / "prepared.json").write_text(json.dumps(prepared, indent=2)+"\n")
+                (folder / "current.json").write_text(json.dumps(current, indent=2)+"\n")
+                (folder / "assessment.json").write_text(json.dumps(assessment, indent=2)+"\n")
+        finally:
+            if other_scene is not None:
+                bpy.context.window.scene = before["scene"]
+                bpy.data.scenes.remove(other_scene)
+            workspace.anchor_root = before["anchor"]
+            landmark.plane_axis = before["plane_axis"]
+            root.pm_session.sync_role = before["role"]
+            pick.x = before["x"]
+            if unrelated is not None:
+                bpy.data.objects.remove(unrelated, do_unlink=True)
+        print(action, results[-1], flush=True)
+    (out / "ownership.json").write_text(json.dumps(dict(results=results, violations=violations), indent=2)+"\n")
+    if violations:
+        raise AssertionError("; ".join(violations))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--ownership", action="store_true", help="Check Diagnose results after controlled evidence edits")
     args = parser.parse_args(sys.argv[sys.argv.index("--")+1:])
     args.out.mkdir(parents=True, exist_ok=False)
     (args.out / "environment.json").write_text(json.dumps(environment(), indent=2)+"\n")
     register_extension()
-    case = state_case("fit_only")
+    case = plane_case("free_tilted") if args.ownership else state_case("fit_only")
     write_case(case, args.out / "case.json")
     create_scene(case, args.out, False)
+    if args.ownership:
+        verify_diagnose_ownership(case, args.out)
+        return 0
     from match_perspective import properties
     for share_lens in (True, False):
         properties.workspace(bpy.context).share_lens = share_lens

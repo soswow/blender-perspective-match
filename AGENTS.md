@@ -41,6 +41,7 @@ Keep this map accurate when you add a module, move a stage, or change a named co
 | Landmark-graph sync | `core/sync/` (package; import as `match_perspective.core.sync`) |
 | Focal search | `core/lens_refine.py` |
 | Lens job input and execution | `scene/__init__.py` (`LensRefinePrep.solver_kwargs`, `run_lens_refine`; shared by blocking and background callers) |
+| Sync input collection and Diagnose result ownership | `scene/__init__.py` (`collect_sync_request` reads without preparation; Diagnose checks its captured request hash and scene identity before applying diagnostics) |
 | Known-3D pin refine | `core/pin_refine.py` (Iterate Known 3D loop is applied in `scene/__init__.py`) |
 | Blender cameras, stills, Solve Sync apply | `scene/__init__.py` |
 | Image analysis (AprilTags, VP detect, edge/tag snap) | `detect/` |
@@ -91,7 +92,7 @@ Headless helpers under `tools/` (and `scripts/validate_addon.py`) for investigat
 
 - `tools/synthetic_sync/planes.py` — independent axis/Free-plane and point/line controls, hard-ground intersection, paired plane removal and Fit Only stroke checks; `--contribution` checks single-view depth from a supported plane with removal/role controls; `--mirrored-line` tests an independently supported plane against the frozen weak mirror strokes, retaining identical Known 3D references in its removal control. Blender `--drop-constraint` also supports these plane cases. Line-support diagnostics exclude free lines and plane-seeded points from independent plane evidence, and require actual line membership before counting a plane's normal.
 
-- `tools/synthetic_sync/verify_jobs.py` checks blocking/background lens inputs through generated Blender RNA and the actual operator worker callback, including planes, slack, locks, roles and shared/per-match lens settings. Only window-manager plumbing and numerical search are substituted; it does not test real thread scheduling.
+- `tools/synthetic_sync/verify_jobs.py` checks blocking/background lens inputs through generated Blender RNA and the actual operator worker callback, including planes, slack, locks, roles and shared/per-match lens settings. `--ownership` runs real numerical Diagnose jobs after controlled plane/role/pick edits, missing anchors and scene changes, with unchanged/unrelated-edit controls. Window-manager plumbing is substituted and job callbacks are deferred deterministically; it does not test live UI scheduling. Lens-input mode substitutes numerical search too.
 
 ## Do not
 

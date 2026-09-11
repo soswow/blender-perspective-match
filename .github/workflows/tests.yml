@@ -89,6 +89,9 @@ jobs:
             --python tools/synthetic_sync/verify_jobs.py -- \
             --out "${RUNNER_TEMP}/synthetic-blender/job-inputs"
           blender --factory-startup --disable-autoexec -b --python-exit-code 1 \
+            --python tools/synthetic_sync/verify_jobs.py -- --ownership \
+            --out "${RUNNER_TEMP}/synthetic-blender/job-ownership"
+          blender --factory-startup --disable-autoexec -b --python-exit-code 1 \
             --python tools/synthetic_sync/verify_requests.py -- \
             --out "${RUNNER_TEMP}/synthetic-blender/request-parity"
           python3 tools/sync_snapshot.py replay \
