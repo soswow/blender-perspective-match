@@ -78,3 +78,13 @@ plane separately from ordinary direction/offset limits. Removing only plane
 membership retains all Known 3D picks and must restore the weak-support warning.
 See [the plane investigation](../plane-results.md) for independent reconstruction,
 an unlocked-camera control and remaining limits.
+
+`mirror-lines-with-plane-reduced.json` preserves that same line-accuracy defect
+with all 40 optional free points removed: **88 → 19 point picks**, retaining six
+ground references, three Known 3D plane references and two strokes. The reducer
+requires both named lines to keep their direction, offset and Free-plane-distance
+failures on `bfd122d`; every other old-code check and every fixed-code check must
+pass. Truth, thresholds and camera locks remain unchanged. The final case also
+passes Blender live plane removal and fresh-process reopening. The full fixture
+is retained as the construction record; this smaller one is a debugging entry
+point checked in `tests/test_synthetic_reduce.py`.

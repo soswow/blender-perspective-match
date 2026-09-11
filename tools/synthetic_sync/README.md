@@ -142,7 +142,7 @@ The most useful next step is to inspect failures before expanding the generator.
 Distinguish a harness mistake, an unfair contract, noise sensitivity and a solver
 defect. Preserve the exact case, reduce its cameras/picks/constraints while
 retaining the same independently measured failure, and add a focused regression
-when the expected behavior is established. The bounded forbidden-geometry reducer
+when the expected behavior is established. The bounded named-geometry reducer
 below is implemented; general reduction/search remains future work. Add new scene actions or evidence types to the shared
 request format and Blender collection comparison together; do not add truth as
 a solver shortcut.
@@ -287,23 +287,55 @@ The reducer removes only unrelated free landmarks and their picks. It preserves
 every camera, ground/Known 3D point, mirror pair, plane member, line, role, lock, expectation
 and truth record. Each accepted deletion must retain the **same named forbidden
 geometry** on the old code, pass every other accuracy check there, and pass the
-full independent oracle on the fixed code. It currently requires an anchor-frame
-`solve` contract with `excluded_points` or `excluded_lines`.
+full independent oracle on the fixed code. The default predicate requires an
+anchor-frame `solve` contract with `excluded_points` or `excluded_lines`.
+
+For a confirmed line-accuracy defect, name every affected required line:
+
+```sh
+git worktree add --detach /tmp/pm-before-plane-line-fix bfd122d
+python3 tools/synthetic_sync/reduce.py \
+  --case tools/synthetic_sync/cases/mirror-lines-with-plane.json \
+  --baseline-root /tmp/pm-before-plane-line-fix \
+  --line-accuracy side_edge_left --line-accuracy side_edge_right \
+  --max-attempts 30 --out /tmp/pm-line-reduced
+```
+
+This alternative requires the **same failed checks on each named line**:
+direction, offset and/or distance to the same physical plane. Every other check
+must pass, including cameras, required supporting points, finite nondegenerate
+lines and all unselected geometry. Weak-line accuracy exceptions are forbidden
+for the selected lines. Classified oracle failures preserve this signature
+without parsing printed error text or relaxing thresholds. It still requires an
+anchor-frame `solve` contract; removing a camera or changing gauge is out of scope.
 
 Each solve runs in a fresh Python process with pose caching off. `protocol.json`
 records the budget and source fingerprints before execution; every candidate
-retains its exact input, both results and child logs. Source changes during the
+retains its exact input, both results, oracle assessments and child logs. Source changes during the
 run abort it. `--solve-timeout` defaults to 60 seconds per solve; a process error
 or timeout aborts reduction. A solver exception cannot satisfy the predicate.
-The final reduced input is replayed cold on both revisions before being accepted.
+The final reduced input is replayed cold on both revisions before being accepted. Historical
+revisions without plane parameters may omit only inactive plane defaults; the
+result records these omissions. Active plane membership or nonzero slack aborts
+such a replay, and unknown arguments are never silently discarded. This adapter
+is enabled only by the historical worker, not ordinary case solves.
 
 The two initial mirror ownership cases shrank from **90 to 21** and **84 to 15**
 point picks in six accepted deletions each (about 22 seconds per reduction on the
 recorded local runtime). Every optional free point was removed. This is minimal
 only within the permitted deletions: no camera, ground reference, mirror feature
 or line was eligible. Passing known-truth checks plus retaining those references
-is a safeguard, not a general proof of uniqueness. The tool does not minimize
-accuracy failures, ambiguous inputs, operation sequences or timing problems.
+is a safeguard, not a general proof of uniqueness. The line-plane case shrank from **88 to 19** point picks, retaining six ground
+references, three Known 3D plane references and both strokes. All six deletions
+and the final cold replay preserve both lines' angle, offset and plane failures
+on `bfd122d`, while the fixed code passes all checks. Runtime was about **4.5 s**
+locally; both poses are locked to isolate the geometry. The reduced case also
+passes Blender creation/application, live plane removal and reopening.
+
+The tool does not minimize arbitrary accuracy failures, ambiguous inputs,
+operation sequences or timing problems. A small case with the same failing
+metrics is reproducible evidence, not proof that every candidate followed an
+identical internal solver path.
 
 The exact [reduced cases](cases/README.md) have unit regressions and were also
 checked through Blender creation/application and fresh-process reopening. Old

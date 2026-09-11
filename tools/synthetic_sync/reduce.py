@@ -1,8 +1,9 @@
-"""Shrink a forbidden-geometry regression against separate old/fixed checkouts."""
+"""Shrink named geometry regressions against separate old/fixed checkouts."""
 
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 from copy import deepcopy
 import hashlib
 import json
@@ -53,6 +54,26 @@ def forbidden_geometry(case, result):
     return signature if evaluate(control, result)["passed"] else None
 
 
+def line_accuracy(case, result, line_ids):
+    """Accept only named finite line errors, with every other oracle check intact."""
+    expectation, targets = case["expectation"], set(line_ids)
+    if (not result["success"] or result.get("exception")
+            or expectation["gauge"] != "anchor" or expectation["outcome"] != "solve"
+            or not targets or not targets <= set(expectation.get("required_lines", []))
+            or targets & set(expectation.get("weak_lines", []))):
+        return None
+    assessment = evaluate(case, result)
+    selected = [item for item in assessment["line_accuracy_failures"] if item["landmark_id"] in targets]
+    if {item["landmark_id"] for item in selected} != targets:
+        return None
+    # Every violation must have a classified numerical check on a requested line.
+    # Missing geometry, nonfinite output, camera drift and other errors stay fatal.
+    if Counter(assessment["violations"]) != Counter(item["message"] for item in selected):
+        return None
+    return {key: sorted({check for item in selected if item["landmark_id"] == key for check in item["checks"]})
+            for key in sorted(targets)}
+
+
 def reduce_case(case, accepts, *, max_attempts=40):
     """Try deterministic chunk deletions; stop at the budget or single-point limit."""
     if max_attempts < 1:
@@ -96,7 +117,7 @@ def worker(root, case_path, output):
     package = types.ModuleType("match_perspective")
     package.__path__, package.__file__ = [str(root)], str(root / "__init__.py")
     sys.modules["match_perspective"] = package
-    result = solve(read_case(case_path)["request"], use_cache=False)
+    result = solve(read_case(case_path)["request"], use_cache=False, allow_legacy_plane_defaults=True)
     result["harness_environment"] = result["environment"]
     result["environment"] = environment(root)
     result["numerical_source_sha256"] = source_digest(root, "core")
@@ -112,6 +133,8 @@ def main():
     parser.add_argument("--fixed-root", type=Path, default=ROOT)
     parser.add_argument("--max-attempts", type=int, default=40)
     parser.add_argument("--solve-timeout", type=float, default=60, help="Seconds per child; timeout aborts reduction")
+    parser.add_argument("--line-accuracy", action="append", default=[], metavar="LANDMARK_ID",
+                        help="Preserve direction/offset/plane errors on this required line; repeat for several lines")
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--worker-root", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
@@ -123,8 +146,18 @@ def main():
     case = read_case(args.case)
     if case["expectation"]["gauge"] != "anchor" or case["expectation"]["outcome"] != "solve":
         parser.error("This reducer requires an anchor-frame solve contract")
-    if not any(case["expectation"].get("excluded_"+kind) for kind in ("points", "lines")):
+    if args.line_accuracy:
+        expected = case["expectation"]
+        targets = set(args.line_accuracy)
+        if not targets <= set(expected.get("required_lines", [])) or targets & set(expected.get("weak_lines", [])):
+            parser.error("--line-accuracy requires explicitly required lines without weak-geometry exceptions")
+        predicate = lambda candidate, result: line_accuracy(candidate, result, args.line_accuracy)
+        description = "same named line accuracy checks fail; all other checks pass; fixed checkout passes"
+    elif not any(case["expectation"].get("excluded_"+kind) for kind in ("points", "lines")):
         parser.error("This reducer requires explicitly named forbidden geometry")
+    else:
+        predicate = forbidden_geometry
+        description = "same forbidden geometry; all other accuracy checks pass; fixed checkout passes"
     roots = dict(baseline=args.baseline_root.resolve(), fixed=args.fixed_root.resolve())
     for root in roots.values():
         if not (root / "core/sync/solve.py").is_file():
@@ -133,8 +166,9 @@ def main():
     harness = source_digest(ROOT, "tools/synthetic_sync")
     args.out.mkdir(parents=True, exist_ok=False)
     started = time.perf_counter()
-    protocol = dict(predicate="same forbidden geometry; all other accuracy checks pass; fixed checkout passes",
-        protected="all cameras, ground/known points, mirrors, lines, roles, truth and expectations",
+    protocol = dict(predicate=description, line_accuracy_targets=sorted(set(args.line_accuracy)),
+        protected="all cameras, ground/known points, mirrors, plane members, lines, roles, truth and expectations",
+        historical_adapter="Only unsupported inactive plane defaults may be omitted; each result records omissions",
         max_attempts=args.max_attempts, solve_timeout_s=args.solve_timeout,
         roots={key: str(root) for key, root in roots.items()}, numerical_sources=sources,
         harness_source_sha256=harness, environments={key: environment(root) for key, root in roots.items()})
@@ -163,17 +197,19 @@ def main():
             results[key] = json.loads(output.read_text())
             if results[key]["numerical_source_sha256"] != sources[key]:
                 raise RuntimeError(f"{key} numerical source changed during solve")
+            (folder / (key+"-assessment.json")).write_text(json.dumps(
+                evaluate(candidate, results[key]), indent=2, allow_nan=False)+"\n")
         return results
 
     initial = run_pair(case, "initial")
-    signature = forbidden_geometry(case, initial["baseline"])
+    signature = predicate(case, initial["baseline"])
     if signature is None or not evaluate(case, initial["fixed"])["passed"]:
         raise RuntimeError("Initial case must retain only the named regression on baseline and pass on fixed")
     print(f"Reducing {len(removable_points(case))} optional landmarks; protected failure {signature}", flush=True)
 
     def accepts(candidate, attempt):
         results = run_pair(candidate, f"attempt-{attempt:03d}")
-        accepted = (forbidden_geometry(candidate, results["baseline"]) == signature
+        accepted = (predicate(candidate, results["baseline"]) == signature
                     and evaluate(candidate, results["fixed"])["passed"])
         print(f"Attempt {attempt}: {'keep' if accepted else 'reject'} reduction, "
               f"{len(candidate['request']['observations'])} point picks", flush=True)
@@ -181,7 +217,7 @@ def main():
 
     reduced, summary = reduce_case(case, accepts, max_attempts=args.max_attempts)
     final = run_pair(reduced, "final")
-    if forbidden_geometry(reduced, final["baseline"]) != signature or not evaluate(reduced, final["fixed"])["passed"]:
+    if predicate(reduced, final["baseline"]) != signature or not evaluate(reduced, final["fixed"])["passed"]:
         raise RuntimeError("Final cold replay did not preserve the regression and passing control")
     write_case(reduced, args.out / "reduced.json")
     summary.update(signature=signature, elapsed_s=time.perf_counter()-started,

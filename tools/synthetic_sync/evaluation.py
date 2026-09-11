@@ -41,7 +41,7 @@ def evaluate(case: dict, record: dict) -> dict:
     expectation = case["expectation"]
     violations = []
     output = dict(passed=False, violations=violations, cameras={}, gauge=expectation["gauge"],
-                  expected_outcome=expectation["outcome"], warnings=[])
+                  expected_outcome=expectation["outcome"], warnings=[], line_accuracy_failures=[])
     if record.get("exception"):
         violations.append("Solver raised an exception; this is not a useful refusal")
         return output
@@ -120,7 +120,11 @@ def evaluate(case: dict, record: dict) -> dict:
                 distance = float(np.max(np.abs((points-plane["origin"])@normal)))
                 distances[key] = distance
                 if not np.isfinite(distance) or distance > expectation["plane_max_distance"]:
-                    violations.append(f"{key}: distance to {label} plane {distance:.4g} > {expectation['plane_max_distance']:.4g}")
+                    message = f"{key}: distance to {label} plane {distance:.4g} > {expectation['plane_max_distance']:.4g}"
+                    violations.append(message)
+                    if key in record["line_segments"] and np.isfinite(distance):
+                        output["line_accuracy_failures"].append(dict(
+                            landmark_id=key, checks=["plane:"+label], message=message))
     for key in expectation.get("required_lines", []):
         if key not in record["line_segments"]:
             violations.append(f"{key}: required reconstructed line missing")
@@ -141,7 +145,11 @@ def evaluate(case: dict, record: dict) -> dict:
         if key in expected_weak and key in reported_weak:
             output["warnings"].append(f"{key}: expected weak geometry; actual direction error {angle:.4g}deg, offset {error:.4g} of object diagonal")
         elif angle > expectation["line_angle_deg"] or error > expectation["line_fraction"]:
-            violations.append(f"{key}: reconstructed line angle {angle:.4g}deg, offset {error:.4g} of object diagonal")
+            message = f"{key}: reconstructed line angle {angle:.4g}deg, offset {error:.4g} of object diagonal"
+            violations.append(message)
+            checks = (["angle"] if angle > expectation["line_angle_deg"] else [])
+            checks += (["offset"] if error > expectation["line_fraction"] else [])
+            output["line_accuracy_failures"].append(dict(landmark_id=key, checks=checks, message=message))
     truth_cameras = {c["id"]: c for c in case["truth"]["cameras"]}
     for key in expectation["cameras"]:
         if key not in record["cameras"]:

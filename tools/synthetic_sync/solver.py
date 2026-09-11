@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import hashlib
+import inspect
 import json
 from pathlib import Path
 import platform
@@ -102,9 +103,20 @@ def environment(root=None) -> dict:
                 revision=revision.stdout.strip(), working_tree_dirty=bool(dirty.stdout.strip()))
 
 
-def solve(request: dict, *, use_cache=False) -> dict:
+def legacy_plane_arguments(arguments, supported):
+    """Omit only inactive plane defaults when replaying pre-plane solver revisions."""
+    missing = {"plane_groups", "plane_slack"} - set(supported)
+    if missing and (arguments.get("plane_groups") or arguments.get("plane_slack") not in (None, 0.0)):
+        raise ValueError("Historical solver cannot preserve active plane settings")
+    return {key: value for key, value in arguments.items() if key not in missing}, sorted(missing)
+
+
+def solve(request: dict, *, use_cache=False, allow_legacy_plane_defaults=False) -> dict:
     _core, sync = load_core()
     arguments = solver_arguments(request)
+    omitted = []
+    if allow_legacy_plane_defaults:
+        arguments, omitted = legacy_plane_arguments(arguments, inspect.signature(sync.solve_landmark_sync).parameters)
     started = time.perf_counter()
     try:
         result = sync.solve_landmark_sync(**arguments, use_pose_cache=use_cache)
@@ -120,4 +132,6 @@ def solve(request: dict, *, use_cache=False) -> dict:
     record = result_record(result, used_cameras)
     record.update(elapsed_s=time.perf_counter() - started, request_sha256=fingerprint(request),
                   environment=environment(), use_cache=use_cache)
+    if omitted:
+        record["omitted_legacy_defaults"] = omitted
     return record
