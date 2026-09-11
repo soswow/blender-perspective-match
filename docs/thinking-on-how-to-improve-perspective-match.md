@@ -47,7 +47,11 @@ The shared-request checkpoint, including stash-conflict resolution, was committe
 
 Four regression tests and six generated role cases now pass. The mirror tests failed before the fix; the parallel-line control already preserved geometry and is not claimed as a reproduced defect. Both live Solve→Fit Only transitions passed through Blender and fresh-process reopening, including removal of stale point/line helpers. The full suite passed **259 tests, 9 skipped**. The larger 4 px stroke-bias experiment remains a recorded camera-accuracy flag, not a reason to relax limits or change the solver. See the [role experiment commands and limitations](../tools/synthetic_sync/README.md).
 
-**Next boundary:** evaluate the prepared/applicable cameras against withheld geometry when an origin has to be initialized, and explore imperfect constraints with explicit accuracy or uncertainty contracts. Request parity prevents diagnosing a different problem; it does not by itself prove that the shared problem represents the user's intended geometry.
+The role-boundary fix was committed as `b902124`.
+
+**Origin-preparation follow-up:** [six Blender controls](../tools/synthetic_sync/preparation.py) now cover preset, missing and locked non-anchor origins in ordinary and overhead layouts. They preserve the same independent truth while checking the allowed private-center change, unchanged evidence/intrinsics/orientation, the applied camera, and replay from raw saved state. All six and their fresh-process replays passed, with maximum withheld RMS below 0.00007 px. This pilot supports the existing behavior; it does not justify an origin rewrite. Anchor-origin/world-frame changes, calibrated ground initialization and undo remain outside this check.
+
+**Next boundary:** turn a discovered failure into a smaller reproduction automatically. Start with the confirmed Fit Only ownership failures, retaining cameras, ground/known references and the implicated constraints while removing unrelated free landmarks. Require the old revision to retain the same violation and the fixed revision to pass the independent camera/geometry checks. This is a bounded reduction experiment, not a general ambiguity classifier or exhaustive scene search.
 
 **1. What I inspected and what the evidence supports**
 

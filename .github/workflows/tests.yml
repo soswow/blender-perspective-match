@@ -101,6 +101,14 @@ jobs:
               --role-case "${RUNNER_TEMP}/synthetic-blender/roles/fit-only-${family}.json" \
               --out "${RUNNER_TEMP}/synthetic-blender/role-${family}" --roundtrip
           done
+      - name: Origin preparation preserves withheld object alignment
+        run: |
+          for state in preset missing_origin locked_origin; do
+            blender --factory-startup --disable-autoexec -b --python-exit-code 1 \
+              --python tools/synthetic_sync/preparation.py -- \
+              --family overhead --state "$state" \
+              --out "${RUNNER_TEMP}/synthetic-blender/origin-${state}" --roundtrip
+          done
       - uses: actions/upload-artifact@v4
         if: always()
         with:

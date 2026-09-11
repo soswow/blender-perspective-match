@@ -246,6 +246,32 @@ measurement-conflict flag, not proof of a solver bug. The default 0.3 px stroke
 bias passes the unchanged camera limits. Role ownership and geometric accuracy
 are different checks; the tool reports both.
 
+### Origin preparation and camera application
+
+```sh
+"/Applications/Blender 5.1.app/Contents/MacOS/blender" \
+  --factory-startup --disable-autoexec -b --python-exit-code 1 \
+  --python tools/synthetic_sync/preparation.py -- \
+  --family overhead --state missing_origin --out /tmp/pm-origin --roundtrip
+```
+
+Run `ground` or `overhead` with `preset`, `missing_origin` or `locked_origin`.
+The changed origin belongs to a non-anchor camera; the independent anchor-frame
+truth remains unchanged. Preparation may change that private camera center but
+must preserve its calibration/orientation and all evidence. A pose-locked camera
+must keep its missing origin and its pose. The prepared request is then solved
+and checked through evaluated Blender cameras against withheld object geometry.
+
+Artifacts retain the original case/raw `input.blend`, `prepared-case.json`,
+`prepared.blend`, collected `request.json`, `solved.blend`, metrics and reports.
+Fresh-process replay starts from the **raw input**, so it repeats preparation.
+An exact prepared case can also be replayed numerically through `run.py`.
+
+All six exact controls passed creation/application and reopening locally; maximum
+withheld RMS was below 0.00007 px. No product change was justified by this pilot.
+These checks do not cover missing anchor origins (which can redefine the world
+frame), calibrated-ground initialization, image-coordinate changes, or undo/redo.
+
 ### Evidence-placement follow-up
 
 ```sh

@@ -81,6 +81,7 @@ Headless helpers under `tools/` (and `scripts/validate_addon.py`) for investigat
 - `tools/sync_snapshot.py` — capture the product's prepared Sync input in factory-startup Blender; replay JSON with ordinary Python/NumPy. Includes locks, slack, calibration, confidence and constraints. Probes use the same request; `tools/synthetic_sync/verify_requests.py` verifies their parity on generated state, including automatic origins. See `tools/debug-sync/README.md`.
 - `tools/synthetic_sync/` — seeded Sync cases with an independent projection/visibility oracle, withheld object checks, input-order/cache replay, and generated Blender scene/save-reopen validation; `evidence.py` compares added landmarks with paired noise and equal picking cost; `constraints.py` checks information supplied by Known 3D lines and one-sided mirror features, including live removal via Blender's `--drop-constraint` option. See `tools/synthetic_sync/README.md`; preserve exact JSON evidence when investigating a failure.
 - `tools/synthetic_sync/roles.py` — Fit Only constraint cases and paired stroke controls; the Blender runner's `--role-case` option checks a live role change and stale-helper cleanup against a second exact case.
+- `tools/synthetic_sync/preparation.py` — generated preset/missing/locked-origin controls with unchanged independent truth, prepared-request capture, evaluated Blender camera checks and raw-input save/reopen replay.
 
 ## Do not
 
