@@ -90,8 +90,8 @@ def fingerprint(request: dict) -> str:
     return hashlib.sha256(json.dumps(request, sort_keys=True, allow_nan=False).encode()).hexdigest()
 
 
-def environment() -> dict:
-    root = Path(__file__).resolve().parents[2]
+def environment(root=None) -> dict:
+    root = Path(root) if root is not None else Path(__file__).resolve().parents[2]
     revision = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True)
     dirty = subprocess.run(["git", "status", "--porcelain"], cwd=root, capture_output=True, text=True)
     return dict(python=platform.python_version(), numpy=np.__version__, platform=platform.platform(),

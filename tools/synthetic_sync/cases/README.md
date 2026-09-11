@@ -28,3 +28,13 @@ accurate cameras and finite reconstructed geometry. The measured line errors
 remain in the report; the warning does not claim precise reconstruction. See
 [the investigation](../constraint-results.md). Adding a stroke from a distinct
 view restores the ordinary accuracy contract in the corresponding test.
+
+`fit-only-mirror-points-reduced.json` and `fit-only-mirror-lines-reduced.json`
+preserve the confirmed camera-role regressions after removing unrelated free
+landmarks. The former has 21 point picks, the latter 15 plus two strokes. All
+cameras, ground references, mirror features, roles and independent truth remain.
+Both reproduce forbidden geometry on `569da33`, while passing the full accuracy
+and ownership contracts after `b902124`. They also pass generated Blender
+creation/application and fresh-process save/reopen checks. These are passing
+regressions in `tests/test_synthetic_reduce.py`, unlike the exploratory overhead
+flags above. See [the reducer protocol](../README.md#reducing-a-confirmed-regression).

@@ -51,7 +51,11 @@ The role-boundary fix was committed as `b902124`.
 
 **Origin-preparation follow-up:** [six Blender controls](../tools/synthetic_sync/preparation.py) now cover preset, missing and locked non-anchor origins in ordinary and overhead layouts. They preserve the same independent truth while checking the allowed private-center change, unchanged evidence/intrinsics/orientation, the applied camera, and replay from raw saved state. All six and their fresh-process replays passed, with maximum withheld RMS below 0.00007 px. This pilot supports the existing behavior; it does not justify an origin rewrite. Anchor-origin/world-frame changes, calibrated ground initialization and undo remain outside this check.
 
-**Next boundary:** turn a discovered failure into a smaller reproduction automatically. Start with the confirmed Fit Only ownership failures, retaining cameras, ground/known references and the implicated constraints while removing unrelated free landmarks. Require the old revision to retain the same violation and the fixed revision to pass the independent camera/geometry checks. This is a bounded reduction experiment, not a general ambiguity classifier or exhaustive scene search.
+The origin checkpoint was committed as `78f2322`.
+
+**Reduction follow-up:** [the bounded reducer](../tools/synthetic_sync/reduce.py) now removes unrelated free landmarks while preserving all cameras, ground/known references, lines, mirror features, roles and independent truth. Every accepted deletion must retain the same forbidden output on the old code, pass every other accuracy check there, and pass the full oracle on the fixed code. Each candidate runs in separate cold interpreters with source fingerprints, exact inputs, results and logs; the final candidate is replayed again. The two confirmed mirror ownership failures shrank from **90 to 21** and **84 to 15** point picks in six deletions each, about 22 seconds per reduction locally. Both reduced inputs also passed Blender creation/application and fresh-process reopening. Minimality applies only to permitted free-point deletions; this is not a general ambiguity proof or scene reducer.
+
+**Next boundary and bigger plan:** move from the mostly three-camera arrangements to controlled multi-camera overlap graphs. Use physically visible but deliberately sparse picks to distinguish an actual bridge through reconstructed 3D from a graph that is merely connected on paper. Compare exact cases before noisy exploration, keep the independent withheld-object oracle, and record camera coverage as well as fit. The aim remains useful product changes justified by failures, rather than indefinite harness expansion. Shared replay, origin controls and reduction now support that next investigation. Image transforms, undo, biased soft constraints and calibrated uncertainty remain separate gaps; no general solver rewrite is authorized by the evidence so far.
 
 **1. What I inspected and what the evidence supports**
 
@@ -107,7 +111,7 @@ Effort estimates below are rough active development/review time, not delivery co
 
 **Rank 1: make the same case executable through the numerical and Blender paths.**
 
-**Status:** the synthetic subset is implemented; see the checkpoint above. Complete arbitrary-scene capture, image/state transitions, nonzero-slack combinations, probe migration and reduction remain proposals.
+**Status:** the independent synthetic oracle, complete arbitrary-scene capture/replay, probe migration, camera-role transitions, non-anchor origin preparation and bounded forbidden-geometry reduction are implemented; see the checkpoints above. Nonzero-slack collection/replay is covered, but independent accuracy with biased references is not. Image transforms, broader operation sequences and general reduction/search remain proposals.
 
 Extend the existing `build_sync_problem`/`DiagnoseSyncPrep` boundary into a complete serializable request: calibration, source/display coordinate conventions, observations, stable IDs, Known 3D, ground/parallel/mirror constraints, all locks and slack settings, and initial/fixed transforms. Include code revision, schema version, Blender/Python/NumPy/OpenCV versions, and cache/thread settings in the run record. Store the actual numeric inputs as well as the seed; a seed alone becomes insufficient when the generator changes.
 
@@ -177,7 +181,7 @@ Evaluate geometry, accepted evidence, stability and runtime together. An alterna
 
 **3. Original pilot proposal and the scope actually started**
 
-The original proposal was a **3–5 day pilot** around calibration-to-Blender agreement and complete solve replay. Following the user's clarification, implementation began with the narrower Sync-only pilot recorded above. The image-transformation matrix, operation sequences and reducer below are retained as possible future scope, not a checklist of completed work. Current acceptance limits are in `tools/synthetic_sync/scenarios.py` and explained in its README; the original suggested limits below were not adopted unchanged.
+The original proposal was a **3–5 day pilot** around calibration-to-Blender agreement and complete solve replay. Following the user's clarification, implementation began with the narrower Sync-only pilot recorded above. The matrix and operation/reduction scope below are the original proposal; the checkpoints above identify the portions implemented. Current acceptance limits are in `tools/synthetic_sync/scenarios.py` and explained in its README; the original suggested limits below were not adopted unchanged.
 
 **Scope.** Make a shared complete request from the existing preparation/collection boundary, adapt one existing probe to consume it, and establish production/probe parity for locks and slack. Give the unit runner a reliable focused-test entry. Add an independent projection/image-transformation reference and a small operation-case runner built from the existing Blender smoke machinery.
 

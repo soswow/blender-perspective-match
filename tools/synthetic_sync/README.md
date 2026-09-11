@@ -142,8 +142,8 @@ The most useful next step is to inspect failures before expanding the generator.
 Distinguish a harness mistake, an unfair contract, noise sensitivity and a solver
 defect. Preserve the exact case, reduce its cameras/picks/constraints while
 retaining the same independently measured failure, and add a focused regression
-when the expected behavior is established. Automatic reduction/search is not
-implemented in this pilot. Add new scene actions or evidence types to the shared
+when the expected behavior is established. The bounded forbidden-geometry reducer
+below is implemented; general reduction/search remains future work. Add new scene actions or evidence types to the shared
 request format and Blender collection comparison together; do not add truth as
 a solver shortcut.
 
@@ -271,6 +271,45 @@ All six exact controls passed creation/application and reopening locally; maximu
 withheld RMS was below 0.00007 px. No product change was justified by this pilot.
 These checks do not cover missing anchor origins (which can redefine the world
 frame), calibrated-ground initialization, image-coordinate changes, or undo/redo.
+
+### Reducing a confirmed regression
+
+```sh
+git worktree add --detach /tmp/pm-before-role-fix 569da33
+python3 tools/synthetic_sync/roles.py --out /tmp/pm-role-inputs
+python3 tools/synthetic_sync/reduce.py \
+  --case /tmp/pm-role-inputs/fit-only-mirror_points.json \
+  --baseline-root /tmp/pm-before-role-fix --max-attempts 30 --out /tmp/pm-reduced
+```
+
+`--fixed-root` defaults to the current checkout. Neither checkout is edited.
+The reducer removes only unrelated free landmarks and their picks. It preserves
+every camera, ground/Known 3D point, mirror pair, line, role, lock, expectation
+and truth record. Each accepted deletion must retain the **same named forbidden
+geometry** on the old code, pass every other accuracy check there, and pass the
+full independent oracle on the fixed code. It currently requires an anchor-frame
+`solve` contract with `excluded_points` or `excluded_lines`.
+
+Each solve runs in a fresh Python process with pose caching off. `protocol.json`
+records the budget and source fingerprints before execution; every candidate
+retains its exact input, both results and child logs. Source changes during the
+run abort it. `--solve-timeout` defaults to 60 seconds per solve; a process error
+or timeout aborts reduction. A solver exception cannot satisfy the predicate.
+The final reduced input is replayed cold on both revisions before being accepted.
+
+The two initial mirror ownership cases shrank from **90 to 21** and **84 to 15**
+point picks in six accepted deletions each (about 22 seconds per reduction on the
+recorded local runtime). Every optional free point was removed. This is minimal
+only within the permitted deletions: no camera, ground reference, mirror feature
+or line was eligible. Passing known-truth checks plus retaining those references
+is a safeguard, not a general proof of uniqueness. The tool does not minimize
+accuracy failures, ambiguous inputs, operation sequences or timing problems.
+
+The exact [reduced cases](cases/README.md) have unit regressions and were also
+checked through Blender creation/application and fresh-process reopening. Old
+checkout replay is an on-demand investigation, not a dependency of normal CI.
+Future cases should expand the predicate only after establishing what evidence
+must remain to preserve their meaning.
 
 ### Evidence-placement follow-up
 
