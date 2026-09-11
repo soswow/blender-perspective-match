@@ -63,6 +63,19 @@ MIRROR_PLANE_ITEMS = (
     ("XY", "XY", "Empty's local XY is the mirror (local Z is the normal)"),
 )
 
+PLANE_AXIS_ITEMS = (
+    ("NONE", "None", "Not constrained to a shared plane"),
+    ("X", "X", "Share the same X with others in this bucket (plane parallel to YZ)"),
+    ("Y", "Y", "Share the same Y with others in this bucket (plane parallel to XZ)"),
+    ("Z", "Z", "Share the same Z with others in this bucket (plane parallel to XY)"),
+    ("FREE", "Free", "Lie on the same unknown plane as others in this bucket"),
+)
+
+PLANE_GROUP_ITEMS = tuple(
+    (str(index), f"#{index}", f"Plane bucket {index}")
+    for index in range(1, 11)
+)
+
 # Dynamic enum tuples must stay referenced (Blender string-lifetime bug).
 _MIRROR_OF_NONE = (("NONE", "None", "No mirror partner", 0, 0),)
 _PARALLEL_TO_STATIC = (
@@ -944,6 +957,27 @@ class PMLandmark(bpy.types.PropertyGroup):
         default=False,
         update=_touch_sync_ui,
     )
+    plane_axis: bpy.props.EnumProperty(
+        name="Is in Plane",
+        description=(
+            "Optional: share a plane with other landmarks in the same bucket. "
+            "X / Y / Z share that world coordinate; Free fits an unknown plane "
+            "once four or more members are reconstructed"
+        ),
+        items=PLANE_AXIS_ITEMS,
+        default="NONE",
+        update=_touch_sync_ui,
+    )
+    plane_group: bpy.props.EnumProperty(
+        name="Plane Bucket",
+        description=(
+            "Which Is in Plane bucket this landmark belongs to. "
+            "Z #2 is a different height from Z #1"
+        ),
+        items=PLANE_GROUP_ITEMS,
+        default="1",
+        update=_touch_sync_ui,
+    )
     known_object: bpy.props.PointerProperty(
         name="Known 3D",
         description=(
@@ -1551,6 +1585,22 @@ class PMWorkspace(bpy.types.PropertyGroup):
             "stretching the cameras. Does not move the linked Empty — "
             "Landmark Empties show the eased position. On Ground Known 3D "
             "uses the tighter of this and Ground Slack for Z"
+        ),
+        default=0.0,
+        min=0.0,
+        soft_max=0.25,
+        max=2.0,
+        step=1,
+        precision=3,
+        unit="LENGTH",
+        update=_redraw,
+    )
+    plane_slack: bpy.props.FloatProperty(
+        name="Plane Slack",
+        description=(
+            "How far Is in Plane landmarks may leave their shared plane "
+            "(scene units) during Solve Sync. 0 pins them. A small value "
+            "lets a slightly warped wall or table flex without bending cameras"
         ),
         default=0.0,
         min=0.0,

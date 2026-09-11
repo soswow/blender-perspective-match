@@ -289,6 +289,8 @@ def _run_sync(
     mirror_pairs: list | None = None,
     mirror_plane: tuple | None = None,
     mirror_slack: float | None = None,
+    plane_groups: list | None = None,
+    plane_slack: float | None = None,
     location_match_ids: set[str] | None = None,
     readonly_match_ids: set[str] | None = None,
 ) -> sync_module.SyncSolveResult:
@@ -313,6 +315,8 @@ def _run_sync(
         mirror_pairs=mirror_pairs,
         mirror_plane=mirror_plane,
         mirror_slack=mirror_slack,
+        plane_groups=plane_groups,
+        plane_slack=plane_slack,
         location_match_ids=location_match_ids,
         readonly_match_ids=readonly_match_ids,
     )
@@ -345,6 +349,8 @@ def refine_lenses_from_landmarks(
     mirror_pairs: list | None = None,
     mirror_plane: tuple | None = None,
     mirror_slack: float | None = None,
+    plane_groups: list | None = None,
+    plane_slack: float | None = None,
     location_match_ids: set[str] | None = None,
     readonly_match_ids: set[str] | None = None,
     cancel_check=None,
@@ -432,6 +438,8 @@ def refine_lenses_from_landmarks(
             mirror_pairs=mirror_pairs,
             mirror_plane=mirror_plane,
             mirror_slack=mirror_slack,
+            plane_groups=plane_groups,
+            plane_slack=plane_slack,
             location_match_ids=location_match_ids,
             readonly_match_ids=readonly_match_ids,
         )

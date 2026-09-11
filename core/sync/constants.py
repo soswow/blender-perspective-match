@@ -55,6 +55,16 @@ MIRROR_PAIR_HARD_GAP = 0.01
 # Soft XYZ residual for B − reflect(A) at |gap| = MIRROR_PAIR_HARD_GAP.
 MIRROR_PAIR_RESIDUAL_PX = 6.0
 
+# Shared-plane buckets (Is in Plane). Axis X/Y/Z share that coordinate;
+# Free fits an unknown plane. 0 slack is a hard pin (tiny spring).
+PLANE_SLACK_DEFAULT = 0.0
+PLANE_RESIDUAL_PX = 6.0
+PLANE_HARD_SLACK = 1.0e-4
+PLANE_GROUP_LIMIT = 10
+PLANE_AXIS_ALIGNED_MIN = 2
+PLANE_FREE_MIN = 4
+PLANE_AXIS_INDEX = {"X": 0, "Y": 1, "Z": 2}
+
 # When On Ground is a hard Z=0 pin (slack 0) but Known 3D is thawed, BA still
 # needs a Z spring. This tiny slack is stiff enough to keep |Z| ≈ 0.
 GROUND_Z_HARD_SLACK = 1.0e-4

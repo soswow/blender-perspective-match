@@ -2759,6 +2759,28 @@ def collect_sync_readonly_match_ids(context: bpy.types.Context) -> set[str]:
     return ids
 
 
+def collect_sync_plane_groups(
+    context: bpy.types.Context,
+) -> list[tuple[str, str, int]]:
+    """Enabled point/line landmarks assigned to an Is in Plane bucket."""
+    space = properties.workspace(context)
+    groups: list[tuple[str, str, int]] = []
+    for landmark in space.landmarks:
+        if not getattr(landmark, "use_in_sync", True):
+            continue
+        if landmark.kind not in {"POINT", "LINE"} or not landmark.item_id:
+            continue
+        axis = str(getattr(landmark, "plane_axis", "NONE") or "NONE")
+        if axis not in {"X", "Y", "Z", "FREE"}:
+            continue
+        try:
+            bucket = int(getattr(landmark, "plane_group", "1") or "1")
+        except (TypeError, ValueError):
+            bucket = 1
+        groups.append((landmark.item_id, axis, bucket))
+    return groups
+
+
 def collect_sync_solve_kwargs(context: bpy.types.Context) -> dict:
     """Locks, slack, participation, and mirror kwargs for ``solve_landmark_sync``."""
     space = properties.workspace(context)
@@ -2768,6 +2790,8 @@ def collect_sync_solve_kwargs(context: bpy.types.Context) -> dict:
         "lock_translation": bool(space.lock_translation),
         "ground_slack": float(getattr(space, "ground_slack", 0.02)),
         "known_3d_slack": float(getattr(space, "known_3d_slack", 0.0)),
+        "plane_groups": collect_sync_plane_groups(context),
+        "plane_slack": float(getattr(space, "plane_slack", 0.0)),
         "location_match_ids": collect_sync_location_match_ids(context),
         "readonly_match_ids": collect_sync_readonly_match_ids(context),
         **_sync_mirror_kwargs(context),
@@ -3843,6 +3867,8 @@ def refine_lenses_and_sync(context: bpy.types.Context):
         mirror_pairs=prep.mirror_pairs,
         mirror_plane=prep.mirror_plane,
         mirror_slack=prep.mirror_slack,
+        plane_groups=prep.plane_groups,
+        plane_slack=prep.plane_slack,
     )
     return apply_lens_refine_result(context, refine_result, prep.root_by_name)
 
@@ -3871,6 +3897,8 @@ class LensRefinePrep:
     mirror_pairs: list | None = None
     mirror_plane: tuple | None = None
     mirror_slack: float | None = None
+    plane_groups: list | None = None
+    plane_slack: float | None = None
 
 
 def prepare_lens_refine(context: bpy.types.Context) -> LensRefinePrep:

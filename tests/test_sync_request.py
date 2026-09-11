@@ -32,6 +32,8 @@ class SyncRequestTests(unittest.TestCase):
         request.parallel_pairs = [("edge", "WORLD_Z")]
         request.mirror_pairs = [("a", "b")]
         request.mirror_plane = (np.array([0.1, 0.2, 0.3]), np.array([1, 0, 0]))
+        request.plane_groups = [("p0", "Z", 2), ("edge", "FREE", 1)]
+        request.plane_slack = 0.07
         request.location_match_ids = {"view_0", "view_1"}
         request.readonly_match_ids = {"view_2"}
         return request
@@ -55,6 +57,9 @@ class SyncRequestTests(unittest.TestCase):
         self.assertEqual(restored.location_match_ids, {"view_0", "view_1"})
         self.assertEqual(restored.readonly_match_ids, {"view_2"})
         self.assertIsInstance(restored.location_match_ids, set)
+        self.assertEqual(restored.to_record()["version"], 3)
+        self.assertEqual(restored.plane_groups, [("p0", "Z", 2), ("edge", "FREE", 1)])
+        self.assertEqual(restored.plane_slack, 0.07)
 
     def test_snapshot_and_decoded_arrays_do_not_alias_live_request(self):
         request = self.request()
@@ -98,16 +103,30 @@ class SyncRequestTests(unittest.TestCase):
     def test_legacy_snapshot_preserves_pre_role_semantics_and_checks_checksum(self):
         legacy = self.request().to_record()
         legacy["version"] = 1
-        for key in ("location_match_ids", "readonly_match_ids"):
+        for key in ("location_match_ids", "readonly_match_ids", "plane_groups", "plane_slack"):
             del legacy["inputs"][key]
         legacy["sha256"] = request_fingerprint(legacy["inputs"])
         restored = SyncSolveRequest.from_record(legacy)
         self.assertIsNone(restored.location_match_ids)
         self.assertIsNone(restored.readonly_match_ids)
-        self.assertEqual(restored.to_record()["version"], 2)
+        self.assertIsNone(restored.plane_groups)
+        self.assertIsNone(restored.plane_slack)
+        self.assertEqual(restored.to_record()["version"], 3)
         legacy["inputs"]["lock_rotation"] = False
         with self.assertRaisesRegex(ValueError, "checksum"):
             SyncSolveRequest.from_record(legacy)
+
+    def test_version_two_snapshot_preserves_roles_and_injects_plane_defaults(self) -> None:
+        legacy = self.request().to_record()
+        legacy["version"] = 2
+        for key in ("plane_groups", "plane_slack"):
+            del legacy["inputs"][key]
+        legacy["sha256"] = request_fingerprint(legacy["inputs"])
+        restored = SyncSolveRequest.from_record(legacy)
+        self.assertEqual(restored.location_match_ids, {"view_0", "view_1"})
+        self.assertIsNone(restored.plane_groups)
+        self.assertIsNone(restored.plane_slack)
+        self.assertEqual(restored.to_record()["version"], 3)
 
     def test_empty_camera_role_sets_are_distinct_from_unspecified(self):
         request = self.request()

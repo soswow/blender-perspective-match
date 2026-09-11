@@ -116,7 +116,7 @@ def generate(family: str = "ground", seed: int = 0, noise_px: float = 0.0) -> di
         line_observations=line_observations, anchor_id="view_0", fixed_similarities=fixed,
         lock_rotation=False, lock_translation=False, ground_slack=0.0, known_3d_slack=0.0,
         mirror_pairs=mirrors, mirror_plane=[[0,0,0],[1,0,0]] if mirrors else None,
-        mirror_slack=0.0, parallel_pairs=parallel)
+        mirror_slack=0.0, parallel_pairs=parallel, plane_groups=[], plane_slack=0.0)
     return dict(schema_version=SCHEMA_VERSION, name=f"{family}-{seed}", family=family,
         seed=seed, noise_px=noise_px, request=request,
         expectation=dict(outcome="reject" if family == "collinear" else "solve",

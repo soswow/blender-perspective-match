@@ -148,8 +148,9 @@ def create_scene(case, out: Path, render: bool):
     workspace = properties.workspace(bpy.context)
     workspace.show_landmark_empties = True
     workspace.anchor_root = roots[request["anchor_id"]]
-    for key in ("lock_rotation", "lock_translation", "ground_slack", "known_3d_slack", "mirror_slack"):
-        setattr(workspace, key, request[key])
+    for key in ("lock_rotation", "lock_translation", "ground_slack", "known_3d_slack", "mirror_slack", "plane_slack"):
+        if key in request:
+            setattr(workspace, key, request[key])
     if request["mirror_plane"]:
         mirror = bpy.data.objects.new("Mirror evidence", None)
         bpy.context.scene.collection.objects.link(mirror)
@@ -184,6 +185,12 @@ def create_scene(case, out: Path, render: bool):
         landmarks[a].mirror_of_id = b
     for a, b in request["parallel_pairs"]:
         landmarks[a].parallel_to = b
+    for landmark_id, axis, group in request.get("plane_groups") or []:
+        landmark = landmarks.get(landmark_id)
+        if landmark is None:
+            continue
+        landmark.plane_axis = str(axis)
+        landmark.plane_group = str(group)
     for observation in request["observations"] + request["line_observations"]:
         landmark = landmarks[observation["landmark_id"]]
         pick = landmark.observations.add()

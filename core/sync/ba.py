@@ -22,6 +22,7 @@ from .constants import (
     SPATIAL_WEIGHT_CLIP,
 )
 from .mirrors import _dedupe_mirror_pairs, _householder, _normalize_plane
+from .planes import append_plane_residuals
 from .projection import (
     _known_line_reprojection_errors,
     _line_observation_reprojection_errors,
@@ -700,6 +701,8 @@ def _ba_raw_residuals_and_jacobian(
     mirror_plane: tuple[np.ndarray, np.ndarray] | None = None,
     mirror_slack: float = 0.0,
     free_plane_offset: bool = False,
+    plane_groups: list[tuple[str, str, int]] | None = None,
+    plane_slack: float = 0.0,
     location_match_ids: set[str] | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Unweighted BA residuals and block-analytic Jacobian."""
@@ -826,6 +829,7 @@ def _ba_raw_residuals_and_jacobian(
                 row_v[offset : offset + 3] = block[1]
         jacobian_rows.extend((row_u, row_v))
 
+    measurement_count = len(residuals)
     known_ids = set(known_world_priors or {})
     ground_id_set = set(ground_landmark_ids or ())
     for landmark_id in ground_landmark_ids or ():
@@ -936,6 +940,20 @@ def _ba_raw_residuals_and_jacobian(
             row_offset[plane_col] = spring
             jacobian_rows.append(row_offset)
 
+    append_plane_residuals(
+        residuals,
+        jacobian_rows,
+        column_count=column_count,
+        landmarks=landmarks,
+        line_points=line_points,
+        landmark_offset=landmark_offset,
+        line_offset=line_offset,
+        plane_groups=plane_groups,
+        plane_slack=plane_slack,
+        ground_landmark_ids=list(ground_id_set),
+    )
+    spring_end = len(residuals)
+
     # Lines: pose FD + free-midpoint FD (directions stay fixed from the seed).
     for landmark_id, _seed_point, direction, observation in line_constraints:
         match_id = observation.match_id
@@ -1000,9 +1018,16 @@ def _ba_raw_residuals_and_jacobian(
         jacobian_rows.extend((row_a, row_b))
 
     residual_array = np.asarray(residuals, dtype=np.float64)
+    protected = np.zeros(residual_array.shape, dtype=bool)
+    if residual_array.size:
+        protected[measurement_count:spring_end] = True
     if not jacobian_rows:
-        return residual_array, np.zeros((0, column_count), dtype=np.float64)
-    return residual_array, np.vstack(jacobian_rows)
+        return (
+            residual_array,
+            np.zeros((0, column_count), dtype=np.float64),
+            protected,
+        )
+    return residual_array, np.vstack(jacobian_rows), protected
 
 
 def _ba_residual_vector(
@@ -1034,10 +1059,12 @@ def _ba_residual_vector(
     mirror_plane: tuple[np.ndarray, np.ndarray] | None = None,
     mirror_slack: float = 0.0,
     free_plane_offset: bool = False,
+    plane_groups: list[tuple[str, str, int]] | None = None,
+    plane_slack: float = 0.0,
     location_match_ids: set[str] | None = None,
 ) -> np.ndarray:
     """Joint reprojection residuals for free poses + free landmarks (+ lines)."""
-    residual_array, _jacobian = _ba_raw_residuals_and_jacobian(
+    residual_array, _jacobian, protected = _ba_raw_residuals_and_jacobian(
         params,
         free_match_ids,
         free_landmark_ids,
@@ -1064,9 +1091,15 @@ def _ba_residual_vector(
         mirror_plane=mirror_plane,
         mirror_slack=mirror_slack,
         free_plane_offset=free_plane_offset,
+        plane_groups=plane_groups,
+        plane_slack=plane_slack,
         location_match_ids=location_match_ids,
     )
-    return residual_array * _robust_weights(residual_array, huber_delta)
+    weights = _robust_weights(residual_array, huber_delta)
+    if protected.size:
+        weights = np.array(weights, copy=True, dtype=np.float64)
+        weights[protected] = 1.0
+    return residual_array * weights
 
 
 def _jacobian_ba(
@@ -1080,8 +1113,13 @@ def _jacobian_ba(
         for key, value in residual_kwargs.items()
         if key != "huber_delta"
     }
-    residuals, jacobian = _ba_raw_residuals_and_jacobian(params, **raw_kwargs)
+    residuals, jacobian, protected = _ba_raw_residuals_and_jacobian(
+        params, **raw_kwargs
+    )
     weights = _robust_weights(residuals, huber_delta)
+    if protected.size:
+        weights = np.array(weights, copy=True, dtype=np.float64)
+        weights[protected] = 1.0
     return jacobian * weights[:, np.newaxis]
 
 
@@ -1191,6 +1229,8 @@ def _bundle_adjust_registration(
     mirror_plane: tuple[np.ndarray, np.ndarray] | None = None,
     mirror_slack: float = 0.0,
     free_plane_offset: bool = False,
+    plane_groups: list[tuple[str, str, int]] | None = None,
+    plane_slack: float = 0.0,
     location_match_ids: set[str] | None = None,
 ) -> tuple[
     dict[str, SimilarityTransform],
@@ -1334,6 +1374,8 @@ def _bundle_adjust_registration(
         "mirror_plane": mirror_plane,
         "mirror_slack": float(mirror_slack),
         "free_plane_offset": bool(free_plane_offset),
+        "plane_groups": list(plane_groups or ()),
+        "plane_slack": float(plane_slack),
         "location_match_ids": location_match_ids,
     }
     damping = 1.0e-2
@@ -1543,6 +1585,8 @@ def leave_one_out_landmark_report(
     mirror_pairs: list[tuple[str, str]] | None = None,
     mirror_plane: tuple[np.ndarray, np.ndarray] | None = None,
     mirror_slack: float | None = None,
+    plane_groups: list[tuple[str, str, int]] | None = None,
+    plane_slack: float | None = None,
     location_match_ids: set[str] | None = None,
     readonly_match_ids: set[str] | None = None,
     cancel_check: Callable[[], bool] | None = None,
@@ -1575,6 +1619,8 @@ def leave_one_out_landmark_report(
             mirror_pairs=mirror_pairs,
             mirror_plane=mirror_plane,
             mirror_slack=mirror_slack,
+            plane_groups=plane_groups,
+            plane_slack=plane_slack,
             location_match_ids=location_match_ids,
             readonly_match_ids=readonly_match_ids,
             use_pose_cache=True,
@@ -1653,6 +1699,11 @@ def leave_one_out_landmark_report(
             for pair in (mirror_pairs or [])
             if landmark_id not in pair
         ]
+        filtered_planes = [
+            item
+            for item in (plane_groups or [])
+            if item[0] != landmark_id
+        ]
         without = solve_landmark_sync(
             accepted_matches,
             filtered,
@@ -1670,6 +1721,8 @@ def leave_one_out_landmark_report(
             mirror_pairs=filtered_mirror,
             mirror_plane=mirror_plane,
             mirror_slack=mirror_slack,
+            plane_groups=filtered_planes,
+            plane_slack=plane_slack,
             location_match_ids=location_match_ids,
             readonly_match_ids=readonly_match_ids,
             use_pose_cache=True,

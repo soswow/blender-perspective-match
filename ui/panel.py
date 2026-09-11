@@ -57,6 +57,8 @@ class PM_UL_landmarks(bpy.types.UIList):
             meta.label(text="", icon="PIVOT_CURSOR")
         elif item.on_ground:
             meta.label(text="", icon="ORIENTATION_VIEW")
+        elif str(getattr(item, "plane_axis", "NONE") or "NONE") != "NONE":
+            meta.label(text="", icon="MESH_PLANE")
         count = 0 if row_meta is None else row_meta.observation_count
         weight = float(getattr(item, "sync_weight", 1.0))
         weight_mark = f" · ×{weight:g}" if abs(weight - 1.0) > 0.05 else ""
@@ -651,6 +653,11 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
                     text="",
                     icon="SHADERFX",
                 )
+                plane_row = sync_body.row(align=True)
+                plane_row.prop(landmark, "plane_axis", text="Is in Plane")
+                plane_group = plane_row.row(align=True)
+                plane_group.enabled = str(landmark.plane_axis) != "NONE"
+                plane_group.prop(landmark, "plane_group", text="")
             if landmark.known_object is not None:
                 location = landmark.known_object.matrix_world.to_translation()
                 sync_body.label(
@@ -795,6 +802,10 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
         slack_row.use_property_split = False
         slack_row.prop(workspace, "ground_slack", text="Ground Slack")
         slack_row.prop(workspace, "known_3d_slack", text="Known 3D Slack")
+        plane_slack_row = sync_body.row(align=True)
+        plane_slack_row.use_property_split = False
+        plane_slack_row.prop(workspace, "plane_slack", text="Plane Slack")
+        plane_slack_row.prop(workspace, "mirror_slack", text="Mirror Slack")
         mirror_row = sync_body.row(align=True)
         mirror_row.use_property_split = False
         mirror_row.prop(workspace, "mirror_object", text="Mirror Empty")
@@ -811,7 +822,6 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
         mirror_opts = sync_body.row(align=True)
         mirror_opts.use_property_split = False
         mirror_opts.prop(workspace, "mirror_plane", text="Plane")
-        mirror_opts.prop(workspace, "mirror_slack", text="Mirror Slack")
         opts_row = sync_body.row(align=True)
         opts_row.use_property_split = False
         opts_row.prop(workspace, "share_lens", text="Same Lens")

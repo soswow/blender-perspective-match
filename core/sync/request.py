@@ -32,6 +32,8 @@ class SyncSolveRequest:
     mirror_pairs: list[tuple[str, str]] | None = None
     mirror_plane: tuple[np.ndarray, np.ndarray] | None = None
     mirror_slack: float | None = None
+    plane_groups: list[tuple[str, str, int]] | None = None
+    plane_slack: float | None = None
     location_match_ids: set[str] | None = None
     readonly_match_ids: set[str] | None = None
 
@@ -65,14 +67,14 @@ class SyncSolveRequest:
                 inputs[key] = {name: _array(value, shape).tolist() for name, value in inputs[key].items()}
         if inputs["mirror_plane"] is not None:
             inputs["mirror_plane"] = _array(inputs["mirror_plane"], (2, 3)).tolist()
-        return {"format": "perspective-match-sync-request", "version": 2,
+        return {"format": "perspective-match-sync-request", "version": 3,
                 "inputs": inputs, "sha256": request_fingerprint(inputs)}
 
     @classmethod
     def from_record(cls, record: dict) -> SyncSolveRequest:
         """Decode a complete snapshot; reject missing fields and unknown versions."""
         version = record.get("version")
-        if record.get("format") != "perspective-match-sync-request" or type(version) is not int or version not in {1, 2}:
+        if record.get("format") != "perspective-match-sync-request" or type(version) is not int or version not in {1, 2, 3}:
             raise ValueError("Unsupported Sync request format/version")
         inputs = record["inputs"]
         if record.get("sha256") != request_fingerprint(inputs):
@@ -83,6 +85,10 @@ class SyncSolveRequest:
             if "location_match_ids" in values or "readonly_match_ids" in values:
                 raise ValueError("Camera role fields require Sync request version 2")
             values.update(location_match_ids=None, readonly_match_ids=None)
+        if version in {1, 2}:
+            if "plane_groups" in values or "plane_slack" in values:
+                raise ValueError("Plane fields require Sync request version 3")
+            values.update(plane_groups=None, plane_slack=None)
         _check_fields(values, SyncSolveRequest)
         for key in ("location_match_ids", "readonly_match_ids"):
             members = values[key]
@@ -129,6 +135,19 @@ class SyncSolveRequest:
                 values[key] = [tuple(pair) for pair in inputs[key]]
         if inputs["mirror_plane"] is not None:
             values["mirror_plane"] = tuple(_array(inputs["mirror_plane"], (2, 3)))
+        if values["plane_groups"] is not None:
+            parsed = []
+            for item in values["plane_groups"]:
+                if (
+                    not isinstance(item, (list, tuple))
+                    or len(item) != 3
+                    or not isinstance(item[0], str)
+                    or not isinstance(item[1], str)
+                    or type(item[2]) is not int
+                ):
+                    raise ValueError("Invalid plane_groups")
+                parsed.append((str(item[0]), str(item[1]), int(item[2])))
+            values["plane_groups"] = parsed
         return cls(**values)
 
 

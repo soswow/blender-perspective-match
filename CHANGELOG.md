@@ -11,16 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Shift-selecting extra viewport objects no longer changes the Sync landmark or replaces the selection with that landmark’s Empty.
 - Sync carries ground scale through overlapping cameras even when later ground landmarks are absent from the Anchor; Fit Only cameras can fit this ground without extending reconstruction.
 - Fit Only cameras no longer seed or reshape mirrored landmarks, or suppress weak-line warnings with strokes excluded from reconstruction.
+- Solve Sync keeps **Is Mirror Of** pairs even when those landmarks also share an **Is in Plane** bucket
 
 ### Added
 - Ctrl+Alt+Shift+Left/Right steps through the last 10 selected matches (back/forward; wraps).
 - Solve Sync and Diagnose flag free and mirrored lines whose 3D position or direction is sensitive to small stroke edits, even when their pixel fit is good.
+- Point and line landmarks can share a plane: **Is in Plane** chooses X, Y, Z, or Free and a #1–#10 bucket; **Plane Slack** is how far they may leave that plane
 
 ### Changed
 - Sync Matches status and this-match RMSE sit in a collapsed **Info** section under Hide Origin Empty.
 - Duplicating a landmark named left/right or top/bottom (or ending in a space and a number) flips that side or increments the number when the new name is free; otherwise it still appends copy.
 - Diagnose HTML match table columns are sortable, and the camera graph keeps the overlap tree in view with a green/gray key and hover details on shared-point counts.
 - Sync Matches **This Camera** (Solve, Lock Pose, Fit Only) replaces the Lock Pose checkbox: Solve lets Sync move this camera and 3D; Lock Pose freezes the camera while its picks still move 3D; Fit Only only places the camera. Disabled on the Anchor.
+- **Mirror Slack** sits beside Plane Slack, under Ground Slack / Known 3D Slack
 
 ## [0.5.0] - 2026-09-10
 

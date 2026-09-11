@@ -3337,6 +3337,8 @@ class PM_OT_duplicate_landmark(bpy.types.Operator):
         duplicate.name = duplicate_name
         duplicate.kind = source.kind
         duplicate.on_ground = bool(source.on_ground)
+        duplicate.plane_axis = str(getattr(source, "plane_axis", "NONE") or "NONE")
+        duplicate.plane_group = str(getattr(source, "plane_group", "1") or "1")
         duplicate.use_in_sync = bool(source.use_in_sync)
         duplicate.sync_weight = float(getattr(source, "sync_weight", 1.0))
         # Intentionally leave Known 3D / parallel / observations / positions empty.

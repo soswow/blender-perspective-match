@@ -200,6 +200,42 @@ def _seed_pair_from_rays(
     )
 
 
+def apply_mirror_seed(
+    landmarks: dict[str, np.ndarray],
+    pairs: list[tuple[str, str]] | None,
+    plane_point: np.ndarray,
+    plane_normal: np.ndarray,
+    *,
+    known_ids: set[str] | None = None,
+    skip_ids: set[str] | None = None,
+) -> None:
+    """Snap reconstructed point pairs onto one reflection so BA springs start small."""
+    origin, normal = _normalize_plane(plane_point, plane_normal)
+    pinned = set(known_ids or ())
+    skipped = set(skip_ids or ())
+    for landmark_a, landmark_b in _dedupe_mirror_pairs(pairs):
+        if landmark_a in skipped or landmark_b in skipped:
+            continue
+        point_a = landmarks.get(landmark_a)
+        point_b = landmarks.get(landmark_b)
+        if point_a is None or point_b is None:
+            continue
+        locked_a = landmark_a in pinned
+        locked_b = landmark_b in pinned
+        if locked_a and locked_b:
+            continue
+        if locked_a:
+            landmarks[landmark_b] = reflect_point(point_a, origin, normal)
+            continue
+        if locked_b:
+            landmarks[landmark_a] = reflect_point(point_b, origin, normal)
+            continue
+        reflected_b = reflect_point(point_b, origin, normal)
+        consensus = 0.5 * (point_a + reflected_b)
+        landmarks[landmark_a] = consensus
+        landmarks[landmark_b] = reflect_point(consensus, origin, normal)
+
+
 def seed_mirror_landmarks(
     landmarks: dict[str, np.ndarray],
     observations_by_landmark: dict[str, list[SyncObservation]],

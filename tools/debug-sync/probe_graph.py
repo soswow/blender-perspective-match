@@ -179,7 +179,8 @@ def main(argv: list[str]) -> int:
         log("prepared_request_sha256=" + prep.to_record()["sha256"])
         log(f"locks rotation={prep.lock_rotation} translation={prep.lock_translation} "
             f"fixed={sorted(prep.fixed_similarities or {})}")
-        log(f"slack ground={prep.ground_slack} known3d={prep.known_3d_slack} mirror={prep.mirror_slack}")
+        log(f"slack ground={prep.ground_slack} known3d={prep.known_3d_slack} "
+            f"plane={prep.plane_slack} mirror={prep.mirror_slack}")
         log(f"roles location={sorted(prep.location_match_ids or [])} fit_only={sorted(prep.readonly_match_ids or [])}")
         log(f"preparation ground={prep.ground_frame_note!r} origins={prep.auto_origin_notes!r}")
         if args.snapshot:

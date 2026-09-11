@@ -53,6 +53,37 @@ class MirrorPairSyncTests(unittest.TestCase):
         self.assertIsNone(sync.suggested_mirror_partner_name("handle"))
         self.assertIsNone(sync.suggested_mirror_partner_name(""))
 
+    def test_apply_mirror_seed_averages_two_sided_points(self) -> None:
+        """Both reconstructed sides snap onto one reflection; Known 3D stays put."""
+        origin = np.array((0.2, 0.0, 0.0), dtype=np.float64)
+        normal = np.array((1.0, 0.0, 0.0), dtype=np.float64)
+        left = np.array((-1.0, 0.4, 0.8), dtype=np.float64)
+        right = np.array((1.4, 0.1, 0.9), dtype=np.float64)
+        landmarks = {"left": left.copy(), "right": right.copy(), "pin": left.copy()}
+        sync.apply_mirror_seed(
+            landmarks,
+            [("left", "right")],
+            origin,
+            normal,
+        )
+        reflected = sync.reflect_point(landmarks["left"], origin, normal)
+        self.assertTrue(np.allclose(landmarks["right"], reflected, atol=1.0e-12))
+        sync.apply_mirror_seed(
+            landmarks,
+            [("pin", "right")],
+            origin,
+            normal,
+            known_ids={"pin"},
+        )
+        self.assertTrue(np.allclose(landmarks["pin"], left))
+        self.assertTrue(
+            np.allclose(
+                landmarks["right"],
+                sync.reflect_point(left, origin, normal),
+                atol=1.0e-12,
+            )
+        )
+
     def _scene_with_side_features(self):
         """Shared landmarks plus two left-only / right-only pairs across X=0."""
         matches, observations, true_sim, _center, _shared = _synthetic_scene(

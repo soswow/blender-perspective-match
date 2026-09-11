@@ -53,10 +53,13 @@ def solver_arguments(request: dict) -> dict:
             np.array(value["translation"])) for key, value in request["fixed_similarities"].items()},
     )
     for key in ("anchor_id", "lock_rotation", "lock_translation", "ground_slack", "known_3d_slack",
-                "mirror_pairs", "mirror_plane", "mirror_slack", "parallel_pairs"):
-        arguments[key] = deepcopy(request[key])
+                "mirror_pairs", "mirror_plane", "mirror_slack", "parallel_pairs", "plane_groups",
+                "plane_slack"):
+        arguments[key] = deepcopy(request[key]) if key in request else (None if key != "plane_groups" else [])
     for key in ("mirror_pairs", "parallel_pairs"):
         arguments[key] = [tuple(pair) for pair in arguments[key]]
+    if arguments["plane_groups"]:
+        arguments["plane_groups"] = [tuple(item) for item in arguments["plane_groups"]]
     # Synthetic cameras default to the UI's Solve role. Forward the same explicit
     # sets as scene preparation, including its recovered-camera 3D thaw stage.
     location_ids = request.get("location_match_ids")
