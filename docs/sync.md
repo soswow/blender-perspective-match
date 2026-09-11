@@ -45,7 +45,7 @@ Each landmark keeps a stable `item_id` plus a `creation_index` (add order). UI h
 - **Filter** toggle: show only landmarks with a pick defined in the active match. List px and **Sort by Error** then use this still's overlay miss instead of the all-views RMSE. The selected landmark always shows both numbers when this still can be scored.
 - **Font** toggle: show landmark names next to picks on the plate.
 - Click a pick on the plate to select it in the list (while the **Perspective Match** sidebar tab is open). The selected pick draws in red. **On Ground** picks draw in magenta; Known 3D picks in cyan.
-- **Duplicate**: copies type / On Ground / Use in Sync / Sync Weight, clears Known 3D links, parallel links, mirror links, picks, and solved positions.
+- **Duplicate**: copies type / On Ground / Use in Sync / Sync Weight, clears Known 3D links, parallel links, mirror links, picks, and solved positions. The new name flips a trailing left/right or top/bottom, or increments a trailing ` 3`-style number, when that name is free; otherwise it appends `copy`.
 - **Use in Sync**: exclude a landmark from Solve Sync / Diagnose without deleting picks. With **Landmark Empties** on, that also removes its helper from `PM_Sync_Landmarks`.
 - **Sync Weight**: how strongly this landmark pulls Solve Sync (default 1). Raise it on a couple of well-placed picks that sit far from the others so a cluster of easier landmarks cannot ignore them. Combines with per-still **Pick Confidence** (High ×4, Low ×0.25). Boosted landmarks also skip the usual “this pick looks like an outlier” downweight. Weight influences pose refinement and candidate ranking; camera acceptance and mismatched-pick diagnostics remain in raw image pixels.
 

@@ -22,6 +22,7 @@ from ..detect import tag_snap
 from ..detect import vp_lines as vp_line_detect
 from ..scene import distortion
 from . import overlay, overlay_hit, sync_report
+from .landmark_names import suggested_duplicate_landmark_name
 from .npanel import PERSPECTIVE_MATCH_CATEGORY
 
 
@@ -3194,9 +3195,13 @@ class PM_OT_duplicate_landmark(bpy.types.Operator):
             if pick_confidence is None:
                 pick_confidence = observation.confidence
 
+        duplicate_name = suggested_duplicate_landmark_name(
+            source.name,
+            (landmark.name for landmark in space.landmarks),
+        )
         duplicate = space.landmarks.add()
         duplicate.item_id = f"landmark-{uuid4().hex}"
-        duplicate.name = f"{source.name} copy"
+        duplicate.name = duplicate_name
         duplicate.kind = source.kind
         duplicate.on_ground = bool(source.on_ground)
         duplicate.use_in_sync = bool(source.use_in_sync)
