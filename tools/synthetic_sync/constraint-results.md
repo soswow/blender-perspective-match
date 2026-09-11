@@ -95,6 +95,7 @@ focused tests passed after final report and warning-contract adjustments.
 The generated product HTML passed content tests but was not visually inspected
 because no browser was available. Hosted CI has not run yet.
 
-Next, close the known product/probe request mismatch for locks and slack, using
-these generated scenes to prove parity. A debugging command must solve the same
-problem as the user's operation before its diagnosis can be trusted.
+The next follow-up implemented [product/probe request parity and capture/replay](../debug-sync/README.md),
+using generated scenes with locks, slack and automatic origin preparation.
+A debugging command must solve the same problem as the user's operation before
+its diagnosis can be trusted; parity alone does not establish geometric accuracy.

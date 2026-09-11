@@ -15,7 +15,7 @@ BA of recovered cameras → thaw 3D from recovered stills that may move 3D
 → rebuild free 3D lines from those cameras → report.
 
 Package layout: ``constants``, ``types``, ``projection``, ``pose``, ``ground``,
-``lines``, ``mirrors``, ``ba``, ``solve``. ``from match_perspective.core import sync``
+``lines``, ``mirrors``, ``ba``, ``solve``, ``request``. ``from match_perspective.core import sync``
 still exposes the same names as the former single module, including test helpers.
 """
 
@@ -40,3 +40,5 @@ for _module in (
         globals()[_name] = _value
 
 del _module, _name, _value
+
+from .request import SyncSolveRequest

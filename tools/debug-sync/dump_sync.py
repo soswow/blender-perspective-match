@@ -230,17 +230,20 @@ def main(argv: list[str]) -> int:
             f"axis=({optical[0]:+.2f},{optical[1]:+.2f},{optical[2]:+.2f})"
         )
 
-    matches, observations, known_world, line_observations, known_lines, parallel = (
-        scene.build_sync_problem(bpy.context)
-    )
-    if not matches or anchor is None:
+    try:
+        prep = scene.prepare_diagnose_sync(bpy.context)
+    except ValueError as error:
         log()
-        log("No sync-enabled solved matches / no anchor — stop.")
+        log(str(error))
         report = "\n".join(lines) + "\n"
         if args.out:
             Path(args.out).expanduser().write_text(report, encoding="utf-8")
         print(report, end="")
         return 0
+
+    matches, observations, known_world = prep.matches, prep.observations, prep.known_world
+    line_observations, known_lines, parallel = prep.line_observations, prep.known_lines, prep.parallel_pairs
+    log("prepared_request_sha256=" + prep.to_record()["sha256"])
 
     match_map = {item.match_id: item for item in matches}
     obs_by_lm = _group_obs(observations)
@@ -556,16 +559,7 @@ def main(argv: list[str]) -> int:
     log()
     log("=== solve_landmark_sync ===")
     try:
-        result = sync_module.solve_landmark_sync(
-            matches,
-            observations,
-            anchor_id=anchor_id,
-            known_world=known_world,
-            line_observations=line_observations,
-            known_lines=known_lines,
-            parallel_pairs=parallel,
-            **scene.collect_sync_solve_kwargs(bpy.context),
-        )
+        result = sync_module.solve_landmark_sync(**prep.solver_kwargs(), use_pose_cache=True)
         log(f"success={result.success}")
         log(f"message={result.message}")
         log(f"mean_rmse={result.mean_reprojection_px:.3f}")

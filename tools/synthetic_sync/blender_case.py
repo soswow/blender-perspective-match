@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
 from dataclasses import asdict, is_dataclass
 import importlib.util
 import json
@@ -133,9 +134,9 @@ def create_scene(case, out: Path, render: bool):
         else:
             # Existing cases omit these keys; default Solve so Blender matches
             # the numerical solver's "every camera may move 3D" contract.
+            location_ids = request.get("location_match_ids")
             location_ids = set(
-                request.get("location_match_ids")
-                or [item["id"] for item in request["cameras"]]
+                [item["id"] for item in request["cameras"]] if location_ids is None else location_ids
             )
             readonly_ids = set(request.get("readonly_match_ids") or [])
             if camera["id"] in readonly_ids or camera["id"] not in location_ids:
@@ -206,7 +207,7 @@ def assert_equivalent(expected, actual, path="request"):
     if is_dataclass(expected):
         expected, actual = asdict(expected), asdict(actual)
     if isinstance(expected, dict):
-        if set(expected) != set(actual):
+        if not isinstance(actual, dict) or set(expected) != set(actual):
             raise AssertionError(f"{path}: keys differ")
         for key in expected:
             assert_equivalent(expected[key], actual[key], path + "." + key)
@@ -227,7 +228,7 @@ def verify_inputs(case):
     prep = scene.prepare_diagnose_sync(bpy.context)
     expected = solver_arguments(case["request"])
     for key, value in expected.items():
-        actual = getattr(prep, key)
+        actual = deepcopy(getattr(prep, key))
         if key == "matches":
             value, actual = (sorted(items, key=lambda m:m.match_id) for items in (value, actual))
         elif key in {"observations", "line_observations"}:
@@ -247,25 +248,24 @@ def verify_inputs(case):
 
 def run_case(case, out):
     from match_perspective import properties, scene
+    from tools.sync_snapshot import write_snapshot
     prep = verify_inputs(case)
+    write_snapshot(prep, out / "request.json", source_name="Generated scene")
     started = time.perf_counter()
     try:
         result = scene.solve_and_apply_sync(bpy.context)
-    except ValueError as error:
-        if case["expectation"]["outcome"] != "reject":
-            raise
-        record = dict(success=False, message=str(error), reported_rmse_px=0.0, cameras={}, landmarks={}, line_segments={})
-    else:
-        record = result_record(result, case["request"]["cameras"])
-        from match_perspective.ui import sync_report
-        report = sync_report.build_sync_report(
-            operation="Synthetic Solve Sync",source_name="Generated scene",
-            matches=prep.matches,observations=prep.observations,line_observations=prep.line_observations,
-            result=result,anchor_id=prep.anchor_id,known_world=prep.known_world,known_lines=prep.known_lines,
-            parallel_pairs=prep.parallel_pairs,mirror_pairs=prep.mirror_pairs,
-            fixed_match_ids=prep.fixed_similarities,
-        )
-        (out / "product-report.html").write_text(sync_report.render_sync_report_html(report))
+    except scene.SyncSolveRejected as error:
+        result = error.result
+    record = result_record(result, case["request"]["cameras"])
+    from match_perspective.ui import sync_report
+    report = sync_report.build_sync_report(
+        operation="Synthetic Solve Sync", source_name="Generated scene",
+        matches=prep.matches, observations=prep.observations, line_observations=prep.line_observations,
+        result=result, anchor_id=prep.anchor_id, known_world=prep.known_world, known_lines=prep.known_lines,
+        parallel_pairs=prep.parallel_pairs, mirror_pairs=prep.mirror_pairs,
+        fixed_match_ids=prep.fixed_similarities,
+    )
+    (out / "product-report.html").write_text(sync_report.render_sync_report_html(report))
     record.update(elapsed_s=time.perf_counter()-started, environment=environment(),
                   blender=bpy.app.version_string, request_sha256=fingerprint(case["request"]))
     assessment = evaluate(case, record)

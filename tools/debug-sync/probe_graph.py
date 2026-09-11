@@ -49,6 +49,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--blend", required=True)
     parser.add_argument("--out", default="")
     parser.add_argument("--no-solve", action="store_true")
+    parser.add_argument("--snapshot", default="", help="Write the prepared solver request to a new JSON file")
     parser.add_argument(
         "--leave-one-out",
         action="store_true",
@@ -59,7 +60,10 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         default="",
         help="Comma-separated landmark name substrings to detail (default: bottom,id325)",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.no_solve and args.snapshot:
+        parser.error("--snapshot requires preparation; omit --no-solve")
+    return args
 
 
 def _angle_from_vertical_deg(direction: np.ndarray) -> float:
@@ -165,9 +169,23 @@ def main(argv: list[str]) -> int:
         )
 
     build_t0 = time.perf_counter()
-    matches, observations, known_world, line_observations, known_lines, parallel = (
-        scene.build_sync_problem(bpy.context)
-    )
+    prep = None
+    if args.no_solve:
+        matches, observations, known_world, line_observations, known_lines, parallel = scene.build_sync_problem(bpy.context)
+    else:
+        prep = scene.prepare_diagnose_sync(bpy.context)
+        matches, observations, known_world = prep.matches, prep.observations, prep.known_world
+        line_observations, known_lines, parallel = prep.line_observations, prep.known_lines, prep.parallel_pairs
+        log("prepared_request_sha256=" + prep.to_record()["sha256"])
+        log(f"locks rotation={prep.lock_rotation} translation={prep.lock_translation} "
+            f"fixed={sorted(prep.fixed_similarities or {})}")
+        log(f"slack ground={prep.ground_slack} known3d={prep.known_3d_slack} mirror={prep.mirror_slack}")
+        log(f"roles location={sorted(prep.location_match_ids or [])} fit_only={sorted(prep.readonly_match_ids or [])}")
+        log(f"preparation ground={prep.ground_frame_note!r} origins={prep.auto_origin_notes!r}")
+        if args.snapshot:
+            sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+            from tools.sync_snapshot import write_snapshot
+            write_snapshot(prep, args.snapshot, source_name=blend_path.name)
     build_s = time.perf_counter() - build_t0
     log()
     log(f"build_sync_problem_s={build_s:.2f}")
@@ -438,16 +456,7 @@ def main(argv: list[str]) -> int:
     log("=== solve_landmark_sync ===")
     solve_t0 = time.perf_counter()
     try:
-        result = sync_module.solve_landmark_sync(
-            matches,
-            observations,
-            anchor_id=anchor.name,
-            known_world=known_world,
-            line_observations=line_observations,
-            known_lines=known_lines,
-            parallel_pairs=parallel,
-            **scene.collect_sync_solve_kwargs(bpy.context),
-        )
+        result = sync_module.solve_landmark_sync(**prep.solver_kwargs(), use_pose_cache=True)
         solve_s = time.perf_counter() - solve_t0
         log(f"success={result.success}")
         log(f"message={result.message}")
@@ -466,16 +475,9 @@ def main(argv: list[str]) -> int:
         if args.leave_one_out:
             leave_t0 = time.perf_counter()
             leave_report = sync_module.leave_one_out_landmark_report(
-                matches,
-                observations,
-                anchor_id=anchor.name,
-                known_world=known_world,
-                line_observations=line_observations,
-                known_lines=known_lines,
-                parallel_pairs=parallel,
+                **prep.leave_one_out_kwargs(),
                 top_k=5,
                 baseline=result,
-                **scene.collect_sync_solve_kwargs(bpy.context),
             )
             leave_s = time.perf_counter() - leave_t0
             log(f"leave_one_out_s={leave_s:.2f}")

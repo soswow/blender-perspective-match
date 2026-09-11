@@ -12,6 +12,7 @@ from bpy_extras import view3d_utils
 from mathutils import Matrix, Quaternion, Vector
 
 from .. import core, properties
+from ..core.sync.request import SyncSolveRequest
 from .landmark_selection import (
     LANDMARK_HELPER_ID_KEY,
     landmark_index_for_helper,
@@ -3549,36 +3550,19 @@ def _apply_sync_landmark_diagnostics(context: bpy.types.Context, result) -> None
         landmark.rmse_px = float(rmse) if rmse is not None else 0.0
 
 
-@dataclass
-class DiagnoseSyncPrep:
-    """bpy-free inputs plus main-thread notes for a Diagnose worker."""
+@dataclass(kw_only=True)
+class DiagnoseSyncPrep(SyncSolveRequest):
+    """Complete Sync request plus main-thread preparation notes."""
 
-    matches: list
-    observations: list
-    known_world: dict
-    line_observations: list
-    known_lines: dict
-    parallel_pairs: list
-    anchor_id: str
     ground_frame_note: str
     auto_origin_notes: list[str]
     warnings: list[str]
     skipped_matches: int
     excluded_landmarks: int
-    lock_rotation: bool
-    lock_translation: bool
-    fixed_similarities: dict
-    ground_slack: float
-    known_3d_slack: float
-    location_match_ids: set
-    readonly_match_ids: set
-    mirror_pairs: list
-    mirror_plane: tuple | None
-    mirror_slack: float
 
 
 def prepare_diagnose_sync(context: bpy.types.Context) -> DiagnoseSyncPrep:
-    """Validate Diagnose and copy all bpy-owned inputs on the main thread."""
+    """Prepare Solve Sync/Diagnose inputs, including automatic ground/origin setup."""
     space = properties.workspace(context)
     anchor = properties.anchor_root(context)
     if anchor is None:
@@ -3642,24 +3626,8 @@ def run_diagnose_sync(
             progress_callback(0, total_steps, label)
 
     result = sync_module.solve_landmark_sync(
-        prep.matches,
-        prep.observations,
-        anchor_id=prep.anchor_id,
-        known_world=prep.known_world,
-        line_observations=prep.line_observations,
-        known_lines=prep.known_lines,
-        parallel_pairs=prep.parallel_pairs,
-        fixed_similarities=prep.fixed_similarities,
-        lock_rotation=prep.lock_rotation,
-        lock_translation=prep.lock_translation,
+        **prep.solver_kwargs(),
         use_pose_cache=True,
-        ground_slack=prep.ground_slack,
-        known_3d_slack=prep.known_3d_slack,
-        location_match_ids=prep.location_match_ids,
-        readonly_match_ids=prep.readonly_match_ids,
-        mirror_pairs=prep.mirror_pairs,
-        mirror_plane=prep.mirror_plane,
-        mirror_slack=prep.mirror_slack,
         cancel_check=cancel_check,
         progress_callback=_base_progress,
     )
@@ -3671,25 +3639,9 @@ def run_diagnose_sync(
                 progress_callback(1 + step, 1 + total, label)
 
         result.leave_one_out = sync_module.leave_one_out_landmark_report(
-            prep.matches,
-            prep.observations,
-            anchor_id=prep.anchor_id,
-            known_world=prep.known_world,
-            line_observations=prep.line_observations,
-            known_lines=prep.known_lines,
-            parallel_pairs=prep.parallel_pairs,
-            fixed_similarities=prep.fixed_similarities,
+            **prep.leave_one_out_kwargs(),
             top_k=5,
             baseline=result if result.per_landmark_rmse_px else None,
-            lock_rotation=prep.lock_rotation,
-            lock_translation=prep.lock_translation,
-            ground_slack=prep.ground_slack,
-            known_3d_slack=prep.known_3d_slack,
-            location_match_ids=prep.location_match_ids,
-            readonly_match_ids=prep.readonly_match_ids,
-            mirror_pairs=prep.mirror_pairs,
-            mirror_plane=prep.mirror_plane,
-            mirror_slack=prep.mirror_slack,
             cancel_check=cancel_check,
             progress_callback=_leave_one_out_progress,
         )
@@ -3728,71 +3680,42 @@ def diagnose_sync(context: bpy.types.Context):
     return apply_diagnose_sync_result(context, prep, result)
 
 
+class SyncSolveRejected(ValueError):
+    """An intentional numerical refusal, carrying its diagnostics for scripts."""
+
+    def __init__(self, result):
+        super().__init__(result.message)
+        self.result = result
+
+
 def solve_and_apply_sync(context: bpy.types.Context):
     """Run landmark sync and write similarities onto match root Empties."""
     from ..core import sync as sync_module
 
     space = properties.workspace(context)
     anchor = properties.anchor_root(context)
-    if anchor is None:
-        raise ValueError("Choose an anchor match first")
-
-    ground_frame_note = ensure_ground_frame_from_landmarks(context)
-
-    # Matches without Pick Origin use a default eye-height private frame; that
-    # scale often disagrees with the anchor and sync absorbs it as a bad tilt.
-    # Seed origin from the earliest On Ground pick before building the problem.
-    auto_origin_notes = ensure_origins_from_ground_landmarks(context)
-    warnings = known_anchor_pick_warnings(context)
-    matches, observations, known_world, line_observations, known_lines, parallel_pairs = (
-        build_sync_problem(context)
-    )
-    if not getattr(anchor.pm_session, "sync_enabled", True):
-        raise ValueError(
-            "Anchor match has sync disabled — enable it or choose another anchor"
-        )
-    if not matches:
-        raise ValueError("No sync-enabled solved matches available")
-    if len(matches) < 2:
-        raise ValueError("Need at least two sync-enabled matches")
-    if anchor.name not in {item.match_id for item in matches}:
-        raise ValueError("Anchor match needs a solved camera")
-
+    prep = prepare_diagnose_sync(context)
+    matches = prep.matches
     result = sync_module.solve_landmark_sync(
-        matches,
-        observations,
-        anchor_id=anchor.name,
-        known_world=known_world,
-        line_observations=line_observations,
-        known_lines=known_lines,
-        parallel_pairs=parallel_pairs,
+        **prep.solver_kwargs(),
         use_pose_cache=True,
-        **collect_sync_solve_kwargs(context),
     )
     _apply_sync_landmark_diagnostics(context, result)
     message = result.message
-    if ground_frame_note:
-        message = ground_frame_note + " · " + message
-    if auto_origin_notes:
-        message = "Auto origin: " + ", ".join(auto_origin_notes) + " · " + message
-    skipped_matches = sum(
-        1
-        for root in properties.iter_match_roots()
-        if not getattr(root.pm_session, "sync_enabled", True)
-    )
-    if skipped_matches:
-        message = f"{skipped_matches} match(es) sync-disabled · " + message
-    excluded = sum(
-        1 for landmark in space.landmarks if not getattr(landmark, "use_in_sync", True)
-    )
-    if excluded:
-        message = f"{excluded} landmark(s) excluded · " + message
-    if warnings:
-        message = "Known 3D warn: " + "; ".join(warnings[:2]) + " | " + message
+    if prep.ground_frame_note:
+        message = prep.ground_frame_note + " · " + message
+    if prep.auto_origin_notes:
+        message = "Auto origin: " + ", ".join(prep.auto_origin_notes) + " · " + message
+    if prep.skipped_matches:
+        message = f"{prep.skipped_matches} match(es) sync-disabled · " + message
+    if prep.excluded_landmarks:
+        message = f"{prep.excluded_landmarks} landmark(s) excluded · " + message
+    if prep.warnings:
+        message = "Known 3D warn: " + "; ".join(prep.warnings[:2]) + " | " + message
     space.sync_status = message
     result.message = message
     if not result.success:
-        raise ValueError(message)
+        raise SyncSolveRejected(result)
 
     root_by_name = {root.name: root for root in properties.iter_match_roots()}
     record_sync_last_ok(set(result.similarities))

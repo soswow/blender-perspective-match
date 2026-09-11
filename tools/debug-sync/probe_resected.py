@@ -69,29 +69,19 @@ def main(argv: list[str]) -> int:
     _load_extension()
     bpy.ops.wm.open_mainfile(filepath=str(blend_path))
 
-    from match_perspective import properties, scene
+    from match_perspective import scene
     from match_perspective.core import sync as sync_module
 
-    matches, observations, known_world, line_observations, known_lines, parallel = (
-        scene.build_sync_problem(bpy.context)
-    )
+    prep = scene.prepare_diagnose_sync(bpy.context)
+    matches, observations = prep.matches, prep.observations
     match_map = {item.match_id: item for item in matches}
     space = bpy.context.scene.match_perspective
     names = {landmark.item_id: landmark.name for landmark in space.landmarks}
     on_ground = {
         landmark.item_id: bool(landmark.on_ground) for landmark in space.landmarks
     }
-    anchor = properties.anchor_root(bpy.context)
-    result = sync_module.solve_landmark_sync(
-        matches,
-        observations,
-        anchor_id=anchor.name,
-        known_world=known_world,
-        line_observations=line_observations,
-        known_lines=known_lines,
-        parallel_pairs=parallel,
-            **scene.collect_sync_solve_kwargs(bpy.context),
-    )
+    print("prepared_request_sha256=" + prep.to_record()["sha256"])
+    result = sync_module.solve_landmark_sync(**prep.solver_kwargs(), use_pose_cache=True)
     print(result.message)
     print(f"per_match={ {k: round(v, 1) for k, v in result.per_match_rmse_px.items()} }")
 

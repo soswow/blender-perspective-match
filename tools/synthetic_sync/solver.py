@@ -57,10 +57,13 @@ def solver_arguments(request: dict) -> dict:
         arguments[key] = deepcopy(request[key])
     for key in ("mirror_pairs", "parallel_pairs"):
         arguments[key] = [tuple(pair) for pair in arguments[key]]
-    if request.get("location_match_ids") is not None:
-        arguments["location_match_ids"] = set(request["location_match_ids"])
-    if request.get("readonly_match_ids") is not None:
-        arguments["readonly_match_ids"] = set(request["readonly_match_ids"])
+    # Synthetic cameras default to the UI's Solve role. Forward the same explicit
+    # sets as scene preparation, including its recovered-camera 3D thaw stage.
+    location_ids = request.get("location_match_ids")
+    arguments["location_match_ids"] = set(
+        (camera["id"] for camera in request["cameras"]) if location_ids is None else location_ids
+    )
+    arguments["readonly_match_ids"] = set(request.get("readonly_match_ids") or [])
     return arguments
 
 

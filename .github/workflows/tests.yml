@@ -83,6 +83,14 @@ jobs:
               --case "${RUNNER_TEMP}/synthetic-blender/constraints/constraint-${family}-0.json" \
               --out "${RUNNER_TEMP}/synthetic-blender/constraint-${family}" --roundtrip --drop-constraint
           done
+      - name: Product, probes and captured requests agree on live state
+        run: |
+          blender --factory-startup --disable-autoexec -b --python-exit-code 1 \
+            --python tools/synthetic_sync/verify_requests.py -- \
+            --out "${RUNNER_TEMP}/synthetic-blender/request-parity"
+          python3 tools/sync_snapshot.py replay \
+            "${RUNNER_TEMP}/synthetic-blender/request-parity/constraints/request.json" \
+            --out "${RUNNER_TEMP}/synthetic-blender/request-replay"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

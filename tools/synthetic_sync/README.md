@@ -55,8 +55,8 @@ python3 tools/synthetic_sync/run.py --case /tmp/pm-noisy/overhead-0.json --out /
 ```
 
 Use a new output directory. The command creates `input.blend`, `solved.blend`,
-metrics, a portable oracle report, and the extension's own `product-report.html`
-for successful solves. `--roundtrip` opens **input.blend** in another
+metrics, the complete collected numerical `request.json`, a portable oracle
+report, and the extension's own `product-report.html`. `--roundtrip` opens **input.blend** in another
 factory-startup Blender process and repeats the solve in `reopened/`.
 `--render` adds PNG reference images and packs them in the generated files;
 without it, packed blank images supply the actual image datablocks required by
@@ -148,6 +148,28 @@ request format and Blender collection comparison together; do not add truth as
 a solver shortcut.
 
 ## Maintenance and CI
+
+### Product/probe request parity
+
+`verify_requests.py` runs inside factory-startup Blender and compares Solve Sync,
+Diagnose and all three existing solving probes against restored `SyncSolveRequest`
+snapshots. It covers nonzero slack, imperfect metric references, a live pose lock,
+global locks, Fit Only participation, confidence versus outlier protection, and automatic origin setup.
+Each state runs in a fresh process. This validates collection and replay, not a
+general accuracy contract for biased references. A deliberately injected
+`ValueError` must fail the harness rather than masquerade as an expected refusal.
+
+See [capture/replay commands and limitations](../debug-sync/README.md). The
+production snapshot format is distinct from the synthetic case format: it can
+represent real collected calibration and weights, but has no truth or accuracy
+expectation. Generated Blender runs now retain both formats.
+
+Synthetic cameras default to the UI's **Solve** role. Both numerical and Blender
+runners forward explicit `location_match_ids` and `readonly_match_ids`; optional
+case fields can specify Fit Only participation. This matters because recovered
+cameras allowed to move 3D have an additional thaw stage. An empty membership
+list is distinct from an omitted field. The Blender runner verifies the collected
+sets and rejects combinations that its three UI roles cannot represent.
 
 ### Constraint contribution checks
 
