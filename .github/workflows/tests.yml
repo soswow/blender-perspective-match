@@ -109,6 +109,14 @@ jobs:
               --family overhead --state "$state" \
               --out "${RUNNER_TEMP}/synthetic-blender/origin-${state}" --roundtrip
           done
+      - name: Ground scale and participation propagate through sparse camera graphs
+        run: |
+          python3 tools/synthetic_sync/graphs.py --out "${RUNNER_TEMP}/synthetic-blender/graphs"
+          blender --factory-startup --disable-autoexec -b --python-exit-code 1 \
+            --python tools/synthetic_sync/blender_case.py -- \
+            --case "${RUNNER_TEMP}/synthetic-blender/graphs/graph-chain-0.json" \
+            --role-case "${RUNNER_TEMP}/synthetic-blender/graphs/graph-fit_only_bridge-0.json" \
+            --out "${RUNNER_TEMP}/synthetic-blender/graph-role-change" --roundtrip
       - uses: actions/upload-artifact@v4
         if: always()
         with:

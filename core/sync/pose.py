@@ -1230,6 +1230,35 @@ def _metric_landmarks(
     return landmarks
 
 
+def _posed_ground_landmarks(
+    observations_by_landmark: dict[str, list[SyncObservation]],
+    similarities: dict[str, SimilarityTransform],
+    matches: dict[str, SyncMatchInput],
+    *,
+    location_match_ids: set[str] | None = None,
+) -> dict[str, np.ndarray]:
+    """Seed shared Z=0 hits from registered cameras permitted to supply 3D.
+
+    These are ground hypotheses, not Known 3D pins; preserve existing metric
+    references and check agreement with triangulation before fixing them in BA.
+    """
+    landmarks: dict[str, np.ndarray] = {}
+    for match_id in sorted(similarities):
+        if location_match_ids is not None and match_id not in location_match_ids:
+            continue
+        similarity = similarities[match_id]
+        calibration = matches[match_id].calibration
+        shared = replace(calibration,
+            camera_center=similarity.transform_point(calibration.camera_center),
+            rotation_w2c=calibration.rotation_w2c @ similarity.rotation.T,
+        )
+        for landmark_id, point in _anchor_ground_landmarks(
+            observations_by_landmark, match_id, shared
+        ).items():
+            landmarks.setdefault(landmark_id, point)
+    return landmarks
+
+
 def _ground_metric_agrees(
     metric_point: np.ndarray,
     triangulated: np.ndarray,
@@ -3611,6 +3640,7 @@ def _register_from_relative_pose(
     lock_translation: bool = False,
     use_pose_cache: bool = False,
     cancel_check: Callable[[], bool] | None = None,
+    location_match_ids: set[str] | None = None,
 ) -> tuple[dict[str, SimilarityTransform] | None, str]:
     """Register free matches vs anchor, then bridge via triangulated landmarks."""
     _check_cancelled(cancel_check)
@@ -3739,6 +3769,11 @@ def _register_from_relative_pose(
                 known_world,
             )
         )
+        for landmark_id, point in _posed_ground_landmarks(
+            observations_by_landmark, similarities, matches,
+            location_match_ids=location_match_ids,
+        ).items():
+            landmarks.setdefault(landmark_id, point)
         pending_now = list(pending)
         relatives_by_match: dict[str, dict[str, SimilarityTransform | None]] = {
             match_id: {} for match_id in pending_now

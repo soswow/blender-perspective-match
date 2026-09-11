@@ -53,6 +53,7 @@ from .pose import (
     _landmark_names,
     _metric_landmarks,
     _metric_pnp_correspondences,
+    _posed_ground_landmarks,
     _register_from_relative_pose,
     _relative_pose_from_correspondences,
     _reprojection_errors_for_similarity,
@@ -469,6 +470,11 @@ class _SolveState:
             self.match_map[self.anchor_id].calibration,
             self.known_world,
         )
+        for landmark_id, point in _posed_ground_landmarks(
+            self.observations_by_landmark, self.similarities, self.match_map,
+            location_match_ids=self.location_match_ids,
+        ).items():
+            metric_points.setdefault(landmark_id, point)
         consistent = _consistent_metric_landmarks(
             metric_points,
             rebuilt,
@@ -1422,6 +1428,7 @@ def solve_landmark_sync(
         lock_translation=lock_translation,
         use_pose_cache=use_pose_cache,
         cancel_check=cancel_check,
+        location_match_ids=resolved_location,
     )
     if similarities is None:
         return SyncSolveResult(

@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Sync carries ground scale through overlapping cameras even when later ground landmarks are absent from the Anchor; Fit Only cameras can fit this ground without extending reconstruction.
 - Fit Only cameras no longer seed or reshape mirrored landmarks, or suppress weak-line warnings with strokes excluded from reconstruction.
 
 ### Added

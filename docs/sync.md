@@ -17,6 +17,15 @@ Why not “any corresponding points”? Photogrammetry / SfM solves relative ori
 
 A match does not need five landmarks in common with the anchor itself. Sync can register it through any already-registered match with at least five well-spread shared point landmarks, then carry that pose into the anchor world. This also covers cameras on the opposite side of a surface — for example, a camera below the ground plane looking upward. The strong bridge chooses the orientation / hemisphere, while all registered views choose its otherwise-ambiguous baseline scale and refinement. If that cheap two-view pose disagrees with the rest of the graph, Sync keeps another candidate that still fits in pixels. Joint adjustment still uses sparse observations elsewhere and can downweight them as outliers.
 
+Ground landmarks need not all appear in the Anchor. Once a camera is registered,
+its **On Ground** picks can meet the shared Z=0 plane and supply scale to the next
+overlapping camera. This requires **Solve** or **Lock Pose** participation. A
+**Fit Only** camera can use ground reconstructed by those cameras to find its
+pose, but its own picks cannot extend the 3D graph to another still. The ground
+must represent the same physical plane throughout the set. These raycasts seed
+the solve; Known 3D references keep precedence, and triangulation agreement and
+Ground Slack still control how the ground positions are adjusted.
+
 ### Calibrated ground-only workflow (no VP lines)
 
 When the anchor has no usable VP solve, **Solve Sync** and **Diagnose** can initialize its ground frame directly from calibrated views:

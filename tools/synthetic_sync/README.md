@@ -311,6 +311,42 @@ checkout replay is an on-demand investigation, not a dependency of normal CI.
 Future cases should expand the predicate only after establishing what evidence
 must remain to preserve their meaning.
 
+### Sparse five-camera graphs
+
+```sh
+python3 tools/synthetic_sync/graphs.py --out /tmp/pm-graphs
+python3 tools/synthetic_sync/graphs.py --seed 1 --count 3 --out /tmp/pm-graph-sweep
+```
+
+Five cameras circle the asymmetric object with different known lenses. Each
+neighbor pair has eight visible surface points and four visible ground points;
+those landmarks have no picks in other cameras. The ground plane ties successive
+pair scales to the anchor frame. `chain`, `loop`, `broken_link`, `fit_only_bridge`
+and `locked_bridge` specify the intended participants before solving. The broken
+link leaves two cameras disconnected. The Fit Only middle view can fit ground
+from the preceding Solve view, but must not extend reconstruction into the tail.
+The locked middle view can supply that ground while keeping its exact pose.
+
+Every result checks withheld object projections, pose, required/excluded cameras
+and reconstructed point positions. A point needs two permitted posed views, or
+one permitted posed ground view meeting the shared plane; unsupported points
+must stay absent. `--role-case` on the Blender runner checks the chain → Fit Only
+transition, including disappearance of unsupported helpers, and can replay it
+after reopening. CI runs the five exact controls and this Blender transition.
+
+The initial chain exposed a confirmed defect: zero fitted-pick error accompanied
+hundreds of pixels of withheld error and ground landmarks above the plane.
+Ground was seeded only from the anchor, leaving later pair scales to a heuristic.
+Ground rays from registered cameras allowed to supply 3D now seed subsequent
+poses and reconstruction. See [the measurements and remaining gaps](graph-results.md).
+The frozen `cases/ground-chain.json` protects the original failing evidence.
+
+`--noise-px 0.3 --count 2` is a small exploratory sweep, with the same provisional
+accuracy limits as the base corpus. A flag is a measurement for investigation,
+not automatically a solver defect. This graph experiment does not test arbitrary
+camera counts, anchorless components, graphs lacking a metric connection,
+incorrect correspondences or biased soft constraints.
+
 ### Evidence-placement follow-up
 
 ```sh

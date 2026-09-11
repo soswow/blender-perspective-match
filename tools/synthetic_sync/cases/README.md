@@ -38,3 +38,12 @@ and ownership contracts after `b902124`. They also pass generated Blender
 creation/application and fresh-process save/reopen checks. These are passing
 regressions in `tests/test_synthetic_reduce.py`, unlike the exploratory overhead
 flags above. See [the reducer protocol](../README.md#reducing-a-confirmed-regression).
+
+`ground-chain.json` freezes the exact five-camera chain that exposed missing
+propagation of ground scale beyond anchor-visible landmarks. On `34efe80`, the
+solver fits every pick to numerical precision but misplaces later cameras and
+raises their ground points above Z=0. The independent withheld check fails by
+up to about 593 px RMS. A Fit Only middle-camera variant of this same input also
+fails to register despite four ground observations supported by the preceding
+posed view. `tests/test_synthetic_graphs.py` checks both regressions; the separate
+graph generator adds loop, broken-link and locked-bridge controls.

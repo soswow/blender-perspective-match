@@ -6,6 +6,7 @@ falls back to a similarity with free scale when a rigid pose cannot lock.
 
 Pipeline (keep AGENTS.md in sync if this changes): register pairwise
 (strongest-pair seed, then easiest-next camera; Fit Only stills skipped)
+with shared-ground scale from registered cameras allowed to contribute 3D
 → peel cameras above ``ACCEPT_RMSE_PX`` → joint BA (Fit Only 2D pulls pose,
 not 3D) → peel again → resect skipped and Fit Only stills against the
 frozen 3D (ground tags if off-plane picks disagree; frozen Is Mirror Of

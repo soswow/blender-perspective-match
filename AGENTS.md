@@ -59,7 +59,7 @@ Do not special-case a user `.blend` (filename, match names, landmark names, or t
 | `types.py` | `SimilarityTransform`, observations, `SyncSolveResult` |
 | `request.py` | Complete `SyncSolveRequest`, versioned JSON capture/restore and request fingerprint |
 | `projection.py` | Project, rays, triangulate, image-line geometry |
-| `pose.py` | Essential / PnP / IPPE / pairwise register |
+| `pose.py` | Essential / PnP / IPPE / pairwise register; shared-ground seeds from registered location-enabled cameras |
 | `ground.py` | Calibrated On Ground plane init (`estimate_anchor_ground_plane`) |
 | `lines.py` | Free / Known 3D lines, Is-Parallel-To, supporting-plane angle diagnostics |
 | `mirrors.py` | Point/line Is-Mirror-Of pairs across one scene plane |
@@ -83,6 +83,7 @@ Headless helpers under `tools/` (and `scripts/validate_addon.py`) for investigat
 - `tools/synthetic_sync/roles.py` — Fit Only constraint cases and paired stroke controls; the Blender runner's `--role-case` option checks a live role change and stale-helper cleanup against a second exact case.
 - `tools/synthetic_sync/preparation.py` — generated preset/missing/locked-origin controls with unchanged independent truth, prepared-request capture, evaluated Blender camera checks and raw-input save/reopen replay.
 - `tools/synthetic_sync/reduce.py` — bounded reduction of named forbidden-geometry failures against separate old/fixed checkouts; preserves references, roles and independent accuracy checks, with exact candidate inputs and cold replay logs.
+- `tools/synthetic_sync/graphs.py` — five-camera chain/loop, disconnected-link and Fit Only/locked bridge cases with physically visible edge-local picks, ground scale and withheld object/landmark checks.
 
 ## Do not
 
