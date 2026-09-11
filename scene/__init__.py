@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Callable
 
@@ -3845,37 +3845,13 @@ def refine_lenses_and_sync(context: bpy.types.Context):
     Blocking convenience wrapper — the UI operator runs this work in a thread.
     """
     prep = prepare_lens_refine(context)
-    from ..core import lens_refine
-
-    refine_result = lens_refine.refine_lenses_from_landmarks(
-        prep.lens_inputs,
-        prep.observations,
-        anchor_id=prep.anchor_id,
-        known_world=prep.known_world,
-        line_observations=prep.line_observations,
-        known_lines=prep.known_lines,
-        parallel_pairs=prep.parallel_pairs,
-        fx_span=prep.fx_span,
-        lock_rotation=prep.lock_rotation,
-        lock_translation=prep.lock_translation,
-        fixed_similarities=prep.fixed_similarities,
-        share_lens=prep.share_lens,
-        ground_slack=prep.ground_slack,
-        known_3d_slack=prep.known_3d_slack,
-        location_match_ids=prep.location_match_ids,
-        readonly_match_ids=prep.readonly_match_ids,
-        mirror_pairs=prep.mirror_pairs,
-        mirror_plane=prep.mirror_plane,
-        mirror_slack=prep.mirror_slack,
-        plane_groups=prep.plane_groups,
-        plane_slack=prep.plane_slack,
-    )
+    refine_result = run_lens_refine(prep)
     return apply_lens_refine_result(context, refine_result, prep.root_by_name)
 
 
 @dataclass
 class LensRefinePrep:
-    """bpy-free inputs gathered on the main thread for a lens refine job."""
+    """Numerical lens inputs plus main-thread apply targets."""
 
     lens_inputs: list
     observations: list
@@ -3899,6 +3875,27 @@ class LensRefinePrep:
     mirror_slack: float | None = None
     plane_groups: list | None = None
     plane_slack: float | None = None
+
+    def solver_kwargs(self) -> dict:
+        """Forward every numerical field, keeping Blender apply targets out."""
+        arguments = {item.name: getattr(self, item.name) for item in fields(LensRefinePrep)
+                     if item.name != "root_by_name"}
+        arguments["matches"] = arguments.pop("lens_inputs")
+        return arguments
+
+
+def run_lens_refine(
+    prep: LensRefinePrep,
+    *,
+    cancel_check: Callable[[], bool] | None = None,
+    progress_callback: Callable[[int, int, str], None] | None = None,
+):
+    """Run the same numerical lens search for blocking and background callers."""
+    from ..core import lens_refine
+
+    return lens_refine.refine_lenses_from_landmarks(
+        **prep.solver_kwargs(), cancel_check=cancel_check, progress_callback=progress_callback,
+    )
 
 
 def prepare_lens_refine(context: bpy.types.Context) -> LensRefinePrep:

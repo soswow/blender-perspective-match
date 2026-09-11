@@ -272,6 +272,29 @@ withheld RMS was below 0.00007 px. No product change was justified by this pilot
 These checks do not cover missing anchor origins (which can redefine the world
 frame), calibrated-ground initialization, image-coordinate changes, or undo/redo.
 
+### Background job input parity
+
+```sh
+"/Applications/Blender 5.1.app/Contents/MacOS/blender" \
+  --factory-startup --disable-autoexec -b --python-exit-code 1 \
+  --python tools/synthetic_sync/verify_jobs.py -- --out /tmp/pm-job-inputs
+```
+
+The generated state combines nonzero slack, plane and mirror constraints, Known
+3D, a locked camera and Fit Only. It compares every prepared numerical field at
+the actual Refine Lenses entry for blocking and sidebar worker calls, in both
+Same Lens and per-match modes. It also checks cancellation/progress forwarding.
+All four captured inputs are saved as JSON. The check substitutes the numerical
+search and modal window-manager plumbing; it executes the real worker callback
+synchronously, without opening a report or relying on timing.
+
+This reproduced background omission of `plane_groups` and `plane_slack` while
+the blocking path retained both. `LensRefinePrep.solver_kwargs()` and
+`scene.run_lens_refine()` now own forwarding for both paths. Comparing only the
+shared preparation had missed this duplicate call site. This is a routing
+regression, not a benchmark of lens accuracy, live UI scheduling or cancellation
+latency. Scene edits during a job remain a separate lifecycle question.
+
 ### Reducing a confirmed regression
 
 ```sh

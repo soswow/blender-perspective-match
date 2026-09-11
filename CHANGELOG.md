@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Background Refine Lenses now retains Is in Plane groups and Plane Slack, matching the blocking search and subsequent Sync solve.
 - Hard shared planes now constrain mirrored line reconstruction and count toward line support when independently established by other geometry.
 - Is in Plane no longer moves hard On Ground landmarks off the floor while initializing a Free plane; Ground Slack still permits later refinement.
 - Solve Sync keeps previously solved geometry when a recovered camera's proposed 3D update would spoil the existing camera fits, while retaining soft Known 3D and plane constraints during refinement.

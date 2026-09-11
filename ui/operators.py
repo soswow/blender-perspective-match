@@ -3712,26 +3712,8 @@ class PM_OT_refine_lenses(bpy.types.Operator):
 
         def _worker() -> None:
             try:
-                refine_result = lens_refine.refine_lenses_from_landmarks(
-                    prep.lens_inputs,
-                    prep.observations,
-                    anchor_id=prep.anchor_id,
-                    known_world=prep.known_world,
-                    line_observations=prep.line_observations,
-                    known_lines=prep.known_lines,
-                    parallel_pairs=prep.parallel_pairs,
-                    fx_span=prep.fx_span,
-                    lock_rotation=prep.lock_rotation,
-                    lock_translation=prep.lock_translation,
-                    fixed_similarities=prep.fixed_similarities,
-                    share_lens=prep.share_lens,
-                    ground_slack=prep.ground_slack,
-                    known_3d_slack=prep.known_3d_slack,
-                    location_match_ids=prep.location_match_ids,
-                    readonly_match_ids=prep.readonly_match_ids,
-                    mirror_pairs=prep.mirror_pairs,
-                    mirror_plane=prep.mirror_plane,
-                    mirror_slack=prep.mirror_slack,
+                refine_result = scene.run_lens_refine(
+                    prep,
                     cancel_check=cancel_event.is_set,
                     progress_callback=_on_progress,
                 )
