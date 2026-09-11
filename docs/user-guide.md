@@ -94,4 +94,4 @@ View lighting applies display-only exposure/contrast to `post-processed/<stem>-p
 - 1-point perspective cannot determine focal length from VP geometry alone.
 - Distortion: imported OpenCV Brown–Conrady from ROS YAML, or one Fitzgibbon radial parameter estimated from VP lines — not Blender's full tracking-camera lens models.
 - Cropped, anamorphic, curved, or CGI plates can require manual FOV and principal-point judgment.
-- Sync absolute baseline vs the metric anchor world needs Known 3D, On Ground, or the depth heuristic. See [sync.md](sync.md).
+- Known 3D or On Ground links Sync baseline scale to the anchor world. Without a metric reference, a depth heuristic chooses a plausible size without establishing physical dimensions. Unknown planes and parallel directions do not supply that missing size. See [sync.md](sync.md).

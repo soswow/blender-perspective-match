@@ -2396,28 +2396,26 @@ def solve_landmark_sync(
         message += f" · {len(state.fixed_match_ids)} pose locked"
     if state.readonly_match_ids:
         message += f" · {len(state.readonly_match_ids)} fit only"
-    scale_bits = []
+    constraint_bits = []
     if known_count:
-        scale_bits.append(f"{known_count} known 3D")
+        constraint_bits.append(f"{known_count} known 3D")
     if known_line_count:
-        scale_bits.append(f"{known_line_count} known lines")
+        constraint_bits.append(f"{known_line_count} known lines")
     if ground_count:
-        scale_bits.append(f"{ground_count} ground")
+        constraint_bits.append(f"{ground_count} ground")
     if free_line_count:
-        scale_bits.append(f"{free_line_count} free lines")
+        constraint_bits.append(f"{free_line_count} free lines")
     if parallel_pairs:
-        scale_bits.append(f"{len(parallel_pairs)} parallel")
+        constraint_bits.append(f"{len(parallel_pairs)} parallel")
     if mirror_pairs:
-        scale_bits.append(f"{len(mirror_pairs)} mirror")
+        constraint_bits.append(f"{len(mirror_pairs)} mirror")
     plane_count = active_plane_group_count(
         plane_groups, landmarks, line_segments
     )
     if plane_count:
-        scale_bits.append(f"{plane_count} plane")
-    if scale_bits:
-        message += " · scale from " + " + ".join(scale_bits)
-    else:
-        message += " · scale from depth heuristic"
+        constraint_bits.append(f"{plane_count} plane")
+    if constraint_bits:
+        message += " · constraints: " + " + ".join(constraint_bits)
     if did_bundle_adjust:
         message += " · joint BA"
         if froze_structure:
