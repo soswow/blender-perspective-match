@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack
 from copy import deepcopy
 import hashlib
 import inspect
@@ -205,7 +206,7 @@ def verify_diagnose_ownership(case, out):
         raise AssertionError("; ".join(violations))
 
 
-def verify_lens_ownership(case, out):
+def verify_lens_ownership(case, out, *, apply_failures=False):
     """Replay one real lens-search result across controlled edits and actual apply."""
     from match_perspective import properties, scene
     from match_perspective.core.sync.request import json_values
@@ -227,8 +228,10 @@ def verify_lens_ownership(case, out):
     (out / "refined-calibrations.json").write_text(json.dumps(json_values(refined.calibrations), indent=2)+"\n")
     results, violations = [], []
     controls = {"unchanged", "unrelated_object", "active_match"}
-    for action in ("unchanged", "unrelated_object", "active_match", "plane", "role", "pick", "focal",
-                   "search", "origin", "vp_stroke", "live_camera", "root_pose", "missing_camera", "other_scene"):
+    actions = (("unchanged", "mid_camera_error", "late_sync_error", "after_sync_error", "after_plate_error", "solver_refusal") if apply_failures else
+               ("unchanged", "unrelated_object", "active_match", "plane", "role", "pick", "focal",
+                "search", "origin", "vp_stroke", "live_camera", "root_pose", "missing_camera", "other_scene"))
+    for action in actions:
         bpy.ops.wm.open_mainfile(filepath=str(source), load_ui=False)
         workspace = properties.workspace(bpy.context)
         root = next(item for item in properties.iter_match_roots() if item.name == "view_1")
@@ -236,6 +239,15 @@ def verify_lens_ownership(case, out):
         context = HeadlessContext()
         operator = SimpleNamespace(_timer=None, report=lambda *_: None)
         pending = []
+        if apply_failures:
+            settings = root.pm_session
+            cached = bpy.data.images.new("Generated cached plate", width=settings.image_width, height=settings.image_height)
+            settings.undistorted_image = cached
+            settings.undistorted_width = settings.image_width
+            settings.undistorted_height = settings.image_height
+            settings.undistorted_path = str((out / "generated-cache.png").resolve())
+            settings.view_undistorted = True
+            scene._apply_camera_background(settings)
 
         class DeferredWorker(InlineWorker):
             def start(self):
@@ -248,10 +260,26 @@ def verify_lens_ownership(case, out):
         def applied_state():
             return json_values(dict(
                 cameras={item.name: scene.calibration_from_settings(item.pm_session) for item in properties.iter_match_roots()},
-                camera_objects={item.name: dict(lens=item.pm_session.camera_object.data.lens,
+                camera_objects={item.name: dict(
+                                data={key: getattr(item.pm_session.camera_object.data, key) for key in (
+                                    "type", "lens", "sensor_fit", "sensor_width", "sensor_height", "shift_x", "shift_y")},
                                 matrix=[list(row) for row in item.pm_session.camera_object.matrix_local])
                                 if item.pm_session.camera_object is not None else None
                                 for item in properties.iter_match_roots()},
+                session_state={item.name: {key: (list(getattr(item.pm_session, key)) if key in {"origin_image", "sync_rotation", "sync_translation"}
+                    else getattr(item.pm_session, key)) for key in (
+                    "origin_is_set", "origin_image", "sync_is_applied", "sync_scale", "sync_rotation", "sync_translation",
+                    "sync_rmse_px", "sync_last_ok", "fov_xy", "fov_zy", "fov_zx", "residual_degrees", "vp_line_rms_px",
+                )} for item in properties.iter_match_roots()},
+                plates={item.name: dict(
+                    image=item.pm_session.undistorted_image.name if item.pm_session.undistorted_image else None,
+                    **{key: getattr(item.pm_session, key) for key in ("view_undistorted", "undistorted_path",
+                        "undistorted_width", "undistorted_height", "undistorted_offset_x", "undistorted_offset_y")},
+                ) for item in properties.iter_match_roots()},
+                images={item.name: item.use_fake_user for item in bpy.data.images},
+                scene_camera=context.scene.camera.name if context.scene.camera else None,
+                render_size=[context.scene.render.resolution_x, context.scene.render.resolution_y,
+                             context.scene.render.resolution_percentage],
                 transforms={item.name: [list(row) for row in item.matrix_world] for item in properties.iter_match_roots()},
                 landmarks={item.item_id: [list(item.position), list(item.position_b), item.has_position,
                            item.has_line_segment, item.rmse_px] for item in workspace.landmarks},
@@ -301,8 +329,39 @@ def verify_lens_ownership(case, out):
                 raise error
             # Valid apply invokes Solve Sync, which can prepare origins. A stale
             # result must be rejected before any such preparation or write.
-            expected_rejection = action not in controls
-            if expected_rejection:
+            expected_error = action in {"mid_camera_error", "late_sync_error", "after_sync_error", "after_plate_error"}
+            expected_partial = action == "solver_refusal"
+            expected_rejection = action not in controls and not expected_error and not expected_partial
+            injected = RuntimeError("Injected application failure")
+            if expected_error or expected_partial:
+                with ExitStack() as faults:
+                    if action == "mid_camera_error":
+                        faults.enter_context(patch.object(scene, "_update_diagnostics", side_effect=injected))
+                    elif action == "after_sync_error":
+                        original = scene.solve_and_apply_sync
+
+                        def fail_after_apply(*args, **kwargs):
+                            original(*args, **kwargs)
+                            raise injected
+
+                        faults.enter_context(patch.object(scene, "solve_and_apply_sync", side_effect=fail_after_apply))
+                    elif action == "after_plate_error":
+                        from match_perspective.scene import distortion
+                        original = distortion.rebuild_undistorted_plates
+
+                        def fail_after_plates(*args, **kwargs):
+                            original(*args, **kwargs)
+                            raise injected
+
+                        faults.enter_context(patch.object(distortion, "rebuild_undistorted_plates", side_effect=fail_after_plates))
+                    elif expected_partial:
+                        refusal = deepcopy(refined.sync_result)
+                        refusal.success, refusal.message = False, "Injected numerical refusal"
+                        faults.enter_context(patch.object(scene, "solve_and_apply_sync", side_effect=scene.SyncSolveRejected(refusal)))
+                    else:
+                        faults.enter_context(patch.object(scene, "solve_and_apply_sync", side_effect=injected))
+                    status = operators.PM_OT_refine_lenses._finish_job(operator, context, cancelled=False)
+            elif expected_rejection:
                 with patch.object(scene, "ensure_origins_from_ground_landmarks", side_effect=AssertionError("Stale apply prepared origins")) as origin_prepare:
                     status = operators.PM_OT_refine_lenses._finish_job(operator, context, cancelled=False)
                 if origin_prepare.called:
@@ -313,8 +372,15 @@ def verify_lens_ownership(case, out):
             rejected = (status == {"CANCELLED"} and before == after and failure.called
                         and isinstance(failure.call_args.args[1], scene.StaleSyncResult))
             passed = rejected if expected_rejection else status == {"FINISHED"}
+            if expected_error:
+                passed = (status == {"CANCELLED"} and before == after and failure.called
+                          and failure.call_args.args[1] is injected
+                          and workspace.lens_refine_progress == 0.0
+                          and "restored" in workspace.sync_status)
+            if expected_partial:
+                passed = passed and before != after and "Injected numerical refusal" in workspace.sync_status
             worst = None
-            if not expected_rejection:
+            if action in controls:
                 errors = []
                 for camera in case["truth"]["cameras"]:
                     points = [p["position"] for p in case["truth"]["checks"] if camera["id"] in p["views"]]
@@ -342,12 +408,15 @@ def main():
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--ownership", action="store_true", help="Check Diagnose results after controlled evidence edits")
     parser.add_argument("--lens-ownership", action="store_true", help="Check real lens-result application after controlled edits")
+    parser.add_argument("--apply-failures", action="store_true", help="With --lens-ownership, check controlled failures during application")
     args = parser.parse_args(sys.argv[sys.argv.index("--")+1:])
     args.out.mkdir(parents=True, exist_ok=False)
     (args.out / "environment.json").write_text(json.dumps(environment(), indent=2)+"\n")
     register_extension()
     if args.ownership and args.lens_ownership:
         parser.error("Choose one job ownership experiment")
+    if args.apply_failures and not args.lens_ownership:
+        parser.error("--apply-failures requires --lens-ownership")
     case = plane_case("free_tilted") if args.ownership or args.lens_ownership else state_case("fit_only")
     if args.lens_ownership:
         for point in case["request"]["points"]:
@@ -361,7 +430,7 @@ def main():
         verify_diagnose_ownership(case, args.out)
         return 0
     if args.lens_ownership:
-        verify_lens_ownership(case, args.out)
+        verify_lens_ownership(case, args.out, apply_failures=args.apply_failures)
         return 0
     from match_perspective import properties
     for share_lens in (True, False):

@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Refine Lenses restores cameras, landmarks and cached plates after an application error, while retaining improved lenses after a numerical Sync refusal.
 - Refine Lenses discards outdated results after input or camera edits, preserving the current calibration, poses and landmark diagnostics.
 - Diagnose discards results when Sync inputs or the active scene change during its background job, preserving current landmark errors instead of publishing an outdated report.
 - Background Refine Lenses now retains Is in Plane groups and Plane Slack, matching the blocking search and subsequent Sync solve.

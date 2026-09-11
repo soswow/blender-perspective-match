@@ -329,8 +329,23 @@ checked by forbidding automatic origin preparation on the rejection path.
 The lens stamp includes its extra numerical settings and identities/transforms
 of the cameras it will write. These are job-local ownership records, separate
 from portable numerical requests. They do not replace cancellation on file load,
-prove thread safety, or make successful application transactional if a later
-Blender operation fails.
+or prove thread safety.
+
+Add `--apply-failures` to `--lens-ownership` to test application of that valid
+result with controlled errors. Six controls cover success, a persistent camera
+diagnostic error, failure before/after Sync writes, failure after plate rebuilding,
+and an intentional `SyncSolveRejected`. Internal errors must return CANCELLED,
+retain the injected exception, clear progress, and exactly restore calibration,
+actual camera data, root transforms, origins, diagnostics, landmark state, scene
+camera/render size and retained cached-plate IDs. The positive control still checks
+withheld object alignment; a numerical refusal deliberately keeps refined lenses.
+
+This reuses the product's pin-sync snapshot, with actual camera values retained
+for exact rollback rather than recomputed from rounded calibration. Existing
+cached images are held only during main-thread application so invalidation cannot
+delete a plate needed for rollback. The generated plate is a cache-ownership
+control, not a distortion-accuracy test. Arbitrary Blender data deletion, an error
+during rollback itself, undo/redo and live UI scheduling remain outside this check.
 
 ### Reducing a confirmed regression
 

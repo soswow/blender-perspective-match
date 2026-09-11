@@ -1503,18 +1503,20 @@ def polish_known_3d_cameras(context: bpy.types.Context) -> list[str]:
 
 @dataclass
 class PinSyncSnapshot:
-    """Cameras, root transforms, and landmark RNA so a worse iterate round can revert."""
+    """Camera and landmark state for reverting a worse round or a failed apply."""
 
     mean_rmse_px: float
     cameras: dict
     landmarks: list
+    scene_camera: object
+    render_size: tuple
 
 
 def capture_pin_sync_snapshot(
     context: bpy.types.Context,
     mean_rmse_px: float = float("inf"),
 ) -> PinSyncSnapshot:
-    """Copy private calibrations, root matrices, and solved landmark positions."""
+    """Copy stored calibration, live cameras, root matrices and solved landmarks."""
     from ..core import pin_refine
 
     cameras = {}
@@ -1523,7 +1525,7 @@ def capture_pin_sync_snapshot(
         cameras[root.name] = {
             "matrix": root.matrix_world.copy(),
             "calibration": pin_refine.copy_calibration(
-                calibration_from_settings(settings)
+                _stored_calibration_from_settings(settings)
             ),
             "lock_focal": bool(settings.lock_focal),
             "sync_is_applied": bool(settings.sync_is_applied),
@@ -1532,7 +1534,26 @@ def capture_pin_sync_snapshot(
             "sync_translation": tuple(settings.sync_translation),
             "sync_rmse_px": float(settings.sync_rmse_px),
             "sync_last_ok": bool(settings.sync_last_ok),
+            "origin_is_set": bool(settings.origin_is_set),
+            "origin_image": tuple(settings.origin_image),
+            "diagnostics": {key: getattr(settings, key) for key in (
+                "fov_xy", "fov_zy", "fov_zx", "residual_degrees", "vp_line_rms_px",
+            )},
+            "plate": {key: getattr(settings, key) for key in (
+                "view_undistorted", "undistorted_image", "undistorted_path",
+                "undistorted_width", "undistorted_height",
+                "undistorted_offset_x", "undistorted_offset_y",
+            )},
         }
+        camera = settings.camera_object
+        if camera is not None and camera.type == "CAMERA":
+            cameras[root.name]["camera_data"] = {key: getattr(camera.data, key) for key in (
+                "type", "lens", "sensor_fit", "sensor_width", "sensor_height", "shift_x", "shift_y",
+            )}
+            cameras[root.name]["camera_pose"] = {key: tuple(getattr(camera, key)) for key in (
+                "location", "scale", "rotation_euler", "rotation_quaternion", "rotation_axis_angle",
+            )}
+            cameras[root.name]["parent_inverse"] = camera.matrix_parent_inverse.copy()
     space = properties.workspace(context)
     landmarks = []
     for landmark in space.landmarks:
@@ -1550,14 +1571,16 @@ def capture_pin_sync_snapshot(
         mean_rmse_px=float(mean_rmse_px),
         cameras=cameras,
         landmarks=landmarks,
+        scene_camera=context.scene.camera,
+        render_size=(context.scene.render.resolution_x, context.scene.render.resolution_y,
+                     context.scene.render.resolution_percentage),
     )
 
 
 def restore_pin_sync_snapshot(
-    context: bpy.types.Context, snapshot: PinSyncSnapshot
+    context: bpy.types.Context, snapshot: PinSyncSnapshot, *, restore_plates: bool = False
 ) -> None:
-    """Write a previous iterate snapshot back onto match Empties and cameras."""
-    active_root = properties.active_root(context)
+    """Restore state without solving; restore_plates requires retained image IDs."""
     for root in properties.iter_match_roots():
         stored = snapshot.cameras.get(root.name)
         if stored is None:
@@ -1571,26 +1594,40 @@ def restore_pin_sync_snapshot(
         settings.sync_translation = stored["sync_translation"]
         settings.sync_rmse_px = stored["sync_rmse_px"]
         settings.sync_last_ok = stored["sync_last_ok"]
-        previous = calibration_from_settings(settings)
+        settings.origin_is_set = stored["origin_is_set"]
+        settings.origin_image = stored["origin_image"]
+        previous = _stored_calibration_from_settings(settings)
         calibration = stored["calibration"]
-        if _intrinsics_or_distortion_changed(previous, calibration):
-            invalidate_undistorted_cache(settings)
-        apply_camera(
-            context.scene,
-            settings,
-            calibration,
-            update_scene_camera=False,
-        )
-        _update_diagnostics(
-            settings, line_bundles_from_settings(settings), calibration
-        )
-    if active_root is not None:
-        apply_camera(
-            context.scene,
-            active_root.pm_session,
-            calibration_from_settings(active_root.pm_session),
-            update_scene_camera=True,
-        )
+        if restore_plates:
+            if settings.undistorted_image != stored["plate"]["undistorted_image"]:
+                invalidate_undistorted_cache(settings)
+            for key, value in stored["plate"].items():
+                setattr(settings, key, value)
+        else:
+            if _intrinsics_or_distortion_changed(previous, calibration):
+                invalidate_undistorted_cache(settings)
+            apply_camera(context.scene, settings, calibration, update_scene_camera=False)
+        store_calibration(settings, calibration)
+        for key, value in stored["diagnostics"].items():
+            setattr(settings, key, value)
+        camera = settings.camera_object
+        if restore_plates and camera is not None and "camera_data" in stored:
+            camera.matrix_parent_inverse = stored["parent_inverse"].copy()
+            for key, value in stored["camera_pose"].items():
+                setattr(camera, key, value)
+            for key, value in stored["camera_data"].items():
+                setattr(camera.data, key, value)
+            _apply_camera_background(settings)
+    if restore_plates:
+        context.scene.camera = snapshot.scene_camera
+        (context.scene.render.resolution_x, context.scene.render.resolution_y,
+         context.scene.render.resolution_percentage) = snapshot.render_size
+    else:
+        active_root = properties.active_root(context)
+        if active_root is not None:
+            apply_camera(context.scene, active_root.pm_session,
+                         calibration_from_settings(active_root.pm_session), update_scene_camera=True)
+    context.view_layer.update()
     space = properties.workspace(context)
     by_id = {item["item_id"]: item for item in snapshot.landmarks}
     for landmark in space.landmarks:
@@ -4081,64 +4118,68 @@ def apply_lens_refine_result(context: bpy.types.Context, refine_result, prep: Le
         space.lens_refine_progress = 0.0
         raise StaleSyncResult(message)
 
-    root_by_name = prep.root_by_name
-    # Write private calibrations without flipping the scene camera each time.
-    active_root = properties.active_root(context)
-    for match_id, calibration in refine_result.calibrations.items():
-        root = root_by_name.get(match_id)
-        if root is None:
-            continue
-        settings = root.pm_session
-        if uses_adjusted_camera(settings):
-            continue
-        previous = calibration_from_settings(settings)
-        if _intrinsics_or_distortion_changed(previous, calibration):
-            invalidate_undistorted_cache(settings)
-        apply_camera(
-            context.scene,
-            settings,
-            calibration,
-            update_scene_camera=False,
-        )
-        _update_diagnostics(settings, line_bundles_from_settings(settings), calibration)
-
-    if active_root is not None:
-        apply_camera(
-            context.scene,
-            active_root.pm_session,
-            calibration_from_settings(active_root.pm_session),
-            update_scene_camera=True,
-        )
-
-    # Re-run the normal apply path so Empty transforms match the new lenses.
+    snapshot = capture_pin_sync_snapshot(context)
+    held_images = {}
+    for stored in snapshot.cameras.values():
+        image = stored["plate"]["undistorted_image"]
+        if image is not None and image not in held_images:
+            held_images[image] = bool(image.use_fake_user)
+            image.use_fake_user = True
     try:
-        sync_result = solve_and_apply_sync(context)
-        message = refine_result.message + " · " + sync_result.message
-        space.sync_status = message
-        space.lens_refine_progress = 0.0
+        root_by_name = prep.root_by_name
+        # Write private calibrations without flipping the scene camera each time.
+        active_root = properties.active_root(context)
+        for match_id, calibration in refine_result.calibrations.items():
+            root = root_by_name.get(match_id)
+            if root is None:
+                continue
+            settings = root.pm_session
+            if uses_adjusted_camera(settings):
+                continue
+            previous = calibration_from_settings(settings)
+            if _intrinsics_or_distortion_changed(previous, calibration):
+                invalidate_undistorted_cache(settings)
+            apply_camera(
+                context.scene,
+                settings,
+                calibration,
+                update_scene_camera=False,
+            )
+            _update_diagnostics(settings, line_bundles_from_settings(settings), calibration)
+
+        if active_root is not None:
+            apply_camera(
+                context.scene,
+                active_root.pm_session,
+                calibration_from_settings(active_root.pm_session),
+                update_scene_camera=True,
+            )
+
+        # A numerical refusal retains improved lenses; an application error
+        # must not be presented as an ordinary failed geometric fit.
+        try:
+            sync_result = solve_and_apply_sync(context)
+        except SyncSolveRejected as error:
+            sync_result = error.result
         from . import distortion as distortion_module
 
         distortion_module.rebuild_undistorted_plates(context)
-        properties.tag_viewport_redraw(context)
-        return refine_result, sync_result
-    except Exception as error:
-        # Lenses may still have improved even if the hard reject remains.
-        space.sync_status = refine_result.message + " · " + str(error)
+    except Exception:
         space.lens_refine_progress = 0.0
-        from . import distortion as distortion_module
+        try:
+            restore_pin_sync_snapshot(context, snapshot, restore_plates=True)
+        except Exception as restore_error:
+            space.sync_status = f"Refine Lenses failed; restoring the previous state also failed: {restore_error}"
+            raise
+        space.sync_status = "Refine Lenses failed; previous cameras and landmarks restored."
+        raise
+    finally:
+        for image, fake_user in held_images.items():
+            image.use_fake_user = fake_user
+            if image.users == 0:
+                bpy.data.images.remove(image)
 
-        distortion_module.rebuild_undistorted_plates(context)
-        properties.tag_viewport_redraw(context)
-        # Surface a synthetic failed sync result so the operator can WARN, not ERROR.
-        from ..core import sync as sync_module
-
-        failed = sync_module.SyncSolveResult(
-            similarities={},
-            landmarks={},
-            mean_reprojection_px=0.0,
-            per_match_rmse_px={},
-            per_landmark_rmse_px={},
-            message=str(error),
-            success=False,
-        )
-        return refine_result, failed
+    space.sync_status = refine_result.message + " · " + sync_result.message
+    space.lens_refine_progress = 0.0
+    properties.tag_viewport_redraw(context)
+    return refine_result, sync_result
