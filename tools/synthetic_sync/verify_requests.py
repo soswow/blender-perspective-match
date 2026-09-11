@@ -33,7 +33,8 @@ def state_case(name):
     request = case["request"]
     request["fixed_similarities"] = generate("locked_bridge")["request"]["fixed_similarities"]
     request.update(lock_rotation=name == "global_locks", lock_translation=name == "global_locks",
-                   ground_slack=0.08, known_3d_slack=0.05, mirror_slack=0.04)
+                   ground_slack=0.08, known_3d_slack=0.05, mirror_slack=0.04,
+                   plane_slack=0.06, plane_groups=[(point["id"], "FREE", 1) for point in request["points"][:4]])
     request["mirror_plane"][0][0] = 0.02
     if name == "fit_only":
         request["location_match_ids"] = ["view_0", "view_1"]
@@ -82,6 +83,8 @@ def verify_state(name, out):
         raise AssertionError("Case did not exercise automatic origin preparation")
     if name != "auto_origin":
         assert expected.fixed_similarities
+        assert len(expected.plane_groups) == 4
+        assert abs(expected.plane_slack-.06) < 1e-6
         assert expected.lock_rotation == (name == "global_locks")
         assert expected.lock_translation == (name == "global_locks")
         assert any(o.weight == 4 and not o.protect_outlier for o in expected.observations)

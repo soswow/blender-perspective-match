@@ -91,6 +91,11 @@ LINE_RECONSTRUCT_TRUNCATE_PX = 80.0
 # one isolated line or point that pins yaw; 6 px treats those as outliers.
 RECOVERED_HUBER_DELTA_PX = ACCEPT_RMSE_PX
 
+# Existing joint-BA acceptance budget, also applied per previously solved view
+# when assessing a recovered camera's proposed 3D update.
+BA_ACCEPT_RMSE_FLOOR_PX = 8.0
+BA_ACCEPT_RMSE_SLACK_PX = 2.0
+
 # Joint BA freezes 3D and refines poses only above this landmark count.
 # Triangulation stays the 3D prior so cameras move instead of a few
 # landmarks absorbing edge error.

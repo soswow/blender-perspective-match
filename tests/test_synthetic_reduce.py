@@ -18,10 +18,13 @@ class SyntheticReductionTests(unittest.TestCase):
         request, expectation = case["request"], case["expectation"]
         next(p for p in request["points"] if p["id"] == optional[0])["known"] = [1, 2, 3]
         expectation["required_points"] = [optional[1]]
+        request["plane_groups"] = [(optional[2], "Z", 1), (optional[3], "Z", 1)]
         before = deepcopy(case)
         removed = set(removable_points(case))
         self.assertNotIn(optional[0], removed)
         self.assertNotIn(optional[1], removed)
+        self.assertNotIn(optional[2], removed)
+        self.assertNotIn(optional[3], removed)
         result = drop_points(case, removed)
         self.assertEqual(case, before)
         for key in case:

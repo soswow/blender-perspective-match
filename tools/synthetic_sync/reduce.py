@@ -24,6 +24,7 @@ def removable_points(case):
     request, expectation = case["request"], case["expectation"]
     protected = set(expectation.get("required_points", [])) | set(expectation.get("excluded_points", []))
     protected.update(key for pair in request["mirror_pairs"] for key in pair)
+    protected.update(item[0] for item in request.get("plane_groups") or [])
     return [point["id"] for point in request["points"]
             if not point["ground"] and point["known"] is None and point["id"] not in protected]
 

@@ -81,6 +81,16 @@ Without Known 3D ends, a free line needs **three or more** stills — two views 
 
 ## Solve Sync and related tools
 
+After placing a recovered **Solve** camera, Sync may refine the shared 3D again.
+That update retains Ground, Known 3D, Mirror and **Is in Plane** constraints,
+including their slack. Soft Known 3D points can continue moving toward the picks.
+If the proposed update worsens a previously solved camera beyond the existing
+fit allowance, Sync retains the previous geometry and reports **kept existing
+geometry after camera recovery**. The recovered camera remains placed; inspect
+its own pick errors if its evidence conflicts with the rest. This check protects
+existing point fits; it does not establish that every camera or 3D feature is
+accurate.
+
 **Solve Sync** seeds pairwise pose then runs a joint bundle-adjustment over Empty transforms + landmarks (Huber-weighted, with extra influence on poorly covered regions of each still so a cluster of central picks cannot ignore a few near the edge that pin camera distance). Raise **Sync Weight** on a landmark when those automatic boosts are not enough. Pairwise growth starts from the geometrically strongest still pair (spread, overlap, parallax, pair RMSE) and adds the easiest next camera — never alphabetical names, and not every still vs the Anchor just because it shares five picks. The Anchor remains the shared world. 3D landmarks are triangulated from all registered rays, with near-parallel views downweighted, behind-camera views dropped, and a short reprojection polish. Options between Solve Sync and Refine Lenses:
 
 - **Lock Rotation** — keep each Empty’s rotation on a 90° world-axis jump (identity, ±90°, 180° about X/Y/Z, including an X/Y swap); only solve translation/scale. Use when VP axes already match across stills so a free solve would only add a few degrees of noise.

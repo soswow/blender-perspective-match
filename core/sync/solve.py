@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from typing import Callable
 
@@ -21,6 +22,8 @@ from .ba import (
 )
 from .constants import (
     ACCEPT_RMSE_PX,
+    BA_ACCEPT_RMSE_FLOOR_PX,
+    BA_ACCEPT_RMSE_SLACK_PX,
     BA_FREE_LANDMARK_LIMIT,
     GROUND_PLANE_Z_FRACTION,
     GROUND_SLACK_DEFAULT,
@@ -424,6 +427,7 @@ class _SolveState:
     skip_notes: dict[str, str] = field(default_factory=dict)
     downweighted_ids: list[str] = field(default_factory=list)
     did_bundle_adjust: bool = False
+    kept_joint_geometry: bool = False
     pre_ba_match_rmse: dict[str, float] = field(default_factory=dict)
     inconsistent_picks: dict[str, list[tuple[str, str, float]]] = field(
         default_factory=dict
@@ -466,6 +470,20 @@ class _SolveState:
             ]
             for landmark_id, items in self.line_observations_by_landmark.items()
         }
+
+    def ba_constraint_kwargs(self) -> dict:
+        """The same geometric priors for initial and recovered-camera joint BA."""
+        return dict(
+            ground_landmark_ids=sorted({o.landmark_id for o in self.usable_observations if o.on_ground}),
+            ground_slack=self.ground_slack,
+            known_world_priors=self.known_world,
+            known_3d_slack=self.known_3d_slack,
+            mirror_pairs=self.mirror_pairs,
+            mirror_plane=self.mirror_plane,
+            mirror_slack=self.mirror_slack,
+            plane_groups=self.plane_groups,
+            plane_slack=self.plane_slack,
+        )
 
     def rebuild_landmarks(self) -> None:
         """Triangulate points/lines; pin Known 3D and consistent On Ground."""
@@ -1085,7 +1103,7 @@ def _polish_recovered_poses(state: _SolveState) -> None:
 
 
 def _thaw_recovered_location(state: _SolveState) -> None:
-    """Rebuild 3D from recovered stills that are allowed to move landmarks."""
+    """Commit a constrained 3D update only if previously solved views still fit."""
     location_ids = state.location_match_ids
     if location_ids is None:
         return
@@ -1094,17 +1112,53 @@ def _thaw_recovered_location(state: _SolveState) -> None:
         for match_id in state.recovered
     ):
         return
+    # Execution control belongs to the caller (often a threading.Event method),
+    # not to the numerical candidate. Copy evidence while sharing that callback.
+    trial = deepcopy(state, {id(state.cancel_check): state.cancel_check})
+    _refine_recovered_location(trial)
+    recovered = set(state.recovered)
+    protected = [o for o in state.usable_observations
+                 if o.match_id not in recovered and o.landmark_id in state.landmarks]
+    required_ids = {o.landmark_id for o in protected}
+    if not required_ids <= set(trial.landmarks):
+        state.kept_joint_geometry = True
+        return
+    scores = []
+    for candidate in (state, trial):
+        scores.append(_per_match_rmse_snapshot(
+            state.free_match_ids, sorted(required_ids), candidate.similarities,
+            candidate.landmarks, state.anchor_id, state.match_map, protected,
+        ))
+    before, after = scores
+    if any(not np.isfinite(after.get(key, np.inf)) or after[key] > min(
+        ACCEPT_RMSE_PX, max(BA_ACCEPT_RMSE_FLOOR_PX, value + BA_ACCEPT_RMSE_SLACK_PX)
+    ) for key, value in before.items()):
+        state.kept_joint_geometry = True
+        return
+    state.__dict__.update(trial.__dict__)
+
+
+def _refine_recovered_location(state: _SolveState) -> None:
+    """Build the proposed recovered-camera update with the joint solve's priors."""
+    previous_known = {
+        key: point.copy() for key, point in state.landmarks.items()
+        if key in state.known_world and state.known_3d_slack > 1.0e-12
+    }
     state.rebuild_landmarks()
+    state.landmarks.update(previous_known)
     _rebuild_usable_observations(state)
     free_match_ids = [
         match_id
         for match_id in state.free_match_ids
         if match_id in state.similarities
     ]
+    fixed_ids = set(state.known_world) if state.known_3d_slack <= 1.0e-12 else set()
+    if state.ground_slack <= 1.0e-12:
+        fixed_ids.update(set(state.consistent_metric)-set(state.known_world))
     free_landmark_ids = [
         landmark_id
         for landmark_id in state.landmark_ids
-        if landmark_id in state.landmarks and landmark_id not in state.known_world
+        if landmark_id in state.landmarks and landmark_id not in fixed_ids
     ]
     if len(free_landmark_ids) > BA_FREE_LANDMARK_LIMIT:
         free_landmark_ids = []
@@ -1141,20 +1195,9 @@ def _thaw_recovered_location(state: _SolveState) -> None:
             if match_id in state.similarities
         },
         max_iterations=8,
-        location_match_ids=location_ids,
-        ground_landmark_ids=[
-            landmark_id
-            for landmark_id, items in state.observations_by_landmark.items()
-            if any(item.on_ground for item in items)
-        ],
-        ground_slack=state.ground_slack,
-        known_world_priors=state.known_world,
-        known_3d_slack=state.known_3d_slack,
-        mirror_pairs=state.mirror_pairs,
-        mirror_plane=state.mirror_plane,
-        mirror_slack=state.mirror_slack,
-        plane_groups=state.plane_groups,
-        plane_slack=state.plane_slack,
+        location_match_ids=state.location_match_ids,
+        **state.ba_constraint_kwargs(),
+        free_plane_offset=(state.mirror_slack > 1.0e-12 and bool(state.mirror_pairs) and state.mirror_plane is not None),
     )
     if not ran:
         return
@@ -1667,13 +1710,7 @@ def solve_landmark_sync(
         },
     )
     ba_observations = _balance_observation_weights(ba_observations, match_map)
-    ground_landmark_ids = sorted(
-        {
-            observation.landmark_id
-            for observation in ba_observations
-            if observation.on_ground
-        }
-    )
+    ground_landmark_ids = state.ba_constraint_kwargs()["ground_landmark_ids"]
     # Slack > 0: keep On Ground free so BA can spring Z toward the plane.
     if ground_slack > 1.0e-12:
         fixed_landmark_ids = set(known_world)
@@ -1889,16 +1926,8 @@ def solve_landmark_sync(
                     if match_id in similarities
                 },
                 max_iterations=iterations,
-                ground_landmark_ids=ground_landmark_ids,
-                ground_slack=ground_slack,
-                known_world_priors=known_world,
-                known_3d_slack=known_3d_slack,
-                mirror_pairs=mirror_pairs,
-                mirror_plane=mirror_plane,
-                mirror_slack=mirror_slack,
+                **state.ba_constraint_kwargs(),
                 free_plane_offset=free_plane_offset,
-                plane_groups=plane_groups,
-                plane_slack=plane_slack,
                 location_match_ids=state.location_match_ids,
             )
         )
@@ -1933,7 +1962,7 @@ def solve_landmark_sync(
     )
 
     if did_bundle_adjust and _mean_rmse(post_ba_match_rmse) > max(
-        8.0, _mean_rmse(pre_ba_match_rmse) + 2.0
+        BA_ACCEPT_RMSE_FLOOR_PX, _mean_rmse(pre_ba_match_rmse) + BA_ACCEPT_RMSE_SLACK_PX
     ):
         similarities = pre_ba_similarities
         landmarks = pre_ba_landmarks
@@ -2378,6 +2407,8 @@ def solve_landmark_sync(
         message += " · joint BA"
         if froze_structure:
             message += " (thaw 3D)"
+    if state.kept_joint_geometry:
+        message += " · kept existing geometry after camera recovery"
     if ground_slack > 1.0e-12:
         drifted = []
         for landmark_id, items in observations_by_landmark.items():

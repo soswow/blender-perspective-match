@@ -284,7 +284,7 @@ python3 tools/synthetic_sync/reduce.py \
 
 `--fixed-root` defaults to the current checkout. Neither checkout is edited.
 The reducer removes only unrelated free landmarks and their picks. It preserves
-every camera, ground/Known 3D point, mirror pair, line, role, lock, expectation
+every camera, ground/Known 3D point, mirror pair, plane member, line, role, lock, expectation
 and truth record. Each accepted deletion must retain the **same named forbidden
 geometry** on the old code, pass every other accuracy check there, and pass the
 full independent oracle on the fixed code. It currently requires an anchor-frame
@@ -346,6 +346,33 @@ accuracy limits as the base corpus. A flag is a measurement for investigation,
 not automatically a solver defect. This graph experiment does not test arbitrary
 camera counts, anchorless components, graphs lacking a metric connection,
 incorrect correspondences or biased soft constraints.
+
+### Recovered-camera reconstruction
+
+```sh
+python3 tools/synthetic_sync/recovery.py \
+  --case tools/synthetic_sync/cases/recovered-ground-conflict.json \
+  --compare-freeze --out /tmp/pm-recovery
+```
+
+This observes the production stage that lets recovered Solve cameras update 3D.
+The frozen case deliberately shifts one camera's elevated picks while preserving
+its floor evidence. The trace records ground, Known 3D, mirror and shared-plane
+gaps before and after the stage. The paired freeze control skips only that stage;
+it is an experiment, not an alternative product mode. Exact input, environment,
+results, traces and independent withheld-camera checks are retained.
+
+The ordinary accuracy contract stays strict: the contradictory camera still
+crosses its withheld-error limit. The regression requires that previously good
+cameras and hard ground survive the update. `recovery.py` exits nonzero for an
+execution error; accuracy flags are recorded observations. `run.py` remains the
+strict whole-case accuracy gate. See [measurements and limitations](recovery-results.md).
+
+`--stage-control-recovered view_2` explicitly marks an already posed camera as
+recovered. Use this only to isolate the update, and report it as a stage control,
+not evidence that registration naturally selected that route. A positive test
+combines imperfect soft Known 3D with an exact Y plane: refinement must remain
+useful, honor the plane, and pass the independent camera checks.
 
 ### Evidence-placement follow-up
 

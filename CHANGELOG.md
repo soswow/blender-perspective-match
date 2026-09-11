@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Solve Sync keeps previously solved geometry when a recovered camera's proposed 3D update would spoil the existing camera fits, while retaining soft Known 3D and plane constraints during refinement.
 - Shift-selecting extra viewport objects no longer changes the Sync landmark or replaces the selection with that landmark’s Empty.
 - Sync carries ground scale through overlapping cameras even when later ground landmarks are absent from the Anchor; Fit Only cameras can fit this ground without extending reconstruction.
 - Fit Only cameras no longer seed or reshape mirrored landmarks, or suppress weak-line warnings with strokes excluded from reconstruction.

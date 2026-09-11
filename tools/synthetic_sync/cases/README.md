@@ -47,3 +47,13 @@ up to about 593 px RMS. A Fit Only middle-camera variant of this same input also
 fails to register despite four ground observations supported by the preceding
 posed view. `tests/test_synthetic_graphs.py` checks both regressions; the separate
 graph generator adds loop, broken-link and locked-bridge controls.
+
+`recovered-ground-conflict.json` preserves a deliberately inconsistent camera:
+its elevated picks shift by 180 px while its floor picks retain their original
+0.3 px noise. Before the recovery guard, the final reconstruction update spoils
+a previously accurate camera. `tests/test_synthetic_recovery.py` protects that
+healthy camera and ground while retaining the recovered pose. The contradictory
+camera still fails the ordinary withheld-accuracy contract; this is **not** a
+fully passing accuracy fixture. Use `recovery.py --compare-freeze` to isolate the
+stage, or `run.py` to see the remaining strict accuracy flag. See
+[the recovery investigation](../recovery-results.md).
