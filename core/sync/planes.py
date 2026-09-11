@@ -271,7 +271,9 @@ def apply_plane_seed(
                 continue
             centroid, normal = fitted
             for landmark_id, point, kind in located:
-                if landmark_id in pinned:
+                # Ground seeds may become fixed metric references in BA.
+                # Preserve them here; nonzero Ground Slack can ease them in BA.
+                if landmark_id in pinned or landmark_id in ground_ids:
                     continue
                 delta = -normal * float(np.dot(normal, point - centroid))
                 _shift_member(

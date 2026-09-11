@@ -63,7 +63,7 @@ Do not special-case a user `.blend` (filename, match names, landmark names, or t
 | `ground.py` | Calibrated On Ground plane init (`estimate_anchor_ground_plane`) |
 | `lines.py` | Free / Known 3D lines, Is-Parallel-To, supporting-plane angle diagnostics |
 | `mirrors.py` | Point/line Is-Mirror-Of pairs across one scene plane |
-| `planes.py` | Is-in-Plane buckets (axis-aligned or free) |
+| `planes.py` | Is-in-Plane buckets (axis-aligned or free); initialization preserves ground seeds |
 | `ba.py` | Joint BA, residuals, leave-one-out Diagnose |
 | `solve.py` | `solve_landmark_sync` stages |
 
@@ -87,6 +87,8 @@ Headless helpers under `tools/` (and `scripts/validate_addon.py`) for investigat
 - `tools/synthetic_sync/graphs.py` — five-camera chain/loop, disconnected-link and Fit Only/locked bridge cases with physically visible edge-local picks, ground scale and withheld object/landmark checks.
 
 - `tools/synthetic_sync/recovery.py` — observe ground/Known 3D/mirror/plane gaps across recovered-camera 3D refinement, compare an explicit frozen-stage control, and assess healthy cameras with independent withheld geometry.
+
+- `tools/synthetic_sync/planes.py` — independent axis/Free-plane and point/line controls, hard-ground intersection, paired plane removal and Fit Only stroke checks; Blender `--drop-constraint` also supports these plane cases.
 
 ## Do not
 

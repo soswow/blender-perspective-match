@@ -82,6 +82,16 @@ def evaluate(case: dict, record: dict) -> dict:
             if key in record[field]:
                 violations.append(f"{key}: reconstructed an unconstrained single-view {kind[:-1]}")
     scale, rotation, translation = transform
+    if "ground_max_distance" in expectation:
+        ground_z = {}
+        for point in case["request"]["points"]:
+            key = point["id"]
+            if point["ground"] and key in record["landmarks"]:
+                position = scale * rotation @ record["landmarks"][key] + translation
+                ground_z[key] = float(position[2])
+                if not np.isfinite(position[2]) or abs(position[2]) > expectation["ground_max_distance"]:
+                    violations.append(f"{key}: ground distance {abs(position[2]):.4g} > {expectation['ground_max_distance']:.4g}")
+        output["ground_z"] = ground_z
     for key in expectation.get("required_points", []):
         if key not in record["landmarks"]:
             violations.append(f"{key}: required reconstructed point missing")

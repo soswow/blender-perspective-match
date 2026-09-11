@@ -357,8 +357,9 @@ def main():
             parser.error("--role-case may change camera participation and expectations only")
         if args.drop_constraint:
             parser.error("Choose one live transition: --role-case or --drop-constraint")
-    if args.drop_constraint and case["family"] not in {"known_lines", "mirror_points", "mirror_lines"}:
-        parser.error("--drop-constraint requires a constraint contribution case")
+    from tools.synthetic_sync.planes import FAMILIES as PLANE_FAMILIES, remove_planes
+    if args.drop_constraint and case["family"] not in {"known_lines", "mirror_points", "mirror_lines", *PLANE_FAMILIES}:
+        parser.error("--drop-constraint requires a supported constraint case")
     register_extension()
     if args.load:
         bpy.ops.wm.open_mainfile(filepath=str(args.load.resolve()))
@@ -395,9 +396,12 @@ def main():
         from match_perspective import properties
         from tools.synthetic_sync.constraints import remove_constraint
         from tools.synthetic_sync.scenarios import write_case
-        removed = remove_constraint(case)
+        removed = remove_planes(case) if case["family"] in PLANE_FAMILIES else remove_constraint(case)
         workspace = properties.workspace(bpy.context)
-        if case["family"] == "known_lines":
+        if case["family"] in PLANE_FAMILIES:
+            for landmark in workspace.landmarks:
+                landmark.plane_axis = "NONE"
+        elif case["family"] == "known_lines":
             for landmark in workspace.landmarks:
                 landmark.known_object = landmark.known_object_b = None
         else:

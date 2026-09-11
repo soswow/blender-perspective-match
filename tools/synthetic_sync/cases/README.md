@@ -57,3 +57,13 @@ camera still fails the ordinary withheld-accuracy contract; this is **not** a
 fully passing accuracy fixture. Use `recovery.py --compare-freeze` to isolate the
 stage, or `run.py` to see the remaining strict accuracy flag. See
 [the recovery investigation](../recovery-results.md).
+
+`free-plane-hard-ground.json` has two hard floor landmarks and two elevated
+surface points sharing a tilted Free plane, with 0.3 px pick noise. All points
+have physically visible picks and independent truth. On `5a4a34d`, initialization
+moves the floor points about ±0.00047 scene units from Z=0. Ordinary camera and
+point-accuracy checks pass; the explicit `ground_max_distance` contract fails.
+The fixed solver preserves those floor seeds. `tests/test_synthetic_planes.py`
+also checks a positive nonzero Ground Slack control, so the fix cannot pass by
+disabling all ground refinement. Both the full case and plane-removal control
+are expected to pass the complete camera, geometry and floor contracts.

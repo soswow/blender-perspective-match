@@ -117,6 +117,17 @@ jobs:
             --case "${RUNNER_TEMP}/synthetic-blender/graphs/graph-chain-0.json" \
             --role-case "${RUNNER_TEMP}/synthetic-blender/graphs/graph-fit_only_bridge-0.json" \
             --out "${RUNNER_TEMP}/synthetic-blender/graph-role-change" --roundtrip
+      - name: Shared planes preserve ground, lines and withheld object alignment
+        run: |
+          python3 tools/synthetic_sync/planes.py --out "${RUNNER_TEMP}/synthetic-blender/planes"
+          blender --factory-startup --disable-autoexec -b --python-exit-code 1 \
+            --python tools/synthetic_sync/blender_case.py -- \
+            --case tools/synthetic_sync/cases/free-plane-hard-ground.json \
+            --out "${RUNNER_TEMP}/synthetic-blender/plane-ground" --drop-constraint --roundtrip
+          blender --factory-startup --disable-autoexec -b --python-exit-code 1 \
+            --python tools/synthetic_sync/blender_case.py -- \
+            --case "${RUNNER_TEMP}/synthetic-blender/planes/plane-plane_line-0.json" \
+            --out "${RUNNER_TEMP}/synthetic-blender/plane-line" --drop-constraint --roundtrip
       - uses: actions/upload-artifact@v4
         if: always()
         with:

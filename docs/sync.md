@@ -69,7 +69,7 @@ If Is Mirror Of is set but Mirror Empty is empty, Solve Sync ignores those pairs
 
 ### Shared planes
 
-A point or line landmark can join an **Is in Plane** bucket: **X**, **Y**, or **Z** (share that world coordinate with others in the same **#1–#10** bucket) or **Free** (lie on the same unknown plane). Two stills tagged **Z #2** share some height that is not necessarily Z=0; **Z #1** is a different height. **On Ground** remains the Z=0 floor — putting On Ground points in a Z bucket pulls the rest of that bucket toward the floor. **Free** only constrains once four or more members are reconstructed (three points always define a plane). Lines are pulled so their midpoint lies in the plane; a zero **Plane Slack** also keeps the stroke direction in that plane. The same landmark can also be **Is Mirror Of** a partner; Solve Sync applies both.
+A point or line landmark can join an **Is in Plane** bucket: **X**, **Y**, or **Z** (share that world coordinate with others in the same **#1–#10** bucket) or **Free** (lie on the same unknown plane). Two landmarks tagged **Z #2** share some height that is not necessarily Z=0; **Z #1** is a different height. **On Ground** remains the Z=0 floor — putting On Ground points in a Z bucket pulls the rest of that bucket toward the floor. A Free plane can also meet that floor: initialization preserves On Ground seeds, and nonzero Ground Slack controls whether they can move during refinement. **Free** only constrains once four or more members are reconstructed (three points always define a plane). Lines are pulled so their midpoint lies in the plane; a zero **Plane Slack** also keeps the stroke direction in that plane. The same landmark can also be **Is Mirror Of** a partner; Solve Sync applies both.
 
 ### Line landmarks
 

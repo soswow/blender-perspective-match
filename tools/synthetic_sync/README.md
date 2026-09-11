@@ -374,6 +374,34 @@ not evidence that registration naturally selected that route. A positive test
 combines imperfect soft Known 3D with an exact Y plane: refinement must remain
 useful, honor the plane, and pass the independent camera checks.
 
+### Shared-plane controls
+
+```sh
+python3 tools/synthetic_sync/planes.py --out /tmp/pm-planes
+python3 tools/synthetic_sync/planes.py --noise-px 0.3 --out /tmp/pm-planes-noisy
+```
+
+Ten cases cover separate axis buckets, a tilted Free plane, a Free plane meeting
+hard ground, a plane-constrained line, four paired plane-removal controls, and
+a Fit Only stroke pair with fixed supporting cameras. Construction planes and
+their surface points are known independently; required point/line checks and
+withheld object projections test accuracy beyond coplanarity. These base cases
+are already solvable without planes, so the removal controls test preservation,
+not indispensable information gain. The Fit Only pair always uses its fixed
+0.3 px stroke bias, independent of the sweep's point-noise setting.
+
+The frozen `cases/free-plane-hard-ground.json` reproduces a confirmed defect:
+Free-plane initialization moved ground seeds off Z=0 before fixing them in BA.
+An explicit floor-distance contract catches this even when camera checks pass.
+Its positive Ground Slack control still allows floor points to refine. The
+Blender runner's `--drop-constraint` option now supports these plane cases; it
+clears plane membership in live RNA and repeats the unchanged camera/geometry
+checks. `--roundtrip` repeats from the saved raw input in a fresh process.
+
+See [the plane measurements and limitations](plane-results.md). These checks do
+not establish general uncertainty, prove a plane's physical correctness from
+images alone, or cover arbitrary mirror/parallel/plane combinations.
+
 ### Evidence-placement follow-up
 
 ```sh
