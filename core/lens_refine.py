@@ -2,7 +2,7 @@
 
 Sync keeps intrinsics frozen. This outer loop varies ``fx`` (= ``fy``), rebuilds
 orientation from VP lines at each candidate (locked-focal refine), and scores
-``sync_rmse + vp_weight * Σ line_rms²``. Coordinate descent — one match at a
+``supported_point_rmse + vp_weight * Σ line_rms²``. Coordinate descent — one match at a
 time — is followed by a coupled polish that jointly moves landmark-sharing
 pairs (and a global relative-scale probe).
 """
@@ -213,10 +213,58 @@ def calibration_scaled_keep_pose(
     )
 
 
-def _sync_rmse(result: sync_module.SyncSolveResult) -> float:
-    if result.mean_reprojection_px > 1.0e-9:
-        return float(result.mean_reprojection_px)
+def _sync_rmse(
+    result: sync_module.SyncSolveResult,
+    observations: list[sync_module.SyncObservation] | None = None,
+    calibrations: dict[str, core.Calibration] | None = None,
+) -> float:
+    """Score supported point picks, including cameras recovered after joint BA."""
+    if result.success and observations:
+        by_match: dict[str, list[sync_module.SyncObservation]] = {}
+        for observation in observations:
+            if (
+                observation.match_id in result.similarities
+                and observation.landmark_id in result.landmarks
+            ):
+                by_match.setdefault(observation.match_id, []).append(observation)
+        if by_match:
+            squared = []
+            for match_id, items in by_match.items():
+                calibration = (calibrations or {}).get(match_id)
+                if calibration is None:
+                    return float("inf")
+                projected, valid = sync_module._project_shared_points(
+                    np.asarray([result.landmarks[item.landmark_id] for item in items]),
+                    calibration, result.similarities[match_id],
+                )
+                errors = projected - np.asarray([(item.u, item.v) for item in items])
+                if not np.all(valid) or not np.isfinite(errors).all():
+                    return float("inf")
+                squared.extend(np.sum(errors * errors, axis=1))
+            return float(np.sqrt(np.mean(squared)))
+    # A refused solve may still carry useful residuals while recovering bad
+    # starting lenses. Line-only solves retain their existing headline score.
+    error = float(result.mean_reprojection_px)
+    if not np.isfinite(error) or error < 0.0:
+        return float("inf")
+    if error > 1.0e-9:
+        return error
     return _FAILURE_COST if not result.success else 0.0
+
+
+def _retains_sync_support(
+    candidate: sync_module.SyncSolveResult,
+    incumbent: sync_module.SyncSolveResult | None,
+) -> bool:
+    """Keep an accepted solve's cameras and geometry; permit failed-start recovery."""
+    if incumbent is None or not incumbent.success:
+        return True
+    return (
+        candidate.success
+        and candidate.similarities.keys() >= incumbent.similarities.keys()
+        and candidate.landmarks.keys() >= incumbent.landmarks.keys()
+        and candidate.line_segments.keys() >= incumbent.line_segments.keys()
+    )
 
 
 def _vp_terms(
@@ -249,8 +297,14 @@ def _joint_cost(
     baseline_max_angle: float | None = None,
     vp_line_slack_px: float = DEFAULT_VP_LINE_SLACK_PX,
     vp_angle_slack_deg: float = DEFAULT_VP_ANGLE_SLACK_DEG,
+    observations: list[sync_module.SyncObservation] | None = None,
+    incumbent: sync_module.SyncSolveResult | None = None,
 ) -> float:
-    sync_term = _sync_rmse(sync_result)
+    if not _retains_sync_support(sync_result, incumbent):
+        return float("inf")
+    sync_term = _sync_rmse(sync_result, observations, calibrations)
+    if not np.isfinite(sync_term):
+        return float("inf")
     if sync_term >= _FAILURE_COST:
         return _FAILURE_COST
     vp_term, max_line_rms, max_angle = _vp_terms(calibrations, matches)
@@ -418,6 +472,7 @@ def refine_lenses_from_landmarks(
     def evaluate(
         cals: dict[str, core.Calibration],
         initial_similarities: dict[str, sync_module.SimilarityTransform] | None = None,
+        incumbent: sync_module.SyncSolveResult | None = None,
     ):
         nonlocal step
         result = _run_sync(
@@ -452,6 +507,8 @@ def refine_lenses_from_landmarks(
             max_vp_angle_deg=max_vp_angle_deg,
             baseline_max_line_rms=baseline_line_rms,
             baseline_max_angle=baseline_angle,
+            observations=observations,
+            incumbent=incumbent,
         )
         step += 1
         return cost, result
@@ -465,8 +522,8 @@ def refine_lenses_from_landmarks(
         start_fx,
         free_ids_local,
     ) -> LensRefineResult:
-        initial_rmse = _sync_rmse(initial_sync)
-        final_rmse = _sync_rmse(best_sync)
+        initial_rmse = _sync_rmse(initial_sync, observations, calibrations)
+        final_rmse = _sync_rmse(best_sync, observations, best_cals)
         return LensRefineResult(
             calibrations=best_cals,
             sync_result=best_sync,
@@ -559,6 +616,7 @@ def refine_lenses_from_landmarks(
             cost, result = evaluate(
                 trial,
                 initial_similarities=best_sync.similarities,
+                incumbent=best_sync,
             )
             if cost + 1.0e-6 < best_cost:
                 best_cost = cost
@@ -585,6 +643,7 @@ def refine_lenses_from_landmarks(
             cost, result = evaluate(
                 trial,
                 initial_similarities=best_sync.similarities,
+                incumbent=best_sync,
             )
             if cost + 1.0e-6 < best_cost:
                 best_cost = cost
@@ -596,8 +655,8 @@ def refine_lenses_from_landmarks(
             for match_id in free_ids
         }
         improved = best_cost + 1.0e-3 < initial_cost
-        initial_rmse = _sync_rmse(initial_sync)
-        final_rmse = _sync_rmse(best_sync)
+        initial_rmse = _sync_rmse(initial_sync, observations, calibrations)
+        final_rmse = _sync_rmse(best_sync, observations, best_cals)
         percent = (local_best_scale - 1.0) * 100.0
         anchor_fx = float(best_cals[anchor_id].intrinsics.fx)
         start_anchor = start_fx[anchor_id]
@@ -631,8 +690,8 @@ def refine_lenses_from_landmarks(
             sync_result=best_sync,
             initial_cost=initial_cost,
             final_cost=best_cost,
-            initial_sync_rmse=_sync_rmse(initial_sync),
-            final_sync_rmse=_sync_rmse(best_sync),
+            initial_sync_rmse=_sync_rmse(initial_sync, observations, calibrations),
+            final_sync_rmse=_sync_rmse(best_sync, observations, best_cals),
             fx_deltas={},
             message="No free focals (all matches Manual FOV / 1-point / locked)",
             improved=False,
@@ -685,6 +744,7 @@ def refine_lenses_from_landmarks(
                 cost, result = evaluate(
                     trial,
                     initial_similarities=local_best_sync.similarities,
+                    incumbent=local_best_sync,
                 )
                 if cost + 1.0e-6 < local_best_cost:
                     local_best_cost = cost
@@ -718,6 +778,7 @@ def refine_lenses_from_landmarks(
                 cost, result = evaluate(
                     trial,
                     initial_similarities=local_best_sync.similarities,
+                    incumbent=local_best_sync,
                 )
                 if cost + 1.0e-6 < local_best_cost:
                     local_best_cost = cost
@@ -775,6 +836,7 @@ def refine_lenses_from_landmarks(
                 cost, result = evaluate(
                     trial,
                     initial_similarities=best_sync.similarities,
+                    incumbent=best_sync,
                 )
                 if cost + 1.0e-6 < best_cost:
                     best_cost = cost
@@ -800,6 +862,7 @@ def refine_lenses_from_landmarks(
         cost, result = evaluate(
             trial,
             initial_similarities=best_sync.similarities,
+            incumbent=best_sync,
         )
         if cost + 1.0e-6 < best_cost:
             best_cost = cost
@@ -811,8 +874,8 @@ def refine_lenses_from_landmarks(
         for match_id in free_ids
     }
     improved = best_cost + 1.0e-3 < initial_cost
-    initial_rmse = _sync_rmse(initial_sync)
-    final_rmse = _sync_rmse(best_sync)
+    initial_rmse = _sync_rmse(initial_sync, observations, calibrations)
+    final_rmse = _sync_rmse(best_sync, observations, best_cals)
     changed = [
         f"{match_id} Δfx {delta:+.1f}px"
         for match_id, delta in fx_deltas.items()

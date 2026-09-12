@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Loading another file cancels Diagnose and Refine Lenses jobs; late callbacks from an old job cannot cancel or overwrite a newer one.
+- Refine Lenses includes recovered cameras in its focal score and preserves supported cameras and geometry when selecting improvements.
 - Refine Lenses restores cameras, landmarks and cached plates after an application error, while retaining improved lenses after a numerical Sync refusal.
 - Refine Lenses discards outdated results after input or camera edits, preserving the current calibration, poses and landmark diagnostics.
 - Diagnose discards results when Sync inputs or the active scene change during its background job, preserving current landmark errors instead of publishing an outdated report.
