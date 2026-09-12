@@ -1,0 +1,10 @@
+{
+  "accepted": false,
+  "behavior": "wrong_relation",
+  "final_cost": 3.3579187897157348,
+  "initial_cost": 3.3579187897157348,
+  "initial_sync_success": true,
+  "message": "Point focal fit did not converge.",
+  "name": "weak-axis-wrong-member",
+  "refusal_reason": "Point focal fit did not converge."
+}

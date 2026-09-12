@@ -1,0 +1,10 @@
+{
+  "accepted": false,
+  "behavior": "orientation_conflict_probe",
+  "final_cost": 4.455361208011655,
+  "initial_cost": 4.455361208011655,
+  "initial_sync_success": true,
+  "message": "A camera's point fit deteriorated",
+  "name": "mirror-tilted-hard",
+  "refusal_reason": "A camera's point fit deteriorated"
+}

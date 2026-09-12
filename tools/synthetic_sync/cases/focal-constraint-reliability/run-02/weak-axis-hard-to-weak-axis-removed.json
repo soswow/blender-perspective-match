@@ -1,0 +1,8 @@
+{
+  "accepted": false,
+  "fitted_rmse_px": null,
+  "initial_rmse_px": 2.8939401467194705,
+  "reason": "Point focal fit did not converge.",
+  "start_name": "weak-axis-hard",
+  "target_name": "weak-axis-removed"
+}

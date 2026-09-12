@@ -1,0 +1,38 @@
+{
+  "accepted": true,
+  "fitted_rmse_px": 0.23092065757910737,
+  "focal_interval_truth_coverage": {
+    "view_0": true,
+    "view_1": true,
+    "view_2": true,
+    "view_3": true
+  },
+  "independent": {
+    "alignment_scale": 1.0,
+    "center_rmse_world": 0.2875029678061798,
+    "focal_relative": {
+      "view_0": -0.013553992416264538,
+      "view_1": -0.05838726833808261,
+      "view_2": -0.06803298876089103,
+      "view_3": -0.05323893511885025
+    },
+    "landmark_rmse_world": 0.04157026738527762,
+    "max_rotation_error_deg": 0.4524465366811728,
+    "mirror_max_gap_shifted_world": 0.00010017169077184127,
+    "mirror_max_gap_world": 0.0001001719404386995,
+    "mirror_midpoint_offset_world": -4.1025024696828005e-10,
+    "mirror_midpoint_spread_world": 1.458300220966025e-05,
+    "plane_rms_world": null,
+    "raw_frame_withheld_rmse_px": 1.738959945621944,
+    "scale_ratio": 0.97533682870566,
+    "shape_training_rotation_deg": 0.5491337537323201,
+    "shape_training_scale": 1.0264473734789674,
+    "shape_withheld_rmse_px": 1.660440929295378,
+    "withheld_max_px": 2.8984147210417146,
+    "withheld_rmse_px": 1.738959945621944
+  },
+  "initial_rmse_px": 0.44105678572510554,
+  "reason": "",
+  "start_name": "weak-mirror-removed",
+  "target_name": "weak-mirror-hard"
+}

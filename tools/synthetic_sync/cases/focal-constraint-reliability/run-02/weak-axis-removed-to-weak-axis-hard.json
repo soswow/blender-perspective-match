@@ -1,0 +1,38 @@
+{
+  "accepted": true,
+  "fitted_rmse_px": 0.23204850753321762,
+  "focal_interval_truth_coverage": {
+    "view_0": true,
+    "view_1": true,
+    "view_2": true,
+    "view_3": true
+  },
+  "independent": {
+    "alignment_scale": 1.0802150334189877,
+    "center_rmse_world": 0.18108322426906073,
+    "focal_relative": {
+      "view_0": -0.030291988685391513,
+      "view_1": -0.010805917080669247,
+      "view_2": -0.019033878162385443,
+      "view_3": 0.01204589494210162
+    },
+    "landmark_rmse_world": 0.035774189254393594,
+    "max_rotation_error_deg": 0.38773652797773533,
+    "mirror_max_gap_shifted_world": null,
+    "mirror_max_gap_world": null,
+    "mirror_midpoint_offset_world": null,
+    "mirror_midpoint_spread_world": null,
+    "plane_rms_world": 8.495770180220085e-09,
+    "raw_frame_withheld_rmse_px": 22.991910863343985,
+    "scale_ratio": 1.1088090150799015,
+    "shape_training_rotation_deg": 0.560457880168334,
+    "shape_training_scale": 1.1149363242915717,
+    "shape_withheld_rmse_px": 1.0370209055042536,
+    "withheld_max_px": 5.224628289321442,
+    "withheld_rmse_px": 3.3185069461854377
+  },
+  "initial_rmse_px": 0.4900542302525041,
+  "reason": "",
+  "start_name": "weak-axis-removed",
+  "target_name": "weak-axis-hard"
+}

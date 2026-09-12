@@ -1,0 +1,10 @@
+{
+  "accepted": false,
+  "behavior": "wrong_relation",
+  "final_cost": 0.7075480980877422,
+  "initial_cost": 0.7075480980877422,
+  "initial_sync_success": true,
+  "message": "Point fit is inconsistent with the stated pick noise.",
+  "name": "weak-mirror-tilted",
+  "refusal_reason": "Point fit is inconsistent with the stated pick noise."
+}

@@ -1,0 +1,10 @@
+{
+  "accepted": false,
+  "behavior": "reference_geometry",
+  "final_cost": 2.893940146719461,
+  "initial_cost": 2.893940146719461,
+  "initial_sync_success": true,
+  "message": "Point focal fit did not converge.",
+  "name": "weak-axis-hard",
+  "refusal_reason": "Point focal fit did not converge."
+}

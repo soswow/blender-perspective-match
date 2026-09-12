@@ -381,14 +381,15 @@ def validate(case: dict) -> None:
                             raise ValueError("Biased mirror scale witness changes image evidence")
 
 
-def assess(case: dict, fitted: dict) -> dict:
+def assess(case: dict, fitted: dict, *, validated: bool = False) -> dict:
     """Independently score fitted world cameras/points against withheld truth.
 
     ``fitted`` uses ``{cameras: {id: {fx, fy, center, rotation}}, landmarks: {id: xyz}}``.
     Scale-free cases align only their global scale about the fixed anchor. The
     reported scale ratio itself is never hidden by that alignment.
     """
-    validate(case)
+    if not validated:
+        validate(case)
     truth = case["truth"]
     true_cameras = {item["id"]: item for item in truth["cameras"]}
     fitted_cameras = fitted["cameras"]

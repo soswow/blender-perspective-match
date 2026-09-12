@@ -94,6 +94,9 @@ the effective mirror plane slide along its normal without moving the Empty.
 Each member still needs picks in at least two cameras; the one-view constrained
 reconstruction available in ordinary Sync is not part of this FOV mode.
 Free groups need four members to constrain coplanarity; axis groups need two.
+Plane and mirror relations are enforced in the joint fit after preliminary
+camera registration from the image picks. This helps weak camera arrangements
+whose guessed starting FOV previously left the constrained fit stuck.
 
 The anchor camera's stored orientation and position remain fixed. X/Y/Z
 groups and the Mirror Empty are interpreted in that world frame; this mode

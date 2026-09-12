@@ -1,0 +1,58 @@
+{
+  "accepted": true,
+  "behavior": "relation_removed",
+  "final_cost": 0.21790737520540085,
+  "focal_interval_truth_coverage": {
+    "view_0": true,
+    "view_1": true,
+    "view_2": true,
+    "view_3": true
+  },
+  "focal_intervals_px": {
+    "view_0": [
+      716.7063872800952,
+      952.5292488520819
+    ],
+    "view_1": [
+      843.6581102471836,
+      1195.140048767231
+    ],
+    "view_2": [
+      623.1250563636446,
+      864.4935199283162
+    ],
+    "view_3": [
+      772.7822168952944,
+      1138.5208501666923
+    ]
+  },
+  "independent": {
+    "alignment_scale": 1.10588061565938,
+    "center_rmse_world": 0.17734011142666772,
+    "focal_relative": {
+      "view_0": -0.05029101903194799,
+      "view_1": -0.03448438148297972,
+      "view_2": -0.03427186006874283,
+      "view_3": -0.012640182635772934
+    },
+    "landmark_rmse_world": 0.06222206427325601,
+    "max_rotation_error_deg": 0.7707448382893524,
+    "mirror_max_gap_shifted_world": null,
+    "mirror_max_gap_world": null,
+    "mirror_midpoint_offset_world": null,
+    "mirror_midpoint_spread_world": null,
+    "plane_rms_world": null,
+    "raw_frame_withheld_rmse_px": 29.154112660745845,
+    "scale_ratio": 1.1088090150799017,
+    "shape_training_rotation_deg": 0.5898194692123179,
+    "shape_training_scale": 1.1709671207560204,
+    "shape_withheld_rmse_px": 1.4194989295707199,
+    "withheld_max_px": 8.699012021979247,
+    "withheld_rmse_px": 5.458107712568529
+  },
+  "initial_cost": 0.49005423025250505,
+  "initial_sync_success": true,
+  "message": "Point focal fit \u00b7 0.22px \u00b7 95% intervals at \u03c3=0.35px",
+  "name": "weak-axis-removed",
+  "refusal_reason": ""
+}

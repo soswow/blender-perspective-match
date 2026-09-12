@@ -1,5 +1,5 @@
 **Perspective Match: reliability and AI development proposal**
-Investigation baseline: commit `5d876f6` / extension 0.5.0, 10 September 2026. Latest product checkpoint: point-FOV evidence diagnostics and plane/mirror constraints, 12 September 2026, described under **Current frontier**. Read that section first; the dated checkpoints preserve history, and the original proposal is retained for rationale rather than as an implementation checklist.
+Investigation baseline: commit `5d876f6` / extension 0.5.0, 10 September 2026. Latest product checkpoint: point-FOV plane/mirror startup reliability, 12 September 2026, described under **Current frontier**. Read that section first; the dated checkpoints preserve history, and the original proposal is retained for rationale rather than as an implementation checklist.
 
 **My recommendation is to make every solver decision reproducible from a complete, versioned input, and judge it with checks independent of the implementation.** Build that foundation around the existing fixtures, Blender smoke test, and diagnostics. Then use it to improve calibration ownership, quality reporting, and selected solver decisions. This would turn a debugging session into an addition to a reusable capability.
 
@@ -86,6 +86,52 @@ constraint and focal modules then passed all 32 tests in 1.574 s. The complete
 suite was not repeated after this test-only correction. The Blender 5.1.0
 `validate_addon.py` smoke test passed. No private project was modified.
 
+**Weak-evidence constraint follow-up:** the [paired pilot](../tools/synthetic_sync/cases/focal-constraint-reliability/RESULTS.md)
+compares correct, removed and slightly wrong plane/mirror relations with partial
+point overlap and cameras on the same side of the object. It used 12 initial
+Sync calls and 18 bundle fits, retaining exact inputs, source snapshots and
+all results. Each camera has 11–12 picks and each point two or three views;
+visibility is an unobstructed scaffold, not an opaque-object simulation.
+
+A saved-start cross isolated a startup defect. Enforcing a correct hard axis
+plane during Sync at guessed intrinsics produced a poor start (2.894 px) from
+which even the unconstrained focal bundle failed. The same picks initialized
+without the plane let the constrained joint bundle converge. The public
+point-FOV route now uses one point-only initial registration, with all original
+relations enforced in the final joint fit. It does not add a second registration
+or weaken final constraint checks. The fixed public case fits at 0.232 px and
+satisfies its hard plane to 8.5e-9 world RMS.
+
+Withheld shape RMS in this one noise draw was 1.04 vs 1.42 px for axis plane
+versus removal, 2.26 vs 2.46 px for Free plane, and 1.66 vs 2.35 px for mirror
+pairs. These modest improvements are examples, not a measured general failure
+rate. Shape assessment permits one positive global similarity fitted only to
+training points; fixed-frame errors remain separately visible. In particular,
+the accepted axis case has 3.32 px withheld error with only anchor-fixed scale
+alignment. Correct mirror fitting was stable from both initializations; the
+wrong axis member and tilted mirror still refused after the startup change.
+
+A 1.43-degree wrong stored anchor orientation with a supplied mirror was
+accepted: 15.12 px raw-frame withheld error but 1.24 px after the single shared
+alignment. This preserves the distinction between external-frame accuracy and
+visual shape; it is not proof of a shape defect or correct supplied references.
+Every accepted case's four conditional focal intervals contained truth, but
+one noise draw cannot establish statistical coverage. The raw-pick depth
+screen remains conservative; this work does not enable constraint-only depth
+recovery, unknown mirror orientation, one-view FOV points, distortion or crops.
+
+Integration verification passed: **423 numerical tests in 428.718 seconds,
+with two optional local-YAML skips**, including the genuine public weak-axis
+regression. Two fresh Blender 5.1.0 exact positives (axis plane and off-anchor
+mirror) passed preparation, application, stale-input rejection and read-only
+reopening; native withheld RMS was 0.000280 and 0.000201 px respectively.
+This separately declared verification used one new public regression solve
+plus two Blender Sync/bundle pairs, beyond the 12/18 experimental budget;
+existing suite calls are the normal regression workload. Reopens used no solves.
+Generated scenes and logs are under `.local/focal-reliability-validation/`.
+The existing CI constraint checks exercise the changed startup path too; hosted
+CI was not run in this session. No private project was modified.
+
 **Open question for later — symmetry without a supplied plane:** the user may
 know several pairs of corresponding mirror landmarks and that all pairs share
 one symmetry plane, without knowing its position/orientation or having an Empty
@@ -95,6 +141,42 @@ when the observations determine it, which freedoms remain, and how to report
 ambiguity. Existing Mirror Slack only adjusts an already supplied plane along
 its normal; it does not establish this missing-plane workflow. This question
 is retained separately, not added to the current implementation scope.
+
+**Candidate intermediate step — a live landmark on the mirror plane:** allow
+selecting a reconstructed landmark as the plane's positional reference, instead
+of copying its current estimate into a static Mirror Empty. Keep the reference
+by landmark identity so subsequent reconstruction updates also update the plane.
+The landmark must actually lie on the symmetry plane; an arbitrary off-plane
+point is not a valid origin. It need not be the object's geometric center.
+Alternatively, the midpoint of a declared mirror pair lies on the plane, but
+that is derived from the existing symmetry relation, not independent evidence.
+
+This is a plausible smaller extension than estimating a completely unknown
+plane. With a supplied normal (world axis or an orientation reference), a live
+on-plane landmark defines the plane's offset. A point alone does not define
+orientation; without a supplied normal, the shared pairs and observations must
+still determine it. Its advantage is extra geometric information and avoiding
+a stale copied position, not a guarantee of improved accuracy when the
+landmark itself is weakly reconstructed.
+
+Represent this as a relation within the solve: the plane passes through the
+current estimated landmark, and mirror pairs constrain that same reconstruction.
+Do not promote the estimate to exact Known 3D or treat it as an independent
+measurement. Merely moving an Empty after a solve would leave the fit based on
+the previous plane and could create feedback between successive solves. Decide
+how positional slack combines with this relation, how uncertainty is reported,
+and what happens if the reference is deleted, unobserved or underconstrained.
+The current implementation reads the Mirror Empty's world position and selected
+axis in `scene/__init__.py::sync_mirror_plane_from_workspace`; it has no such
+landmark dependency.
+
+A first experiment should use a supplied normal and a well-observed on-plane
+landmark, then add views that improve its initial estimate. Compare live joint
+fitting against a frozen copied Empty using withheld object alignment and plane
+error. Include a noisy/weak reference and an intentionally off-plane selection
+to expose sensitivity and overconfidence. Leave joint unknown-orientation
+estimation and any one-view extension as separate follow-ups. This remains a
+proposal, not implemented behavior.
 
 ### Finding disposition — keep fixes and unresolved evidence distinct
 
@@ -111,6 +193,7 @@ disposition changes; the dated reports below retain the original measurements.
 | Exact 2D-only startup accepts inaccurate geometry despite correct intrinsics | **Fixed and verified in `cc7d14d`** | [Frozen case and follow-up](../tools/synthetic_sync/no-vp-bootstrap-results.md): robust anchor connection plus direct/bridge competition restore shared- and mixed-focal true-K geometry. Actual old-solver regression fails; integrated 374-test suite and Blender solve/apply/reopen pass. |
 | Noisy calibrated 2D-only startup collapses camera baselines | **Fixed and verified in `2eb7088`; residual accuracy findings remain** | [Noisy continuation](../tools/synthetic_sync/independent-focal-results.md): ray-distance refinement could reduce its objective by shrinking the camera baseline. Holding its unobservable scale gauge prevents that collapse. The old regression fails; fixed noisy mixed/shared fitted RMSE is 0.376/0.319 px with all withheld features in front. Mixed withheld RMS 1.974 px and center error 0.068 object diagonals remain accuracy findings, not closed by this fix. |
 | Guessed intrinsics can produce low-error but inaccurate free 3D | **Open quality/uncertainty gap** | [Unknown-focal continuation](../tools/synthetic_sync/unknown-focal-results.md): shared and mixed guessed-K Sync runs fit at ~0.49 px but fail withheld geometry. The actual Same Lens route succeeds on shared K with an explicit ±25% range; a general warning or acceptance rule needs stronger evidence. |
+| Correct hard plane can prevent independent point-FOV startup at guessed intrinsics | **Fixed and verified at this checkpoint** | [Weak constraint pilot](../tools/synthetic_sync/cases/focal-constraint-reliability/RESULTS.md): crossing saved starts isolates premature constraint enforcement. One point-only registration followed by the constrained joint fit changes the preserved refusal to an accepted 0.232 px fit; wrong-reference controls still refuse. Weak-view and fixed-anchor accuracy limits remain explicit. |
 | Pure rotation is accepted as reconstructed free 3D | **Ordinary Sync remains open; new point-FOV mode refuses preserved controls** | [Frozen true/guessed-K rotation controls](../tools/synthetic_sync/unknown-focal-results.md) expose ordinary Sync's depth ambiguity. The optional point-FOV mode screens raw picks for a connected graph of non-homographic support, checks the stated noise model and rejects deficient local geometry. Its tested refusals do not establish a general Sync ambiguity detector or a universal false-positive rate. |
 | Mild noisy free-scale/overhead cases and five of ten noisy graph cases exceed provisional accuracy limits | **Open accuracy findings; cause not established** | [Initial pilot](../tools/synthetic_sync/pilot-results.md), [evidence placement](../tools/synthetic_sync/evidence-results.md), [graph sweep](../tools/synthetic_sync/graph-results.md). Reassess after the exact startup fix; compare input uncertainty with reconstruction sensitivity before claiming a solver defect. |
 | Weak mirror-line geometry under noisy or biased strokes | **Geometry limit still open; weak-support warning fixed** | [Constraint evidence](../tools/synthetic_sync/constraint-results.md). Depth is poorly determined by nearly coincident supporting planes. More copies of the same weak evidence do not establish accuracy; test better evidence or an honest uncertainty response. |

@@ -143,10 +143,16 @@ def run(out: Path, names: tuple[str, ...], *, stop_on_positive_failure: bool = T
                     mirror_slack=arguments["mirror_slack"])
             accepted = bool(result.improved and not result.refusal_reason)
             summary = dict(name=name, accepted=accepted, message=result.message,
+                           refusal_reason=result.refusal_reason,
                            behavior=case["expectation"]["behavior"],
                            initial_sync_success=bool(result.sync_result.success),
                            initial_cost=result.initial_cost, final_cost=result.final_cost)
             if accepted:
+                summary["focal_intervals_px"] = result.focal_intervals
+                summary["focal_interval_truth_coverage"] = {
+                    camera["id"]: bool(result.focal_intervals[camera["id"]][0] <= camera["fx"] <=
+                                       result.focal_intervals[camera["id"]][1])
+                    for camera in case["truth"]["cameras"]}
                 fitted_cameras = []
                 for camera in request["cameras"]:
                     updated = dict(camera)

@@ -516,9 +516,11 @@ def refine_lenses_from_landmarks(
             initial = _run_sync(
                 initial_cals, match_ids, observations, [], anchor_id, {}, {}, [],
                 fixed_similarities=None, lock_rotation=False, lock_translation=False,
-                plane_groups=plane_groups, plane_slack=plane_slack,
-                mirror_pairs=mirror_pairs, mirror_plane=mirror_plane,
-                mirror_slack=mirror_slack,
+                # Joint point-FOV fitting enforces these relations. Register
+                # from image picks alone so guessed K cannot harden a poor
+                # constrained 3D start before the focal parameters are free.
+                plane_groups=None, plane_slack=0.0,
+                mirror_pairs=None, mirror_plane=None, mirror_slack=0.0,
                 location_match_ids=location_match_ids, cancel_check=cancel_check)
         except sync_module.SyncCancelled:
             return refusal("Cancelled", cancelled=True)

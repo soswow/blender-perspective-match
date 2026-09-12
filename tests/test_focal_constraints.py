@@ -389,7 +389,7 @@ class PointFocalConstraintModelTests(TestCase):
         broken_mirror[partner] += 0.02 * mirror.mirror_normal / mirror.baseline_world
         self.assertGreater(mirror.world_gaps(broken_mirror)[1], MIRROR_PAIR_HARD_GAP)
 
-    def test_public_point_route_forwards_exact_relations_to_sync_and_bundle(self):
+    def test_public_point_route_initializes_from_picks_then_fits_relations(self):
         for name in ("free-hard", "axis-hard", "mirror-hard-offcenter"):
             with self.subTest(name=name):
                 case = fixtures.generate(name)
@@ -427,9 +427,12 @@ class PointFocalConstraintModelTests(TestCase):
                         mirror_plane=case["request"]["mirror_plane"],
                         mirror_slack=case["request"]["mirror_slack"])
                 self.assertEqual(outcome.refusal_reason, "mocked bundle")
-                self.assertEqual(run_sync.call_args.kwargs["plane_groups"],
+                self.assertIsNone(run_sync.call_args.kwargs["plane_groups"])
+                self.assertIsNone(run_sync.call_args.kwargs["mirror_pairs"])
+                self.assertIsNone(run_sync.call_args.kwargs["mirror_plane"])
+                self.assertEqual(run_bundle.call_args.kwargs["plane_groups"],
                                  case["request"]["plane_groups"])
-                self.assertEqual(run_sync.call_args.kwargs["mirror_pairs"],
+                self.assertEqual(run_bundle.call_args.kwargs["mirror_pairs"],
                                  case["request"]["mirror_pairs"])
                 self.assertEqual(run_bundle.call_args.kwargs["mirror_plane"],
                                  case["request"]["mirror_plane"])

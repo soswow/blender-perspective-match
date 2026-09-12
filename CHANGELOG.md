@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Point-based FOV refinement supports Is in Plane and point mirror pairs with a supplied Mirror Empty.
 
 ### Fixed
+- Point-based FOV refinement no longer gets stuck on some valid plane-constrained setups when starting FOVs are approximate.
 - Point-based FOV refinement identifies cameras with too few picks and can suggest a view pair to check when fitting fails on inconsistent correspondences.
 - Solve Sync keeps two-view camera baselines from collapsing while registering noisy shared point picks.
 

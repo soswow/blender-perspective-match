@@ -1,0 +1,8 @@
+{
+  "accepted": false,
+  "fitted_rmse_px": 0.40003101090187604,
+  "initial_rmse_px": 0.44105678572510554,
+  "reason": "Point fit is inconsistent with the stated pick noise.",
+  "start_name": "weak-mirror-removed",
+  "target_name": "weak-mirror-tilted"
+}

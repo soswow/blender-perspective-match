@@ -1,0 +1,8 @@
+{
+  "accepted": false,
+  "fitted_rmse_px": 0.9951891806307172,
+  "initial_rmse_px": 0.4900542302525041,
+  "reason": "A camera's point fit deteriorated",
+  "start_name": "weak-axis-removed",
+  "target_name": "weak-axis-wrong-member"
+}
