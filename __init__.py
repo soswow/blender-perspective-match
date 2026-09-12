@@ -173,10 +173,8 @@ def _capture_framing_before_save(_dummy=None) -> None:
 def _reset_modal_state(_dummy=None) -> None:
     """Clear transient modal flags after file load (safe outside register())."""
     operators._active_interact = None
-    operators.request_lens_refine_cancel()
+    operators.reset_sync_background_jobs()
     operators.request_vp_detect_cancel()
-    operators._lens_refine_running = False
-    operators._lens_refine_cancel = None
     operators._vp_detect_running = False
     operators._vp_detect_cancel = None
     properties.bump_sync_ui_cache()
@@ -407,7 +405,7 @@ def unregister() -> None:
         bpy.app.handlers.redo_post.remove(_refresh_after_history)
     operators._active_interact = None
     try:
-        operators.request_lens_refine_cancel()
+        operators.reset_sync_background_jobs()
         operators.request_vp_detect_cancel()
     except Exception:
         traceback.print_exc()

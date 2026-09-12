@@ -347,6 +347,30 @@ delete a plate needed for rollback. The generated plate is a cache-ownership
 control, not a distortion-accuracy test. Arbitrary Blender data deletion, an error
 during rollback itself, undo/redo and live UI scheduling remain outside this check.
 
+### Job ownership after file load
+
+Run `verify_job_reload.py -- --out /tmp/pm-job-reload` with the same factory-startup
+Blender command above. It saves and reloads only its generated input. Twelve
+controls cover Diagnose and Refine Lenses: unchanged completion, file load before
+or after the old worker completes, late cancellation/timer callbacks, and cancelling
+an unfinished job before starting another in the same scene. Old callbacks must
+leave the new job's cancellation event, result box, running state and status alone.
+The new job must still finish, and applied lens cameras must pass withheld checks.
+
+This reproduced Diagnose remaining busy after a file load, an old lens callback
+clearing a new job's state, and a missing `time` import in the old cancellation
+wait. Each operator now owns its result box and cancellation event. Loading a
+file retires both jobs, and finishing one cannot consume another's result. A
+cancelled modal can retire immediately while its numerical worker stops
+cooperatively; no blocking wait is needed on that callback.
+
+The script computes real numerical results once, then replays them only after
+verifying identical prepared input. Workers deliberately return a completed result
+even after cancellation to exercise the difficult interleaving. Real file-load
+handlers run; thread launch, modal window plumbing and report launching are
+substituted. This establishes ownership, not cancellation latency, native Blender
+modal scheduling, or lifecycle behavior for VP detection and Iterate Known 3D.
+
 ### Reducing a confirmed regression
 
 ```sh

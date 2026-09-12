@@ -347,6 +347,24 @@ _vp_detect_progress = {"label": ""}
 _vp_detect_result_box: dict = {}
 
 
+def reset_sync_background_jobs() -> None:
+    """Cancel and retire background Sync jobs when their Blender scene is unloaded."""
+    global _lens_refine_cancel, _lens_refine_running, _lens_refine_result_box
+    global _diagnose_sync_cancel, _diagnose_sync_running, _diagnose_sync_result_box
+    with _lens_refine_lock:
+        if _lens_refine_cancel is not None:
+            _lens_refine_cancel.set()
+        _lens_refine_running = False
+        _lens_refine_cancel = None
+        _lens_refine_result_box = {}
+    with _diagnose_sync_lock:
+        if _diagnose_sync_cancel is not None:
+            _diagnose_sync_cancel.set()
+        _diagnose_sync_running = False
+        _diagnose_sync_cancel = None
+        _diagnose_sync_result_box = {}
+
+
 def lens_refine_is_running() -> bool:
     """True while a Refine Lenses modal/worker is active."""
     return bool(_lens_refine_running)
@@ -3436,6 +3454,8 @@ class PM_OT_diagnose_sync(bpy.types.Operator):
 
     _timer = None
     _prep = None
+    _result_box = None
+    _cancel_event = None
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
@@ -3467,6 +3487,8 @@ class PM_OT_diagnose_sync(bpy.types.Operator):
             _diagnose_sync_result_box = result_box
 
         self._prep = prep
+        self._result_box = result_box
+        self._cancel_event = cancel_event
         workspace.sync_status = "Diagnose running… Esc to cancel"
         properties.tag_viewport_redraw(context)
 
@@ -3504,22 +3526,28 @@ class PM_OT_diagnose_sync(bpy.types.Operator):
         return {"RUNNING_MODAL"}
 
     def _finish_job(self, context: bpy.types.Context, *, cancelled: bool) -> set[str]:
-        global _diagnose_sync_cancel, _diagnose_sync_running
+        global _diagnose_sync_cancel, _diagnose_sync_running, _diagnose_sync_result_box
 
         window_manager = context.window_manager
         if self._timer is not None:
-            window_manager.event_timer_remove(self._timer)
+            try:
+                window_manager.event_timer_remove(self._timer)
+            except (ReferenceError, RuntimeError, ValueError):
+                pass  # A file load may already have removed this timer.
             self._timer = None
+        if self._result_box is not _diagnose_sync_result_box:
+            return {"CANCELLED"}
         try:
             window_manager.progress_end()
         except Exception:
             pass
 
         workspace = _workspace(context)
-        result_box = _diagnose_sync_result_box
+        result_box = self._result_box
         with _diagnose_sync_lock:
             _diagnose_sync_running = False
             _diagnose_sync_cancel = None
+            _diagnose_sync_result_box = {}
 
         if result_box.get("error") is not None:
             error = result_box["error"]
@@ -3562,6 +3590,8 @@ class PM_OT_diagnose_sync(bpy.types.Operator):
         return {"FINISHED"}
 
     def modal(self, context: bpy.types.Context, event) -> set[str]:
+        if self._result_box is not _diagnose_sync_result_box:
+            return self._finish_job(context, cancelled=True)
         workspace = _workspace(context)
         if event.type == "ESC" and event.value == "PRESS":
             request_diagnose_sync_cancel()
@@ -3592,11 +3622,10 @@ class PM_OT_diagnose_sync(bpy.types.Operator):
         )
 
     def cancel(self, context: bpy.types.Context) -> None:
-        request_diagnose_sync_cancel()
-        for _ in range(50):
-            if _diagnose_sync_result_box.get("done"):
-                break
-            time.sleep(0.02)
+        if self._cancel_event is not None:
+            self._cancel_event.set()
+        # Workers own numerical inputs and a private result box. They can stop
+        # cooperatively after the modal retires without touching a newer job.
         self._finish_job(context, cancelled=True)
 
     def execute(self, context: bpy.types.Context) -> set[str]:
@@ -3656,6 +3685,8 @@ class PM_OT_refine_lenses(bpy.types.Operator):
 
     _timer = None
     _prep = None
+    _result_box = None
+    _cancel_event = None
     _progress_max = 1
 
     @classmethod
@@ -3700,6 +3731,8 @@ class PM_OT_refine_lenses(bpy.types.Operator):
             _lens_refine_progress = progress_state
 
         self._prep = prep
+        self._result_box = result_box
+        self._cancel_event = cancel_event
         self._progress_max = max(total, 1)
         workspace.lens_refine_progress = 0.0
         workspace.sync_status = "Refine Lenses running… Esc to cancel"
@@ -3737,24 +3770,30 @@ class PM_OT_refine_lenses(bpy.types.Operator):
         return {"RUNNING_MODAL"}
 
     def _finish_job(self, context: bpy.types.Context, *, cancelled: bool) -> set[str]:
-        global _lens_refine_cancel, _lens_refine_running
+        global _lens_refine_cancel, _lens_refine_running, _lens_refine_result_box
 
         window_manager = context.window_manager
         if self._timer is not None:
-            window_manager.event_timer_remove(self._timer)
+            try:
+                window_manager.event_timer_remove(self._timer)
+            except (ReferenceError, RuntimeError, ValueError):
+                pass  # A file load may already have removed this timer.
             self._timer = None
+        if self._result_box is not _lens_refine_result_box:
+            return {"CANCELLED"}
         try:
             window_manager.progress_end()
         except Exception:
             pass
 
         workspace = _workspace(context)
-        result_box = _lens_refine_result_box
+        result_box = self._result_box
         prep = self._prep
 
         with _lens_refine_lock:
             _lens_refine_running = False
             _lens_refine_cancel = None
+            _lens_refine_result_box = {}
 
         if result_box.get("error") is not None:
             error = result_box["error"]
@@ -3801,6 +3840,8 @@ class PM_OT_refine_lenses(bpy.types.Operator):
         return {"FINISHED"}
 
     def modal(self, context: bpy.types.Context, event) -> set[str]:
+        if self._result_box is not _lens_refine_result_box:
+            return self._finish_job(context, cancelled=True)
         workspace = _workspace(context)
         if event.type in {"ESC"} and event.value == "PRESS":
             request_lens_refine_cancel()
@@ -3833,12 +3874,10 @@ class PM_OT_refine_lenses(bpy.types.Operator):
         )
 
     def cancel(self, context: bpy.types.Context) -> None:
-        request_lens_refine_cancel()
-        # Wait briefly so the worker can exit cleanly before apply is skipped.
-        for _ in range(50):
-            if _lens_refine_result_box.get("done"):
-                break
-            time.sleep(0.02)
+        if self._cancel_event is not None:
+            self._cancel_event.set()
+        # Workers own numerical inputs and a private result box. They can stop
+        # cooperatively after the modal retires without touching a newer job.
         self._finish_job(context, cancelled=True)
 
     def execute(self, context: bpy.types.Context) -> set[str]:

@@ -24,6 +24,46 @@ ZIP builds (`./scripts/build-extension.sh`) are only needed for a local packagin
 
 User-visible changes go in `CHANGELOG.md` under `## [Unreleased]` in the same commit (see `AGENTS.md`). Do not bump `blender_manifest.toml` until a release.
 
+## Parallel agent work
+
+Use separate worktrees for independent problems, with one main thread reviewing
+and integrating them. A worktree isolates files and a branch; it does not isolate
+CPU, Blender's installed development link, or the underlying Git repository.
+Do not run `link-dev.sh`, stash/pop, switch the main branch, or change another
+worktree from an agent's task.
+
+1. Start from a committed, verified checkpoint. Inspect `git status`,
+   `git stash list` and `git worktree list` first so interrupted work is accounted
+   for. Give each agent a new branch and a directory outside the main checkout
+   (avoids recursively compiling nested worktrees).
+2. Give each task a concrete question, owned files, expected evidence, test budget
+   and stopping condition. For geometry, require exact input plus an independent
+   camera/point/line check and a useful positive or removal control. A suspected
+   defect is not permission to retune thresholds until the test passes.
+3. Keep production ownership distinct, for example lens selection versus line
+   reconstruction versus Blender job lifecycle. Agents can share findings; if a
+   fix crosses another lane, agree on one owner before either edits that file.
+   The main thread owns the decision record, shared harness contracts and CI.
+4. Each agent runs focused checks and makes a reviewable commit, including the
+   required changelog/user docs for product changes. Return the commit hash,
+   exact test commands/results, artifacts and remaining uncertainty. Do not run
+   several full suites or large Blender sweeps at once: Sync already uses worker
+   threads and numerical libraries may use additional cores.
+5. The main thread reads each diff and its evidence, integrates one commit at a
+   time (for example `git cherry-pick <commit>`), resolves shared prose carefully,
+   and checks the affected behavior. Run the full combined numerical suite and
+   relevant Blender checks after integration. Passing separate branches does not
+   establish that their combination works.
+6. Preserve useful exact cases and measurements in the repository before cleaning
+   up a worktree. Confirm its changes were integrated and it has no uncommitted
+   work; remove it without force. Record any remaining branch/worktree and the
+   next action in the continuing decision record when a session is interrupted.
+
+Parallel work is useful when the questions can be answered independently. A
+single dependent debugging chain is usually faster with one agent. Keep this
+workflow in the repository; executable reproducers and tests carry the lasting
+knowledge rather than an additional skill duplicating these commands.
+
 ## Wheels
 
 Wheels are **not** stored in git (~50–65 MB each). Before building or linking:

@@ -45,6 +45,7 @@ Keep this map accurate when you add a module, move a stage, or change a named co
 | Known-3D pin refine | `core/pin_refine.py` (Iterate Known 3D loop is applied in `scene/__init__.py`) |
 | Blender cameras, stills, Solve Sync apply | `scene/__init__.py` |
 | Image analysis (AprilTags, VP detect, edge/tag snap) | `detect/` |
+| Background Sync job lifecycle | `ui/operators.py` (per-operator result ownership; `reset_sync_background_jobs` retires jobs on file load and unregister) |
 | Operators / panel / overlay | `ui/` (`overlay.py` POST_PIXEL; `overlay_gpu.py` unit-batch TRS; `overlay_style.py` plate stroke colors; `match_history.py` last-10 match visits) |
 | Self-contained HTML sync diagnostics | `ui/sync_report.py` (Cytoscape.js in `ui/vendor/` for the camera graph) |
 | RNA | `properties/__init__.py` |
@@ -93,6 +94,10 @@ Headless helpers under `tools/` (and `scripts/validate_addon.py`) for investigat
 - `tools/synthetic_sync/planes.py` — independent axis/Free-plane and point/line controls, hard-ground intersection, paired plane removal and Fit Only stroke checks; `--contribution` checks single-view depth from a supported plane with removal/role controls; `--mirrored-line` tests an independently supported plane against the frozen weak mirror strokes, retaining identical Known 3D references in its removal control. Blender `--drop-constraint` also supports these plane cases. Line-support diagnostics exclude free lines and plane-seeded points from independent plane evidence, and require actual line membership before counting a plane's normal.
 
 - `tools/synthetic_sync/verify_jobs.py` checks blocking/background lens inputs through generated Blender RNA and the actual operator worker callback, including planes, slack, locks, roles and shared/per-match lens settings. `--ownership` runs real numerical Diagnose jobs after controlled plane/role/pick edits, missing anchors and scene changes. `--lens-ownership` replays one real improved lens result against input/VP/origin/search/camera edits, with unchanged/unrelated-edit/match-switch controls and independent checks of applied cameras. Rejections must be `StaleSyncResult`, preserve current output state and avoid preparation. `--lens-ownership --apply-failures` injects errors during camera writes, Sync apply and plate rebuilding, with exact state/cache restoration and successful/numerical-refusal controls. Window-manager plumbing is substituted and job callbacks are deferred deterministically; it does not test live UI scheduling. Lens-input mode substitutes numerical search too.
+
+- `tools/synthetic_sync/verify_job_reload.py` — generated-file reload with deferred real worker callbacks; checks cancellation, new-job availability, old finish/cancel/timer isolation and successful new application against independent withheld geometry. Numerical results are solved once and replayed from identical inputs; native UI scheduling is not simulated.
+
+Parallel agent work uses isolated worktrees and distinct file ownership; see `docs/development.md#parallel-agent-work`.
 
 ## Do not
 
