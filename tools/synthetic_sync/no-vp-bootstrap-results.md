@@ -59,7 +59,7 @@ environment are at `cases/no-vp-shared-trueK-result.json`, with a compact
 `cases/no-vp-bootstrap-summary.json`. The cap was 16 total real Sync calls,
 180 seconds per call and 720 cumulative active seconds, plus a 720-second
 outer process timeout. Only 1 of 16 calls and 3.51 of 720 active seconds were
-used. Frozen cases remain available for a later, separately authorized phase.
+used. Frozen cases remain available for a later, separately budgeted follow-up.
 
 ## Reproduce without spending a solve call
 

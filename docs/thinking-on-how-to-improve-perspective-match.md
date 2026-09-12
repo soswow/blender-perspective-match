@@ -1,5 +1,5 @@
 **Perspective Match: reliability and AI development proposal**
-Investigation baseline: commit `5d876f6` / extension 0.5.0, 10 September 2026. Latest product fix: `c304fbe`; latest test checkpoint: `0fcfe57`, 12 September 2026. Read **Current frontier**, including **Latest investigation**, first; the dated checkpoints preserve history, and the original proposal is retained for rationale rather than as an implementation checklist.
+Investigation baseline: commit `5d876f6` / extension 0.5.0, 10 September 2026. Latest product fix: `c304fbe`; latest tooling/test checkpoint: `e073887`, 12 September 2026. Read **Current frontier**, including **Latest investigation**, first; the dated checkpoints preserve history, and the original proposal is retained for rationale rather than as an implementation checklist.
 
 **My recommendation is to make every solver decision reproducible from a complete, versioned input, and judge it with checks independent of the implementation.** Build that foundation around the existing fixtures, Blender smoke test, and diagnostics. Then use it to improve calibration ownership, quality reporting, and selected solver decisions. This would turn a debugging session into an addition to a reusable capability.
 
@@ -10,6 +10,24 @@ The deeper product issue is that three different promises are currently close to
 ## Current frontier — 12 September 2026
 
 **Objective and scope:** improve Sync reliability through reproducible evidence and independent checks of the rest of the object, beyond fitted picks. Both visual alignment and metric accuracy matter. Synthetic scenes are the primary corpus; private projects are optional evidence. Images are optional. **Latest user steering:** reliable FOV estimation from shared landmarks without dependable VP lines is now a priority; both shared-lens sets and mixed lenses/zooms/crops are common. Image transformations and distortion are now in scope when they affect that workflow. Automatic AprilTag/VP detection remains optional, not a prerequisite. Earlier deferrals below are historical.
+
+**Newest result:** the 2D-only startup pilot hit its stop condition on its first
+true-intrinsics control: Sync accepted inaccurate geometry. Budget tooling is
+implemented in `3f1667a`, numerical evidence in `a9c484a`, and no-solve Blender
+preparation/reopening checks in `fbfa4ef`. Read **Latest investigation** below
+before restarting any focal search. The other seven frozen cases are unexecuted.
+
+**Reference provenance clarified by the user:** trustworthy external Known 3D is
+rare. Most Known 3D points are promoted from agreement among existing matches to
+help fit later matches; they are working estimates, not independent measurements.
+The normal startup may contain only corresponding 2D picks, with no VP lines or
+ground points. Do not require Known 3D to bootstrap that workflow or use promoted
+points to certify its accuracy. Free reconstruction has an arbitrary global
+frame and scale; absolute dimensions require additional metric evidence. Existing
+Known 3D Slack can soften working references, but does not make them independent
+or recover their lost uncertainty/correlation. Provenance-aware reference handling
+is a future product question, not an implemented feature or a prerequisite for
+this pilot.
 
 **Checkpoint:** the truth-free reference-sensitivity pilot is committed as `d302390`; analytic pinhole line projection is fixed in `c304fbe`. The projection regressions fail on old code and pass after the fix, including arbitrary line directions, combined transforms and unchanged distorted-camera behavior. Combined validation passed **349 tests, 9 skipped, 260.811 seconds**, plus Blender 5.1.0 smoke. Two additional diagnostic comparison tests and independent no-solve projection/cached-pair checks passed after integration. Evidence tooling is committed as `8abac35`. Both workers have finished; their worktrees are archived and removed. No task is running. Hosted CI remains unverified; nothing has been pushed. Earlier reference-bias and plane/parallel work remains in `67f8877` and `3997bd3`.
 
@@ -40,7 +58,68 @@ assignments.
 
 **Selective escalation procedure:** use Sol/high with fresh context for a bounded numerical experiment; the main thread owns hypothesis review, independent correctness criteria and the decision record. Give the worker only relevant paths, owned files, controls, a solve budget and a stopping condition (the first trial allowed at most 20 solves). Return artifact paths and concise measurements rather than full logs. Escalate unresolved geometry or conflicting evidence; do not rerun the worker's entire investigation in the main thread. Evaluate the workflow by review/rework needed and recorded usage where available, not by parallelism alone. No measured token-savings claim is available from this first handoff.
 
-### Latest investigation: no-VP lenses and measurable agent work
+### Latest investigation: 2D-only startup pilot
+
+**Executed:** one of sixteen permitted Sync calls, 3.51 of 720 cumulative active
+seconds, with 180-second per-call and 720-second outer process limits. The input
+has three views, 23 noncoplanar landmarks, correct focal lengths, arbitrary
+stored poses including the anchor, and no ground/Known 3D/VP/pose locks. Sync
+reported success at 1.375 px fitted RMSE, but withheld projections missed by
+5.28–17.28 px after one proper global similarity. It downweighted five exact
+picks. The stop rule prevented guessed-focal and lens-search runs. See the
+[frozen evidence and oracle controls](../tools/synthetic_sync/no-vp-bootstrap-results.md).
+This establishes one reproducible startup accuracy failure, not its cause or
+a claim that correspondence-only calibration is impossible.
+
+**Validation and integration:** the OpenCV-enabled full numerical suite passed
+371 tests in 264.746 seconds, with two absent-sample-YAML skips. The final eleven
+focused budget/no-VP tests passed under both Python environments, including the
+portable comparisons in `d1ad8be` and cache-result isolation in `e073887`.
+Both generated Blender preparation/reopen controls passed. No production solver
+behavior changed. The worker's commits are integrated, its clean worktree was
+removed, and its experiment branch is retained. Older stashes and baseline
+worktrees remain untouched. Nothing has been pushed.
+
+**Independent review:** true-camera projections match all input picks within
+1.2e-13 px. The two stronger view pairs have 15 and 14 shared noncoplanar points;
+the remaining pair has six. Correct geometry passes the oracle after an arbitrary
+global similarity; wrong focal/pose/points cannot hide behind zero reported RMSE.
+Blender 5.1 generated preparation checks passed for shared true-K and mixed
+guessed-K inputs, including actual Manual FOV application, missing origins,
+Sync/lens preparation and fresh-process reopening. Numerical calls were blocked.
+They establish unchanged prepared inputs and the current focal eligibility rules,
+not solved-camera application or the native interactive workflow.
+
+**Next numerical question:** determine whether the failure depends on arbitrary
+private camera representation, initial pair selection, outlier downweighting or
+subsequent recovery. Use the saved request/result first. Freeze small paired
+controls that preserve the same 2D evidence and physical problem; trace stage
+outputs only once, retaining withheld checks and exact pick residuals. Avoid
+using true poses or promoted Known 3D as a product workaround. Resume the mixed
+focal/weak-baseline matrix only after the favorable true-K control is understood.
+Independent focal search and distortion optimization remain unimplemented.
+
+**Workflow trial:** a fresh Sol/high worker owned the numerical cases/oracle and
+returned one evidence packet at the planned review gate. Main independently
+implemented the ledger and Blender preparation controls. Review found strict
+float comparisons repeating a recently fixed portability mistake and incomplete
+source hashing; the worker received a no-solve correction task. Record this as
+review/rework, not a flawless handoff. The ledger reserves before execution,
+retains failures and interrupted reservations, enforces call/active-time limits,
+and supports exact serialized-result reuse with matching metadata. Its scope and
+native-code timeout limits are in [development guidance](development.md#budgeting-experiments-and-model-usage).
+Private usage snapshots are in `.local/no-vp-workflow/`. The initial live snapshot
+was late; `task-usage.json` recovers the main baseline from the cumulative counter
+before this task's start event, including initial planning. Through its pre-final
+snapshot, main processed 3.32 million input / 17.6 thousand output tokens; the
+fresh worker processed 2.48 million input / 21.3 thousand output tokens including
+review corrections. Cached input was about 98% and 96%, respectively. These are
+processing counts, not quota or billing measurements; they exclude subsequent
+final reporting. Main also built tooling, so these counters cannot isolate
+coordination overhead or establish token savings. Repeat measurement on the next
+bounded task using the now-existing tooling before judging the model mix.
+
+### Preparatory research: no-VP lenses and measurable agent work
 
 **Status:** source audit and usage research complete; no new lens behavior has
 been implemented. The OpenCV environment (`~/venvs/my`) ran 360 tests in 262.014 s:
@@ -74,7 +153,7 @@ during Sync, and no-VP focal candidates keep their private orientation. This is
 a supported reason to test the full preparation path, not proof that every
 such setup fails.
 
-**Recommended next experiment, not yet run:** use the existing synthetic harness
+**Original pilot proposal (superseded by the executed 2D-only case above):** use the existing synthetic harness
 for a no-VP, pinhole, centered-image pilot. Start with three translated views and
 well-spread points at several depths. Compare a shared-focal case with a mixed
 focal case, using known truth but perturbed starting calibration. Include a
