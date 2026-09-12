@@ -1,5 +1,5 @@
 **Perspective Match: reliability and AI development proposal**
-Investigation baseline: commit `5d876f6` / extension 0.5.0, 10 September 2026. Latest product fix: `c304fbe`; latest tooling/test checkpoint: `e073887`, 12 September 2026. Read **Current frontier**, including **Latest investigation**, first; the dated checkpoints preserve history, and the original proposal is retained for rationale rather than as an implementation checklist.
+Investigation baseline: commit `5d876f6` / extension 0.5.0, 10 September 2026. Latest product fix and regression checkpoint: `cc7d14d`, 12 September 2026. Read **Current frontier**, including **Latest investigation**, first; the dated checkpoints preserve history, and the original proposal is retained for rationale rather than as an implementation checklist.
 
 **My recommendation is to make every solver decision reproducible from a complete, versioned input, and judge it with checks independent of the implementation.** Build that foundation around the existing fixtures, Blender smoke test, and diagnostics. Then use it to improve calibration ownership, quality reporting, and selected solver decisions. This would turn a debugging session into an addition to a reusable capability.
 
@@ -21,7 +21,7 @@ disposition changes; the dated reports below retain the original measurements.
 
 | Finding | Current disposition | Evidence / next action |
 | --- | --- | --- |
-| Exact 2D-only startup accepts inaccurate geometry despite correct intrinsics | **Active diagnosis and fix** | [Frozen case](../tools/synthetic_sync/no-vp-bootstrap-results.md); trace the earliest bad stage, preserve 2D-only input and independent checks. Sol owns the bounded investigation; main owns review/integration. |
+| Exact 2D-only startup accepts inaccurate geometry despite correct intrinsics | **Fixed and verified in `cc7d14d`** | [Frozen case and follow-up](../tools/synthetic_sync/no-vp-bootstrap-results.md): robust anchor connection plus direct/bridge competition restore shared- and mixed-focal true-K geometry. Actual old-solver regression fails; integrated 374-test suite and Blender solve/apply/reopen pass. |
 | Mild noisy free-scale/overhead cases and five of ten noisy graph cases exceed provisional accuracy limits | **Open accuracy findings; cause not established** | [Initial pilot](../tools/synthetic_sync/pilot-results.md), [evidence placement](../tools/synthetic_sync/evidence-results.md), [graph sweep](../tools/synthetic_sync/graph-results.md). Reassess after the exact startup fix; compare input uncertainty with reconstruction sensitivity before claiming a solver defect. |
 | Weak mirror-line geometry under noisy or biased strokes | **Geometry limit still open; weak-support warning fixed** | [Constraint evidence](../tools/synthetic_sync/constraint-results.md). Depth is poorly determined by nearly coincident supporting planes. More copies of the same weak evidence do not establish accuracy; test better evidence or an honest uncertainty response. |
 | Contradictory recovered camera remains above the withheld limit | **Open inconsistent-evidence outcome; healthy-camera corruption fixed** | [Recovery evidence](../tools/synthetic_sync/recovery-results.md), [line-bearing continuation](../tools/synthetic_sync/recovery-acceptance-results.md). Keep the remaining ~2.43 px flag; do not expect exact geometry from intentionally inconsistent picks. |
@@ -48,11 +48,13 @@ case-specific contracts or a claim that every geometry is now accurate.
 
 **Objective and scope:** improve Sync reliability through reproducible evidence and independent checks of the rest of the object, beyond fitted picks. Both visual alignment and metric accuracy matter. Synthetic scenes are the primary corpus; private projects are optional evidence. Images are optional. **Latest user steering:** reliable FOV estimation from shared landmarks without dependable VP lines is now a priority; both shared-lens sets and mixed lenses/zooms/crops are common. Image transformations and distortion are now in scope when they affect that workflow. Automatic AprilTag/VP detection remains optional, not a prerequisite. Earlier deferrals below are historical.
 
-**Newest result:** the 2D-only startup pilot hit its stop condition on its first
-true-intrinsics control: Sync accepted inaccurate geometry. Budget tooling is
-implemented in `3f1667a`, numerical evidence in `a9c484a`, and no-solve Blender
-preparation/reopening checks in `fbfa4ef`. Read **Latest investigation** below
-before restarting any focal search. The other seven frozen cases are unexecuted.
+**Newest result:** the 2D-only startup failure is fixed in `cc7d14d`: registration
+now chooses a better-supported anchor connection and compares later direct poses
+with registered-view bridges for unconstrained free-point startup. Shared and
+mixed true-K cases pass withheld geometry checks below 0.000001 px. Budget
+tooling is in `3f1667a`, original evidence in `a9c484a`, and no-solve Blender
+preparation/reopening checks in `fbfa4ef`. The six other frozen baseline cases
+and unknown-focal searches remain unexecuted; see the latest continuation below.
 
 **Reference provenance clarified by the user:** trustworthy external Known 3D is
 rare. Most Known 3D points are promoted from agreement among existing matches to
@@ -97,6 +99,47 @@ assignments.
 
 ### Latest investigation: 2D-only startup pilot
 
+**Fix continuation:** `cc7d14d` repairs the pair-registration failure with no
+truth poses or Known 3D inputs. The strongest non-anchor pair was connected
+through a weaker six-pick anchor overlap because image displacement outranked
+spread/support; later a direct anchor pose bypassed better registered-view
+bridges. Correcting only one choice did not restore accuracy. Both changes now
+apply to unconstrained free-point startup; constrained/locked routing retains
+its previous policy. The final shared and mixed true-K controls pass, and the
+input-order control passes. Eleven of twelve exploratory follow-up calls used
+41.36 cumulative active seconds; focused regression and integration test calls
+are separate verification, not unrecorded exploratory attempts. Main also ran
+the actual new regression against the unmodified old solver: it failed with
+the original withheld errors in 3.179 seconds. No focal search or uncertainty
+claim was added. Exact before/after stage records remain in the linked report.
+
+**Integration evidence:** the generated Blender solve/apply and fresh-process
+reopen both pass; maximum withheld projection RMS is 0.000088 px with RNA and
+Blender camera precision included. Shared and mixed true-K numerical traces pass
+below 0.000001 px. Review also tightened the policy for the core API's location
+participation field and added complete source/runtime identity to diagnostic
+cache keys, with mocked checks. Historical ledger records were not rewritten.
+The final OpenCV-enabled integrated suite passed **374 tests in 274.117 seconds,
+with two absent-sample-YAML skips**. Validation logs and generated Blender results
+are retained in `.local/no-vp-fix-validation/`.
+The worker's clean worktree is removed; its two commits are combined in the
+single logical product-fix commit `cc7d14d`, with changelog, user docs, regression
+and diagnostic evidence together.
+
+**Cost practice, not a savings claim:** this continuation kept diagnosis,
+regression, implementation and focused controls with one Sol worker. Main did
+not repeat its exploratory solves; it reviewed and ran direct before-fix and
+combined integration verification. A pre-final snapshot records main 5.34 million
+input tokens (5.30 million cached) / 12.2 thousand output, and worker 10.58 million
+input (10.39 million cached) / 39.0 thousand output. Main uncached input and
+output were lower than the preceding tooling-building task, but total processing
+was higher and the tasks differ; do not claim net savings. Repeated coordination
+and corrections still cost tokens. Continue reducing main activity and use
+Sol-led implementation with a single strong-model review where feasible, rather
+than adding more parallel workers. Private boundaries and counters are in
+`.local/no-vp-fix-validation/task-usage.json`; final reporting is outside that
+snapshot. The executable tests now retain the repeated cache-identity lesson.
+
 **Executed:** one of sixteen permitted Sync calls, 3.51 of 720 cumulative active
 seconds, with 180-second per-call and 720-second outer process limits. The input
 has three views, 23 noncoplanar landmarks, correct focal lengths, arbitrary
@@ -127,14 +170,13 @@ Sync/lens preparation and fresh-process reopening. Numerical calls were blocked.
 They establish unchanged prepared inputs and the current focal eligibility rules,
 not solved-camera application or the native interactive workflow.
 
-**Next numerical question:** determine whether the failure depends on arbitrary
-private camera representation, initial pair selection, outlier downweighting or
-subsequent recovery. Use the saved request/result first. Freeze small paired
-controls that preserve the same 2D evidence and physical problem; trace stage
-outputs only once, retaining withheld checks and exact pick residuals. Avoid
-using true poses or promoted Known 3D as a product workaround. Resume the mixed
-focal/weak-baseline matrix only after the favorable true-K control is understood.
-Independent focal search and distortion optimization remain unimplemented.
+**Next numerical question:** resume the remaining frozen guessed-K and weak/
+pure-rotation controls under a new bounded ledger. The correctly calibrated
+startup gate is now understood and fixed; do not retrace it without new evidence.
+Test what the existing shared-lens route can recover and where independent focal
+freedom is actually needed. Keep truth out of candidate selection, preserve
+withheld checks, and do not promote triangulated working references to independent
+evidence. Independent focal search and distortion optimization remain unimplemented.
 
 **Workflow trial:** a fresh Sol/high worker owned the numerical cases/oracle and
 returned one evidence packet at the planned review gate. Main independently
