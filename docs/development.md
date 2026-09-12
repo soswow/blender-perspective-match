@@ -75,8 +75,8 @@ Avoid repeatedly reading partial logs or duplicating the worker's exploration.
 Before a numerical experiment, specify the permitted cases, total solver-call
 budget (including drafts, failed attempts and retries), wall-time limit and stop
 condition. An outer lens search can contain many Sync calls: define and count
-both, rather than calling an entire search one solve. The next harness improvement
-uses [ExperimentBudget](../tools/synthetic_sync/budget.py) to enforce this budget
+both, rather than calling an entire search one solve. Use
+[ExperimentBudget](../tools/synthetic_sync/budget.py) to enforce this budget
 and save an attempt ledger before each invocation; written limits alone have
 already been exceeded. Instrument every inner Sync call, not just the outer
 search. Reuse results only when exact

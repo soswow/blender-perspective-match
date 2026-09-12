@@ -109,6 +109,8 @@ Headless helpers under `tools/` (and `scripts/validate_addon.py`) for investigat
 Parallel agent work uses isolated worktrees and distinct file ownership; see `docs/development.md#parallel-agent-work`.
 
 - `tools/synthetic_sync/budget.py` — POSIX experiment ledger reserves each instrumented numerical call before execution, caps calls and cumulative active time, retains exact inputs/results/failures, and rejects reuse with changed metadata or limits. Python signal deadlines can be delayed in native code; use an outer process timeout for hard limits. It does not count model tokens or uninstrumented solves.
+- `tools/synthetic_sync/verify_no_vp_preparation.py` — generated no-ground/no-Known-3D/no-VP startup through Manual FOV, Sync/lens preparation and fresh-process reopening; captures unchanged requests and shared/independent focal eligibility, with numerical Sync explicitly blocked. This checks preparation, not numerical calibration or solved-camera application.
+- `tools/synthetic_sync/no_vp_bootstrap.py` — frozen 2D-only free-scale calibration controls, arbitrary private poses including the anchor, and independent focal/withheld geometry checks. The first true-intrinsics control failed and stopped the pilot after one ledgered solve; see `tools/synthetic_sync/no-vp-bootstrap-results.md` before spending more calls.
 
 ## Do not
 

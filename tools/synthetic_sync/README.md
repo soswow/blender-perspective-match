@@ -684,3 +684,38 @@ It did not justify the separate BA optimization: lower fitted cost slightly
 worsened independent geometry on biased inputs. Diagnostic probes contaminate
 historical timing measurements; future runs separate their time. See
 [the evidence, actual solve count and limitations](line-position-gauge-results.md).
+## No-VP startup and bounded experiments
+
+The [no-VP pilot](no-vp-bootstrap-results.md) starts from only 2D correspondences,
+with no trustworthy Known 3D, ground points, VP lines or true camera poses. Its
+first true-intrinsics control failed independent geometry checks, so focal
+searching stopped. The eight frozen inputs are a matrix for continuation, not
+eight completed experiments. Replay the saved result without a solver call:
+
+```sh
+~/venvs/my/bin/python scripts/run_unittests.py test_synthetic_no_vp_bootstrap test_synthetic_budget
+```
+
+[ExperimentBudget](budget.py) records and caps each instrumented call, including
+failures and interrupted reservations. It retains exact JSON inputs/results and
+requires unchanged caller-supplied source/environment/options metadata for reuse.
+It is POSIX/main-thread only; Python signal deadlines are not hard native-code
+termination. Use an outer process timeout too. Count each inner Sync call if an
+outer focal search is introduced; the current pilot only runs direct controls.
+
+Check the Blender preparation path independently, with **zero numerical solves**:
+
+```sh
+"/Applications/Blender 5.1.app/Contents/MacOS/blender" \
+  --factory-startup --disable-autoexec -b --python-exit-code 1 \
+  --python tools/synthetic_sync/verify_no_vp_preparation.py -- \
+  --case tools/synthetic_sync/cases/no-vp-mixed-guessedK.json \
+  --out .local/no-vp-preparation
+```
+
+This creates a generated input file, applies Manual FOV with no VP lines/origin,
+checks Sync/lens preparation, and reopens it in a fresh process. It verifies
+unchanged captured requests, shared-search eligibility and frozen independent
+focals. It does not test solved-camera application, native modal scheduling or
+image decoding. The supplied output directory contains generated files only;
+do not point it at a private project.
