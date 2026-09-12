@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-12
+
 ### Fixed
 - Solve Sync can build a consistent camera graph from only 2D point picks when a sparse anchor overlap disagrees with stronger view bridges.
 - For undistorted stills, Solve Sync keeps visible line constraints active when their 3D midpoint slides far along the same edge.
