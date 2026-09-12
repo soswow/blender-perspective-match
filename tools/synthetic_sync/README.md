@@ -15,6 +15,12 @@ guessed-intrinsics cases without metric or pose priors. Its `--run` command
 executes only the baseline Sync matrix; no outer lens search is implemented in
 that pilot runner.
 
+The [unknown-focal continuation](unknown-focal-results.md) runs the remaining
+guessed-K, weak-baseline and pure-rotation controls under one call ledger. It
+also traces the actual Same Lens numerical API with a five-evaluation search;
+the result distinguishes a local shared-scale correction from the still-open
+independent no-VP focal path. Use `unknown_focal.py` for ledgered replay.
+
 ## Run and inspect
 
 From the repository root, using Python with NumPy:

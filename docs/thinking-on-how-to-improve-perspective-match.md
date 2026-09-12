@@ -22,13 +22,15 @@ disposition changes; the dated reports below retain the original measurements.
 | Finding | Current disposition | Evidence / next action |
 | --- | --- | --- |
 | Exact 2D-only startup accepts inaccurate geometry despite correct intrinsics | **Fixed and verified in `cc7d14d`** | [Frozen case and follow-up](../tools/synthetic_sync/no-vp-bootstrap-results.md): robust anchor connection plus direct/bridge competition restore shared- and mixed-focal true-K geometry. Actual old-solver regression fails; integrated 374-test suite and Blender solve/apply/reopen pass. |
+| Guessed intrinsics can produce low-error but inaccurate free 3D | **Open quality/uncertainty gap** | [Unknown-focal continuation](../tools/synthetic_sync/unknown-focal-results.md): shared and mixed guessed-K Sync runs fit at ~0.49 px but fail withheld geometry. The actual Same Lens route succeeds on shared K with an explicit ±25% range; a general warning or acceptance rule needs stronger evidence. |
+| Pure rotation is accepted as reconstructed free 3D | **Open observability defect** | [Frozen true/guessed-K rotation controls](../tools/synthetic_sync/unknown-focal-results.md) both accept 23 reconstructed points at near-zero fitted RMSE despite unobservable depth. A parallax cutoff selected from only these controls is unjustified; determine a stable geometry-only warning/refusal contract with noisy and near-critical controls. |
 | Mild noisy free-scale/overhead cases and five of ten noisy graph cases exceed provisional accuracy limits | **Open accuracy findings; cause not established** | [Initial pilot](../tools/synthetic_sync/pilot-results.md), [evidence placement](../tools/synthetic_sync/evidence-results.md), [graph sweep](../tools/synthetic_sync/graph-results.md). Reassess after the exact startup fix; compare input uncertainty with reconstruction sensitivity before claiming a solver defect. |
 | Weak mirror-line geometry under noisy or biased strokes | **Geometry limit still open; weak-support warning fixed** | [Constraint evidence](../tools/synthetic_sync/constraint-results.md). Depth is poorly determined by nearly coincident supporting planes. More copies of the same weak evidence do not establish accuracy; test better evidence or an honest uncertainty response. |
 | Contradictory recovered camera remains above the withheld limit | **Open inconsistent-evidence outcome; healthy-camera corruption fixed** | [Recovery evidence](../tools/synthetic_sync/recovery-results.md), [line-bearing continuation](../tools/synthetic_sync/recovery-acceptance-results.md). Keep the remaining ~2.43 px flag; do not expect exact geometry from intentionally inconsistent picks. |
 | Biased hard/soft Known 3D references displace geometry | **Intentional model conflict, not a demonstrated arithmetic defect** | [Bias controls](../tools/synthetic_sync/biased-reference-results.md). Softening helps but does not certify truth. Current prior-release pilot adds no detection beyond the existing anchor warning; test hidden bias before adding a product warning. |
 | Promoted reconstruction points treated as trusted Known 3D | **Open workflow/representation issue** | User clarification below: these are working estimates with shared uncertainty. Preserve this distinction in future fitting/diagnostics; no automatic promotion to independent evidence. |
 | Recovered-update acceptance does not protect the full line/constraint objective | **Open coverage and acceptance-contract gap** | [Accepted-stage control](../tools/synthetic_sync/accepted-recovery-results.md). No remaining natural accepted-update damage is established by that control; find a paired damaging case before changing acceptance policy. |
-| Independent unknown focal lengths without VPs | **Open product capability** | Current no-VP independent mode freezes focal lengths. Fix/understand correctly calibrated startup before resuming the frozen mixed-focal experiment. |
+| Independent unknown focal lengths without VPs | **Open product capability** | [Mixed guessed-K baseline](../tools/synthetic_sync/unknown-focal-results.md) accepts inaccurate geometry. Same Lens preserves biased focal ratios; independent mode freezes no-VP focals. Next bound an input-only multi-focal strategy with identifiability and withheld checks before changing the UI. |
 | Native modal scheduling, undo/redo, platform/package/hosted CI | **Unverified boundaries** | Generated preparation/job/reopen checks cover specific paths, not these broader claims. Select one bounded check when it reaches priority. |
 | Line Jacobian reparameterization / performance prototypes | **Not promoted; no demonstrated overall improvement** | [Line-position experiments](../tools/synthetic_sync/line-position-gauge-results.md). The actual projection defect was fixed; a prototype with worse geometry is not a pending fix to ship. |
 
@@ -48,13 +50,17 @@ case-specific contracts or a claim that every geometry is now accurate.
 
 **Objective and scope:** improve Sync reliability through reproducible evidence and independent checks of the rest of the object, beyond fitted picks. Both visual alignment and metric accuracy matter. Synthetic scenes are the primary corpus; private projects are optional evidence. Images are optional. **Latest user steering:** reliable FOV estimation from shared landmarks without dependable VP lines is now a priority; both shared-lens sets and mixed lenses/zooms/crops are common. Image transformations and distortion are now in scope when they affect that workflow. Automatic AprilTag/VP detection remains optional, not a prerequisite. Earlier deferrals below are historical.
 
-**Newest result:** the 2D-only startup failure is fixed in `cc7d14d`: registration
-now chooses a better-supported anchor connection and compares later direct poses
-with registered-view bridges for unconstrained free-point startup. Shared and
-mixed true-K cases pass withheld geometry checks below 0.000001 px. Budget
-tooling is in `3f1667a`, original evidence in `a9c484a`, and no-solve Blender
-preparation/reopening checks in `fbfa4ef`. The six other frozen baseline cases
-and unknown-focal searches remain unexecuted; see the latest continuation below.
+**Newest result:** the [unknown-focal continuation](../tools/synthetic_sync/unknown-focal-results.md)
+ran the six previously unexecuted controls and the actual Same Lens numerical
+API under one 15-call ledger. Shared and mixed guessed-K baselines both report
+success around 0.49 px fitted RMSE but fail held-out geometry. True-K weak
+translation is accurate; pure rotation is falsely accepted even with true K.
+The existing Same Lens route selected a 0.796875 scale from a 1.25× shared
+focal guess with an explicit ±25% window, passing all independent checks.
+The default ±18% coarse window does not include the true 0.80 scale; its full
+search was not tested here. Mixed independent no-VP focal recovery and an
+honest weak-geometry/ambiguity response remain open. The
+preceding `cc7d14d` startup fix and its true-K controls remain verified.
 
 **Reference provenance clarified by the user:** trustworthy external Known 3D is
 rare. Most Known 3D points are promoted from agreement among existing matches to
