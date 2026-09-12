@@ -11,6 +11,7 @@ import numpy as np
 from match_perspective.core import geometry, lens_refine, sync
 from match_perspective.core.focal_bundle import (
     EPIPOLAR_HINT_MAX_FITS, FocalBundleOutcome, _epipolar_conflict_pairs, _fits_noise_model,
+    _epipolar_errors, _fit_fundamental,
     _has_depth_evidence, _homography_forward_error,
     _project_with_depth_penalty,
     fit_independent_focals,
@@ -179,7 +180,7 @@ class PointFocalBundleTests(TestCase):
         self.assertIn("without two-view picks", outcome.refusal_reason)
         run.assert_not_called()
 
-    def test_bad_two_view_correspondence_adds_tentative_pair_hint_on_refusal(self):
+    def test_sparse_correspondence_conflict_does_not_accuse_when_full_fit_is_consistent(self):
         for name in ("noisy-mixed", "noisy-shared"):
             case, matches, observations = _inputs(name)
             ids = [item.match_id for item in matches]
@@ -192,17 +193,23 @@ class PointFocalBundleTests(TestCase):
                              if o.match_id == "view_2" and o.landmark_id == "point_08")
                 wrong.u += 20.0
                 wrong.v -= 15.0
-                self.assertIn(("view_1", "view_2"),
-                              _epipolar_conflict_pairs(ids, observations, 1.0))
-                self.assertIn(("view_1", "view_2"),
-                              _epipolar_conflict_pairs(ids, observations, 0.5))
+                # A displaced pick can pull a sparse full model into a
+                # noise-consistent fit; leave-one-out alone then cannot
+                # justify a warning. The other case still fails both gates.
+                expected = [] if name == "noisy-mixed" else [("view_1", "view_2")]
+                self.assertEqual(_epipolar_conflict_pairs(ids, observations, 1.0),
+                                 expected)
                 initial = _saved_initial(case, matches, name)
                 result = fit_independent_focals(
                     {item.match_id: item.base_calibration for item in matches},
                     observations, initial, anchor_id="view_0", pick_sigma_px=1.0)
                 self.assertFalse(result.accepted)
-                self.assertIn("view_1 and view_2", result.reason)
-                self.assertIn("may be inconsistent", result.reason)
+                if name == "noisy-mixed":
+                    self.assertNotIn("view_1 and view_2", result.reason)
+                    self.assertNotIn("may be inconsistent", result.reason)
+                else:
+                    self.assertIn("view_1 and view_2", result.reason)
+                    self.assertIn("may be inconsistent", result.reason)
                 self.assertNotIn("point_08", result.reason)
 
     def test_pair_hint_is_lazy_and_bounded(self):
@@ -223,10 +230,54 @@ class PointFocalBundleTests(TestCase):
                                      float(point * 17 % 997), float(point * 41 % 719))
                 for camera in range(8) for point in range(80)]
         import match_perspective.core.focal_bundle as bundle
-        with mock.patch.object(bundle, "_fit_fundamental", wraps=bundle._fit_fundamental) as fit:
+        with mock.patch.object(bundle, "_fit_fundamental", return_value=np.eye(3)) as fit, \
+             mock.patch.object(bundle, "_epipolar_errors",
+                               side_effect=lambda model, first, second: np.full(len(first), 100.)):
             self.assertEqual(_epipolar_conflict_pairs(
                 [f"camera_{camera}" for camera in range(8)], many, 1.0), [])
         self.assertEqual(fit.call_count, EPIPOLAR_HINT_MAX_FITS)
+
+    def test_pair_hint_skips_leave_one_out_when_full_model_fits_noise(self):
+        observations = [sync.SyncObservation(camera, f"point_{i}",
+                                             float(i * 23 % 191), float(i * i * 17 % 149))
+                        for camera in ("a", "b") for i in range(13)]
+        with mock.patch("match_perspective.core.focal_bundle._fit_fundamental",
+                        return_value=np.eye(3)) as fit, \
+             mock.patch("match_perspective.core.focal_bundle._epipolar_errors",
+                        return_value=np.ones(13)) as errors:
+            self.assertEqual(_epipolar_conflict_pairs(["a", "b"], observations, 1.0), [])
+        fit.assert_called_once()
+        errors.assert_called_once()
+
+    def test_correct_noisy_high_leverage_pair_does_not_get_pick_warning(self):
+        rng = np.random.default_rng(5)
+        points = np.vstack((rng.normal([0., 0., 4.], [.35, .3, .3], (12, 3)),
+                            [1.8, 1.2, 5.]))
+        theta = .2
+        rotation = np.array([[np.cos(theta), 0., np.sin(theta)],
+                             [0., 1., 0.],
+                             [-np.sin(theta), 0., np.cos(theta)]])
+
+        def project(center, world_to_camera):
+            camera_points = (points - center) @ world_to_camera.T
+            return 700. * camera_points[:, :2] / camera_points[:, 2, None] + [500., 400.]
+
+        first = project(np.zeros(3), np.eye(3)) + rng.normal(0., 1., (13, 2))
+        second = project(np.array([.4, 0., 0.]), rotation) + rng.normal(0., 1., (13, 2))
+        observations = [sync.SyncObservation(camera, f"point_{i}", *position)
+                        for camera, picks in (("a", first), ("b", second))
+                        for i, position in enumerate(picks)]
+
+        # The former leave-one-out rule fired despite every ID pairing being
+        # correct and both images having independent one-pixel Gaussian noise.
+        kept = np.arange(13) != 12
+        candidate = _fit_fundamental(first[kept], second[kept])
+        errors = _epipolar_errors(candidate, first, second)
+        self.assertLess(float(errors[kept].sum()), 20.)
+        self.assertGreater(float(errors[12]), 64.)
+        full = _epipolar_errors(_fit_fundamental(first, second), first, second)
+        self.assertLess(float(full.sum()), 29.)
+        self.assertEqual(_epipolar_conflict_pairs(["a", "b"], observations, 1.), [])
 
     def test_insufficient_camera_support_names_camera_and_count(self):
         case, matches, observations = _inputs("four-view")

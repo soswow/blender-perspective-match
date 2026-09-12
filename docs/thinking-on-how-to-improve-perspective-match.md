@@ -1,5 +1,5 @@
 **Perspective Match: reliability and AI development proposal**
-Investigation baseline: commit `5d876f6` / extension 0.5.0, 10 September 2026. Latest product checkpoint: line plane/parallel relations in independent FOV fitting, 12 September 2026, described under **Current frontier**. Read that section first; the dated checkpoints preserve history, and the original proposal is retained for rationale rather than as an implementation checklist.
+Investigation baseline: commit `5d876f6` / extension 0.5.0, 10 September 2026. Latest checkpoint: conservative pair diagnostics and investigation of anchor-frame assumptions, 12 September 2026, described under **Current frontier**. Read that section first; the dated checkpoints preserve history, and the original proposal is retained for rationale rather than as an implementation checklist.
 
 **My recommendation is to make every solver decision reproducible from a complete, versioned input, and judge it with checks independent of the implementation.** Build that foundation around the existing fixtures, Blender smoke test, and diagnostics. Then use it to improve calibration ownership, quality reporting, and selected solver decisions. This would turn a debugging session into an addition to a reusable capability.
 
@@ -9,7 +9,40 @@ The deeper product issue is that three different promises are currently close to
 
 ## Current frontier — 12 September 2026
 
-**Latest addition: line planes and parallelism during focal fitting.**
+**Latest diagnostic fix:** a sparse leave-one-out fundamental-matrix fit could
+warn about correct shared picks because its omitted observation had too much
+influence to predict reliably. The hint now first checks whether a model fitted
+to all shared observations already agrees with the assumed noise. A deterministic
+two-camera oracle with one-pixel noise and an isolated point reproduces the old
+false warning without a mismatched ID. A sufficiently supported bad-pick control
+still warns, but a sparse manipulated-pick control no longer does when its full
+model fits within the noise budget. This intentional loss of recall avoids an
+unjustified accusation; the underlying focal refusal and acceptance checks are
+unchanged. All 18 focal-bundle tests pass, including the fit-count cap.
+
+**Current investigation frontier: orientation, not just focal range.** A fresh
+private capture with revised starting lenses reproduced a bound refusal. Cached
+counterfactual trials isolated substantially more residual pressure from plane
+constraints than from mirror relations. Replacing an axis-aligned plane by an
+otherwise equivalent Free plane substantially reduced residuals while preserving
+coplanarity; much wider focal bounds alone helped little. These are diagnostic
+comparisons, not permission to delete valid physical constraints or evidence of
+correct reconstructed geometry. No private scene was changed and no accepted
+complete fit was established.
+
+The current focal mode fixes the anchor orientation even with no VP calibration.
+World-axis planes/directions may therefore impose incompatible information if
+that orientation is only approximate. Next distinguish intended physical-axis
+knowledge from mere coplanarity. A useful bounded experiment would keep an
+independent oracle and its valid axis-plane/mirror relations fixed, perturb only
+the stored anchor orientation, then compare fixed and refinable frame controls
+using withheld pixels and world-direction checks. Only observable orientation
+freedoms should be fitted; remaining coordinate freedoms need an explicit
+convention. This capability is not implemented. Focal limits/uncertainty remain
+separate concerns even if orientation is corrected. Do not default back to
+repeated pick edits or larger search percentages.
+
+**Previous addition: line planes and parallelism during focal fitting.**
 `core/focal_line_constraints.py` adds line position/direction in a point-supported
 plane and unoriented parallel direction to another line or a world axis. X/Y/Z
 groups need one same-bucket point; Free needs three non-collinear same-bucket

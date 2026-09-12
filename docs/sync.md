@@ -82,6 +82,13 @@ inconsistent picks, incorrect geometric constraints or unsupported image
 calibration can also push fitting to a boundary. Do not reduce Assumed Pick
 Error or delete picks just to force an accepted result.
 
+A suggestion to check a camera pair is a tentative diagnostic, not the reason
+for a focal-bound refusal. The check now suppresses that suggestion when a
+model fitted to all shared picks agrees with the assumed noise: omitting one
+isolated pick can make its prediction unreliable even when the correspondence
+is correct. Some actual mismatches will also escape this conservative check.
+Neither a warning nor its absence certifies the picks or reconstruction.
+
 Throughout independent FOV estimation the sidebar shows activity, elapsed time
 and completed fitting iterations. There is no completion percentage: registration
 and numerical fitting have variable workloads. The other lens-search modes
@@ -165,6 +172,12 @@ they cannot guarantee recovery from a wrong principal point or lens model.
 Use Free planes and line-to-line parallelism when world orientation is unknown;
 X/Y/Z planes and axes assert that the object is already aligned to those world
 directions in the anchor frame.
+The independent focal fit currently holds the anchor camera's orientation
+fixed. If that orientation is only an initial guess, a valid equal-height
+relation on the object may disagree with Blender's world Z. Changing focal
+length alone cannot generally repair that frame mismatch. A Free plane
+expresses coplanarity without asserting world alignment; use it only when
+that matches the intended evidence, not to discard a known physical direction.
 
 Point landmarks may use **Is in Plane** (X/Y/Z or Free) and **Is Mirror Of**
 with a supplied **Mirror Empty** or an on-plane **Mirror Landmark**. Plane Slack and Mirror Slack keep their

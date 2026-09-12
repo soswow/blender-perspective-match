@@ -216,6 +216,26 @@ def _epipolar_conflict_pairs(ids: list[str], observations: list[SyncObservation]
                 continue
             first = np.asarray([picks[first_id][key] for key in common], float)
             second = np.asarray([picks[second_id][key] for key in common], float)
+            # A sparse leave-one-out model can predict its withheld pick
+            # poorly even when one model explains all shared picks. In that
+            # case there is no pairwise evidence for blaming correspondence.
+            if model_fits >= EPIPOLAR_HINT_MAX_FITS:
+                return []
+            model_fits += 1
+            try:
+                full_model = _fit_fundamental(first, second)
+            except (ValueError, np.linalg.LinAlgError):
+                continue
+            if full_model is None:
+                continue
+            full_errors = _epipolar_errors(full_model, first, second)
+            if not np.isfinite(full_errors).all():
+                continue
+            tail = math.log(100.0 * pair_count)
+            full_dof = max(len(common) - 7, 1)
+            full_limit = sigma**2 * (full_dof + 2 * math.sqrt(full_dof * tail) + 2 * tail)
+            if float(np.sum(full_errors)) <= full_limit:
+                continue
             best = None
             for omitted in range(len(common)):
                 if ((cancel_check and cancel_check()) or
