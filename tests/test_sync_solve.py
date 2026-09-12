@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import unittest
 from unittest import mock
+from pathlib import Path
 
 import numpy as np
 
@@ -11,6 +12,9 @@ from match_perspective import core
 from match_perspective.core import sync
 from match_perspective.core.sync import solve as solve_module
 from sync_fixtures import _look_at_rotation, _project, _rodrigues_z, _synthetic_scene, _three_view_scene
+from tools.synthetic_sync.evaluation import evaluate
+from tools.synthetic_sync.scenarios import read_case
+from tools.synthetic_sync.solver import result_record, solver_arguments
 
 
 class SolveSyncTests(unittest.TestCase):
@@ -626,6 +630,39 @@ class SolveSyncTests(unittest.TestCase):
         self.assertGreater(abs(float(axis_shared[2])), 0.95)
         self.assertLess(result.per_match_rmse_px.get("side", 99.0), 5.0)
         self.assertAlmostEqual(leftover.intrinsics.fx, 800.0, delta=1.0)
+
+    def test_recovered_location_rebuilds_point_ids_separately_from_lines(self) -> None:
+        """A naturally recovered still may coexist with Known and free lines."""
+        case = read_case(Path(__file__).resolve().parents[1] / "tools/synthetic_sync/cases/recovered-lines.json")
+        arguments = solver_arguments(case["request"])
+        with mock.patch.object(
+            solve_module,
+            "_thaw_recovered_location",
+            wraps=solve_module._thaw_recovered_location,
+        ) as thaw:
+            result = sync.solve_landmark_sync(**arguments)
+
+        self.assertEqual(thaw.call_count, 1)
+        self.assertTrue(result.success, result.message)
+        self.assertIn("recovered 'view_2'", result.message)
+        self.assertEqual(set(result.line_segments), {"edge_0", "edge_1"})
+        self.assertTrue(
+            np.allclose(
+                result.line_segments["edge_0"],
+                case["truth"]["lines"]["edge_0"],
+            )
+        )
+        assessment = evaluate(
+            case,
+            result_record(result, case["request"]["cameras"]),
+        )
+        # The recovered view has intentionally contradictory point picks. The
+        # healthy view and independent line geometry contracts must survive.
+        self.assertLess(
+            assessment["cameras"]["view_1"]["holdout_rmse_px"],
+            case["expectation"]["holdout_rmse_px"],
+        )
+        self.assertEqual(assessment["line_accuracy_failures"], [])
 
 
     def test_mismatched_ground_pick_is_named_when_still_skipped(self) -> None:

@@ -81,6 +81,9 @@ nonzero plane slack and a Free bucket, alongside locks, mirrors and Known 3D.
 The experiment does not settle which conflicting picks are wrong, quantify
 real-world confidence, or cover arbitrary camera counts and line-only recovery.
 It establishes that a late update need not sacrifice good cameras to inconsistent
-new evidence. Next investigate shared-plane accuracy and evidence ownership with
-independent geometry checks; keep generic uncertainty and image transforms as
+new evidence. Subsequent shared-plane and ownership checkpoints are recorded in
+the continuing decision record. The [line acceptance follow-up](recovery-acceptance-results.md)
+found and fixed a mixed point/line rebuild crash; its surviving candidate was
+rejected by the existing guard, so broader acceptance-policy changes remain
+unjustified by that case. Keep generic uncertainty and image transforms as
 separate questions.

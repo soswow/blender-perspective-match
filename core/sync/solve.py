@@ -492,7 +492,7 @@ class _SolveState:
         """Triangulate points/lines; pin Known 3D and consistent On Ground."""
         self.plane_seeded_ids.clear()
         rebuilt = _triangulate_landmarks(
-            self.landmark_ids,
+            sorted(self.observations_by_landmark),
             self.observations_by_landmark,
             self.similarities,
             self.match_map,
