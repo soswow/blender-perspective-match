@@ -1,15 +1,20 @@
 """Truth isolation and strict geometry checks for no-VP startup evidence."""
 
 from copy import deepcopy
+import importlib
 import json
 import math
+import os
+from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
-from tools.synthetic_sync.no_vp_bootstrap import CASE_DIR, KINDS, assess, make_case, validate_fixture
+from tools.synthetic_sync.no_vp_bootstrap import CASE_DIR, KINDS, ROOT, assess, make_case, validate_fixture
+from tools.synthetic_sync.no_vp_startup_trace import runtime_key, source_hash
 from tools.synthetic_sync.scenarios import read_case
-from tools.synthetic_sync.solver import fingerprint
+from tools.synthetic_sync.solver import fingerprint, load_core, solve, solver_arguments
 
 
 def true_record(case):
@@ -112,6 +117,58 @@ class NoVpFixtureTests(unittest.TestCase):
         assert_portable_json(self, saved["assessment"], replay,
                              rel_tol=2e-13, abs_tol=1e-12)
         self.assertEqual(replay["classification"], "false_precise_acceptance")
+
+    def test_true_intrinsics_bootstrap_uses_the_consistent_view_graph(self):
+        case = read_case(CASE_DIR / "no-vp-shared-trueK.json")
+        record = solve(case["request"])
+        assessment = assess(case, record)
+        self.assertEqual(assessment["classification"], "accurate_acceptance",
+                         assessment["independent_geometry"]["violations"])
+        self.assertLess(record["reported_rmse_px"], 1.0e-3)
+        self.assertEqual(set(record["cameras"]), set(case["expectation"]["cameras"]))
+
+    def test_free_point_graph_policy_excludes_cameras_without_3d_influence(self):
+        case = read_case(CASE_DIR / "no-vp-shared-trueK.json")
+        all_ids = {camera["id"] for camera in case["request"]["cameras"]}
+        load_core()
+        stages = importlib.import_module("match_perspective.core.sync.solve")
+        for location_ids, readonly_ids, expected in (
+            (all_ids, set(), True),
+            (all_ids - {"view_2"}, set(), False),
+            (all_ids, {"view_2"}, False),
+        ):
+            with self.subTest(location_ids=location_ids, readonly_ids=readonly_ids):
+                arguments = solver_arguments(case["request"])
+                arguments["location_match_ids"] = location_ids
+                arguments["readonly_match_ids"] = readonly_ids
+                flags = []
+
+                def stop_registration(*_args, **kwargs):
+                    flags.append(kwargs["free_point_graph_only"])
+                    return None, "stopped before numerical registration"
+
+                with patch.object(stages, "_register_from_relative_pose", stop_registration):
+                    result = stages.solve_landmark_sync(**arguments)
+                self.assertFalse(result.success)
+                self.assertEqual(flags, [expected])
+
+    def test_trace_cache_key_tracks_core_harness_and_thread_settings(self):
+        original_read = Path.read_bytes
+        baseline = source_hash()
+        for changed in (ROOT / "core" / "geometry.py",
+                        ROOT / "tools" / "synthetic_sync" / "evaluation.py"):
+            with self.subTest(changed=changed):
+                def altered_read(path):
+                    contents = original_read(path)
+                    return contents + b"changed" if path == changed else contents
+
+                with patch.object(Path, "read_bytes", altered_read):
+                    self.assertNotEqual(source_hash(), baseline)
+
+        base_runtime = runtime_key()
+        changed_threads = "2" if base_runtime["threads"]["OPENBLAS_NUM_THREADS"] != "2" else "3"
+        with patch.dict(os.environ, {"OPENBLAS_NUM_THREADS": changed_threads}):
+            self.assertNotEqual(runtime_key(), base_runtime)
 
 
 if __name__ == "__main__":

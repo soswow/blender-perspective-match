@@ -68,8 +68,9 @@ OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 ~/venvs/my/bin/python \
   scripts/run_unittests.py test_synthetic_no_vp_bootstrap test_synthetic_budget
 ```
 
-The test suite reads the saved result and ledger and replays the independent
-oracle; it does not call Sync. To regenerate only case inputs, run
+The fixture and replay tests read the saved result and ledger; the focused
+startup regression added in the follow-up below performs one real Sync call.
+To regenerate only case inputs, run
 `~/venvs/my/bin/python tools/synthetic_sync/no_vp_bootstrap.py --freeze`.
 The numerical runner's `--run OUT` command executes only the baseline
 true/guessed-K Sync matrix; it does not implement the proposed outer shared-
@@ -78,3 +79,65 @@ timeout. Its ledger prevents repeating a completed candidate under matching
 source/options metadata and rejects a changed source. The saved historical
 ledger has its original hashes; later runner code adds recursive core and
 harness hashes for new ledgers, without altering that record.
+
+## Follow-up: pair registration repair
+
+The original saved result remains the before-fix record. A bounded stage trace
+on that same frozen request found the first failure before bundle adjustment:
+the 0↔1 pair (15 common picks) and 1↔2 pair (14) each fit at approximately
+`2e-12` px, but the sparse 0↔2 pair (6) fit at `0.519` px. The strongest pair
+was 1↔2. Its first anchor bridge was selected through view 2 because 0↔2 had
+more image displacement despite much less cross-image spread (57 vs 136 px)
+and fewer picks (6 vs 15). Once rooted there, the next direct anchor pose
+preempted a bridge through the registered view. The first shared triangulation
+had per-view RMSE 22.27, 20.91 and 36.15 px, before any outlier downweighting.
+The late resection and joint BA reduced fitted error while leaving inaccurate
+withheld geometry.
+
+Two isolated controls confirmed both defects matter: comparing direct and
+bridge poses after the weak root did not repair the graph; choosing the
+better-spread anchor root alone still let the sparse direct third-camera pose
+win. The combined fix first connects the strongest pair through the anchor
+member with better image spread/support, then lets a later direct pose compete
+with registered-view bridges when the graph has only free 2D points. Ground,
+Known 3D, line, mirror, plane and pose-lock registration paths retain their
+existing behavior. No acceptance threshold, focal search or frozen input changed.
+
+On the identical true-K request, the corrected solve accepted all three views
+and 23 landmarks with fitted RMSE `1.53e-7` px. Independent withheld RMS was
+`1.49e-7`, `1.47e-7` and `5.74e-7` px by view after one proper global
+similarity; maximum rotation error was `2.42e-6` degrees and maximum center
+error `1.02e-8` of the object diagonal. Reversing camera and observation input
+order also passed with the same geometry to rounding precision. The separate
+mixed-focal case with each view's true K passed at `1.75e-7` px fitted RMSE,
+with maximum withheld RMS `7.20e-7` px and maximum rotation error `1.71e-6`
+degrees. The saved historical result still fails the new numerical regression's oracle, so it
+distinguishes the original false-precise acceptance from the repair.
+
+The exact eleven follow-up attempts, including the two isolated controls, one
+diagnostic repeat, an order control and mixed true-K case, are in
+`cases/no-vp-startup-followup-ledger.jsonl` (11/12 calls; 41.36/720 active
+seconds). `cases/baseline-trace.json`, `cases/final-shared-trueK-trace.json`,
+`cases/reversed-order-v1-trace.json` and `cases/final-mixed-trueK-trace.json`
+retain the complete stage and independent assessments. The repeat and
+isolated-control records remain in the ledger.
+Each candidate carried its source hash in the budget key. No guessed-K,
+weak-baseline, pure-rotation or focal-search trial was run in this repair.
+The old-source baseline trace fails the new regression's accuracy assertion
+with `AssertionError`; the guarded source passed it in the final focused run.
+Earlier source variants also passed it alongside 46 pairwise, graph, ground,
+pose-lock and role tests, and 24 ground, plane and mirror controls.
+
+After these saved attempts, the trace runner's cache key was strengthened to
+hash the full numerical `core/` tree and the generator, evaluator, geometry,
+solver and budget harness files. It also includes Python, NumPy, OpenCV,
+platform and numerical thread settings. The eleven saved ledger records and
+assessments remain unchanged. They use their original source keys; replaying a
+label under the strengthened key would reserve a new call, so inspect the
+saved traces to review this result. No numerical attempt followed this tooling
+correction.
+
+```sh
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 ~/venvs/my/bin/python \
+  scripts/run_unittests.py test_synthetic_no_vp_bootstrap test_sync_pose test_sync_solve
+```

@@ -3469,6 +3469,7 @@ def _seed_from_strongest_pair(
     *,
     use_pose_cache: bool,
     solve_vs_anchor,
+    free_point_graph_only: bool,
 ) -> None:
     """Register one camera from the strongest pair via the usual vs-anchor solver.
 
@@ -3561,7 +3562,15 @@ def _seed_from_strongest_pair(
         elif vs_b is None:
             first_id = id_a
         else:
-            first_id = id_a if vs_a >= vs_b else id_b
+            if free_point_graph_only:
+                # The first anchor bridge establishes the free graph's frame.
+                # A sparse narrow overlap can have more flow yet a less
+                # stable relative pose than a broader anchor connection.
+                quality_a = (vs_a[1], vs_a[2], vs_a[0])
+                quality_b = (vs_b[1], vs_b[2], vs_b[0])
+                first_id = id_a if quality_a >= quality_b else id_b
+            else:
+                first_id = id_a if vs_a >= vs_b else id_b
     match_id, solved, detail = solve_vs_anchor(first_id)
     if solved is None:
         if detail:
@@ -3641,6 +3650,7 @@ def _register_from_relative_pose(
     use_pose_cache: bool = False,
     cancel_check: Callable[[], bool] | None = None,
     location_match_ids: set[str] | None = None,
+    free_point_graph_only: bool = False,
 ) -> tuple[dict[str, SimilarityTransform] | None, str]:
     """Register free matches vs anchor, then bridge via triangulated landmarks."""
     _check_cancelled(cancel_check)
@@ -3747,6 +3757,7 @@ def _register_from_relative_pose(
             failure_details,
             use_pose_cache=use_pose_cache,
             solve_vs_anchor=solve_vs_anchor,
+            free_point_graph_only=free_point_graph_only,
         )
 
     max_passes = len(pending) + 1
@@ -3863,6 +3874,19 @@ def _register_from_relative_pose(
                     solved = vs_solved
                 elif vs_detail:
                     failure_details.append(vs_detail)
+            # Once a free-point graph has more than one posed view, a direct
+            # anchor pose should compete with bridges through those views.
+            # A sparse anchor overlap can fit alone while missing their 3D.
+            compare_free_graph = bool(
+                solved is not None
+                and len(similarities) > 1
+                and free_point_graph_only
+                and not lock_rotation
+                and not lock_translation
+            )
+            if compare_free_graph:
+                pose_candidates.append(solved)
+                solved = None
             if solved is None and collected is not None:
                 points_shared, points_image = collected
                 pnp_candidate = _pnp_similarity(

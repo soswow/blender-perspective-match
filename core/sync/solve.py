@@ -1631,6 +1631,14 @@ def solve_landmark_sync(
         use_pose_cache=use_pose_cache,
         cancel_check=cancel_check,
         location_match_ids=resolved_location,
+        free_point_graph_only=not (
+            known_world or known_lines or line_observations_by_landmark
+            or parallel_pairs or mirror_pairs or plane_groups
+            or fixed_similarities or readonly_ids or initial_similarities
+            or lock_rotation or lock_translation
+            or (resolved_location is not None and resolved_location != set(match_map))
+            or any(observation.on_ground for observation in usable_observations)
+        ),
     )
     if similarities is None:
         return SyncSolveResult(

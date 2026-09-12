@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Solve Sync can build a consistent camera graph from only 2D point picks when a sparse anchor overlap disagrees with stronger view bridges.
 - For undistorted stills, Solve Sync keeps visible line constraints active when their 3D midpoint slides far along the same edge.
 - Free lines in a hard shared plane retain a compatible world-axis or Known 3D parallel direction.
 - Solve Sync no longer crashes when a recovered camera triggers a geometry update in a scene containing free lines.
