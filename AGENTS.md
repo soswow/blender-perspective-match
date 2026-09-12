@@ -113,6 +113,7 @@ Parallel agent work uses isolated worktrees and distinct file ownership; see `do
 - `tools/synthetic_sync/no_vp_bootstrap.py` — frozen 2D-only free-scale calibration controls, arbitrary private poses including the anchor, and independent focal/withheld geometry checks. The first true-intrinsics control failed and stopped the pilot after one ledgered solve; see `tools/synthetic_sync/no-vp-bootstrap-results.md` before spending more calls.
 - `tools/synthetic_sync/no_vp_startup_trace.py` — bounded stage trace for frozen no-VP camera registration, pair scores, triangulation, peeling and recovery; supports an input-order control and records exact results in a separate follow-up ledger.
 - `tools/synthetic_sync/unknown_focal.py` — one persistent budget for the frozen guessed-K, weak-baseline and pure-rotation no-VP cases and a five-call run through the actual Same Lens API; records complete trial inputs, source/runtime identity, assessments and selected search output. See `tools/synthetic_sync/unknown-focal-results.md`.
+- `tools/synthetic_sync/independent_focal.py` — bounded three-focal, camera-pose and free-point bundle-adjustment prototype seeded by saved Sync results, with one global scale gauge and input-only selection. `independent_focal_sensitivity.py` measures local focal uncertainty under an explicit pixel-noise assumption. Their frozen mixed/shared/weak/rotation evidence and optimizer ledgers are in `tools/synthetic_sync/independent-focal-results.md`.
 
 ## Do not
 

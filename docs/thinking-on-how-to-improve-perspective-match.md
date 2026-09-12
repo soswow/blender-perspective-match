@@ -30,7 +30,7 @@ disposition changes; the dated reports below retain the original measurements.
 | Biased hard/soft Known 3D references displace geometry | **Intentional model conflict, not a demonstrated arithmetic defect** | [Bias controls](../tools/synthetic_sync/biased-reference-results.md). Softening helps but does not certify truth. Current prior-release pilot adds no detection beyond the existing anchor warning; test hidden bias before adding a product warning. |
 | Promoted reconstruction points treated as trusted Known 3D | **Open workflow/representation issue** | User clarification below: these are working estimates with shared uncertainty. Preserve this distinction in future fitting/diagnostics; no automatic promotion to independent evidence. |
 | Recovered-update acceptance does not protect the full line/constraint objective | **Open coverage and acceptance-contract gap** | [Accepted-stage control](../tools/synthetic_sync/accepted-recovery-results.md). No remaining natural accepted-update damage is established by that control; find a paired damaging case before changing acceptance policy. |
-| Independent unknown focal lengths without VPs | **Open product capability** | [Mixed guessed-K baseline](../tools/synthetic_sync/unknown-focal-results.md) accepts inaccurate geometry. Same Lens preserves biased focal ratios; independent mode freezes no-VP focals. Next bound an input-only multi-focal strategy with identifiability and withheld checks before changing the UI. |
+| Independent unknown focal lengths without VPs | **Open product capability; numerical prototype only** | [Bounded three-focal prototype](../tools/synthetic_sync/independent-focal-results.md) recovered the exact shared case; the mixed candidate was highly accurate but hit its declared iteration cap. Under an assumed 0.5 px pick-noise model, even those exact fits have broad local focal uncertainty. Weak translation and pure rotation remain unsupported; do not promote to the UI from this evidence. |
 | Native modal scheduling, undo/redo, platform/package/hosted CI | **Unverified boundaries** | Generated preparation/job/reopen checks cover specific paths, not these broader claims. Select one bounded check when it reaches priority. |
 | Line Jacobian reparameterization / performance prototypes | **Not promoted; no demonstrated overall improvement** | [Line-position experiments](../tools/synthetic_sync/line-position-gauge-results.md). The actual projection defect was fixed; a prototype with worse geometry is not a pending fix to ship. |
 
@@ -50,19 +50,36 @@ case-specific contracts or a claim that every geometry is now accurate.
 
 **Objective and scope:** improve Sync reliability through reproducible evidence and independent checks of the rest of the object, beyond fitted picks. Both visual alignment and metric accuracy matter. Synthetic scenes are the primary corpus; private projects are optional evidence. Images are optional. **Latest user steering:** reliable FOV estimation from shared landmarks without dependable VP lines is now a priority; both shared-lens sets and mixed lenses/zooms/crops are common. Image transformations and distortion are now in scope when they affect that workflow. Automatic AprilTag/VP detection remains optional, not a prerequisite. Earlier deferrals below are historical.
 
-**Newest result:** the [unknown-focal continuation](../tools/synthetic_sync/unknown-focal-results.md)
-ran the six previously unexecuted controls and the actual Same Lens numerical
-API under one 15-call ledger. Shared and mixed guessed-K baselines both report
-success around 0.49 px fitted RMSE but fail held-out geometry. True-K weak
-translation is accurate; pure rotation is falsely accepted even with true K.
-The existing Same Lens route selected a 0.796875 scale from a 1.25× shared
-focal guess with an explicit ±25% window, passing all independent checks.
-The default ±18% coarse window does not include the true 0.80 scale; its full
-search was not tested here. Mixed independent no-VP focal recovery and an
-honest weak-geometry/ambiguity response remain open. The
-preceding `cc7d14d` startup fix and its true-K controls remain verified.
+**Newest result:** the [independent-focal prototype](../tools/synthetic_sync/independent-focal-results.md)
+fit three unrelated focals, camera poses and all free points from the frozen
+2D-only Sync starts, under separate optimizer and wall-time caps. The exact
+shared case converged and passed withheld geometry. The mixed candidate
+reached focal errors below 0.02% and withheld RMS 0.00114 px but hit its
+declared iteration cap, so remains a refusal. Weak-translation and
+pure-rotation candidates retained inaccurate geometry despite fitted RMSE
+below 0.002 px. With an explicitly assumed 0.5 px pick-noise standard
+deviation, the local focal intervals are broad even for mixed/shared exact
+fits; this does not certify global uniqueness or real-image FOV accuracy. No
+production lens mode, Sync acceptance or UI changed. The preceding
+[unknown-focal continuation](../tools/synthetic_sync/unknown-focal-results.md)
+established a working actual Same Lens search when its explicit range included
+the correction, and `cc7d14d`'s true-K startup fix remains verified.
 
-**Unknown-focal integration checkpoint:** evidence is committed as `fc41142`,
+**Independent-focal integration checkpoint:** prototype/evidence `9e6f0ca` and
+guards/corpus checks `da3ba09` are integrated. Shared-lens user instructions are
+in `036dbd5` and [the Sync guide](sync.md#shared-point-matches-with-an-approximate-shared-fov-no-vp-lines).
+Seven focused evidence tests pass on both Python environments without new
+numerical solves. In the OpenCV environment, use `PYTHONPATH=tests:.` with
+unqualified test module names to avoid an installed `tests` package shadowing
+this repository. No production code changed; the existing 374-test/Blender
+checkpoint was not repeated. Sol implemented the prototype; main reviewed its
+gauge, supported-input guards, uncertainty interpretation and preserved limits.
+This establishes a workable delegation pattern, not measured token savings.
+Next, test realistic pick noise and alternative starting guesses under a fresh
+declared budget before deciding on a production independent-focal mode or an
+uncertainty warning. Iteration-limit refusals are not an ambiguity detector.
+
+**Earlier unknown-focal integration checkpoint:** evidence is committed as `fc41142`,
 read-only corpus checks as `9a35f2b`, and their cross-NumPy angle-roundoff
 correction as `70060e2`. All three new evidence tests pass on both the OpenCV
 environment and default interpreter without numerical solves; the worker also
@@ -89,7 +106,7 @@ or recover their lost uncertainty/correlation. Provenance-aware reference handli
 is a future product question, not an implemented feature or a prerequisite for
 this pilot.
 
-**Checkpoint:** the truth-free reference-sensitivity pilot is committed as `d302390`; analytic pinhole line projection is fixed in `c304fbe`. The projection regressions fail on old code and pass after the fix, including arbitrary line directions, combined transforms and unchanged distorted-camera behavior. Combined validation passed **349 tests, 9 skipped, 260.811 seconds**, plus Blender 5.1.0 smoke. Two additional diagnostic comparison tests and independent no-solve projection/cached-pair checks passed after integration. Evidence tooling is committed as `8abac35`. Both workers have finished; their worktrees are archived and removed. No task is running. Hosted CI remains unverified; nothing has been pushed. Earlier reference-bias and plane/parallel work remains in `67f8877` and `3997bd3`.
+**Earlier checkpoint (before the no-VP focal work):** the truth-free reference-sensitivity pilot is committed as `d302390`; analytic pinhole line projection is fixed in `c304fbe`. The projection regressions fail on old code and pass after the fix, including arbitrary line directions, combined transforms and unchanged distorted-camera behavior. Combined validation passed **349 tests, 9 skipped, 260.811 seconds**, plus Blender 5.1.0 smoke. Two additional diagnostic comparison tests and independent no-solve projection/cached-pair checks passed after integration. Evidence tooling is committed as `8abac35`. Both workers have finished; their worktrees are archived and removed. No task is running. Hosted CI remains unverified; nothing has been pushed. Earlier reference-bias and plane/parallel work remains in `67f8877` and `3997bd3`.
 
 | Area | Established capability | Remaining boundary |
 | --- | --- | --- |
@@ -315,6 +332,16 @@ The selective-escalation trial's worker worktree was removed after its script, e
 **Parallel follow-up handoff:** two Sol/high workers started from `be69b73`: `fix/lens-refused-warm-start` owned the lens module/tests; `investigate/recovery-line-acceptance` first investigated with production read-only, then received narrow ownership of the point-ID crash fix and its regression. The main thread reviewed both diffs, preserved exact cases/results, and owns combined checks and documentation. Neither worker committed. Both task worktrees were archived under `.local/worker-handoffs/` and removed without force after integration; their branches remain at `be69b73`. Detailed numerical/Blender logs are in `.local/lens-fix-integration/` and `.local/recovery-line-integration/`. Existing stashes and baseline worktrees remain untouched.
 
 ## Implementation history
+
+**Independent-focal numerical prototype — 12 September 2026:** the bounded
+[three-focal experiment](../tools/synthetic_sync/independent-focal-results.md)
+used saved exact 2D-only Sync starts, free camera/point bundle adjustment,
+input-only candidate selection, and a separate local sensitivity check. Its
+shared case converged and passed the withheld oracle; its highly accurate
+mixed candidate stopped at the declared iteration cap. Weak translation and
+pure rotation stayed inaccurate at low training RMSE. Commit `45ac27f`
+preserves the exact run source and ledgers. This is numerical tooling only;
+production calibration and acceptance remain unchanged.
 
 **Third bounded parallel follow-up — 12 September 2026:** [reference-release controls](../tools/synthetic_sync/reference-sensitivity-results.md) compare original and released priors using only request/result data. All 16 solves succeeded; all eight pairs retained cameras, landmarks and picks. Biased-reference release gaps were about **0.178–0.180 scene units**, versus at most **0.009** for accurate noisy controls. The existing stored-anchor check already warned on both biased references and no accurate ones. The reusable diagnostic landed as `d302390`; no new warning or automatic reference selection was added. `d81d957` clarifies that the earlier numerical-only report omitted Blender's existing preparation warning.
 

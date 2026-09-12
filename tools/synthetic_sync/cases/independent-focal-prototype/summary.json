@@ -1,0 +1,126 @@
+{
+  "rows": [
+    {
+      "name": "no-vp-mixed-guessedK",
+      "fitted_rmse_px": 0.0001424776459547485,
+      "focal_relative_error": {
+        "view_0": 0.0001759744410238844,
+        "view_1": 5.312908246089458e-05,
+        "view_2": 1.1321169278062371e-05
+      },
+      "classification": "useful_refusal",
+      "geometry_passed": false,
+      "min_over_max_singular": 0.0002734682853973774,
+      "optimizer": {
+        "nfev": 80,
+        "njev": 74,
+        "meter": {
+          "residual": 968,
+          "jacobian": 74
+        },
+        "elapsed_s": 0.37149420799687505,
+        "initial_baseline_length": 11.241019786269504
+      }
+    },
+    {
+      "name": "no-vp-shared-guessedK",
+      "fitted_rmse_px": 3.7283798575873245e-10,
+      "focal_relative_error": {
+        "view_0": 4.1956389815403293e-10,
+        "view_1": 1.787935406565129e-10,
+        "view_2": 3.1167683818449193e-12
+      },
+      "classification": "accurate_acceptance",
+      "geometry_passed": true,
+      "min_over_max_singular": 0.00033294970740219815,
+      "optimizer": {
+        "nfev": 79,
+        "njev": 78,
+        "meter": {
+          "residual": 1015,
+          "jacobian": 78
+        },
+        "elapsed_s": 0.37890820810571313,
+        "initial_baseline_length": 12.542918431830035
+      }
+    },
+    {
+      "name": "no-vp-weak-baseline-guessedK",
+      "fitted_rmse_px": 0.0006259869694914077,
+      "focal_relative_error": {
+        "view_0": 0.1320303790056455,
+        "view_1": 0.12800297120281606,
+        "view_2": 0.12251556796379849
+      },
+      "classification": "useful_refusal",
+      "geometry_passed": false,
+      "min_over_max_singular": 5.3004796738153266e-08,
+      "optimizer": {
+        "nfev": 80,
+        "njev": 77,
+        "meter": {
+          "residual": 927,
+          "jacobian": 77
+        },
+        "elapsed_s": 0.3705579163506627,
+        "initial_baseline_length": 0.3410590115840762
+      }
+    },
+    {
+      "name": "no-vp-pure-rotation-guessedK",
+      "fitted_rmse_px": 0.001065581954352308,
+      "focal_relative_error": {
+        "view_0": 0.24750862837179793,
+        "view_1": 0.24838604577714776,
+        "view_2": 0.2456624595932656
+      },
+      "classification": "useful_refusal",
+      "geometry_passed": false,
+      "min_over_max_singular": 1.992142057658e-11,
+      "optimizer": {
+        "nfev": 80,
+        "njev": 69,
+        "meter": {
+          "residual": 839,
+          "jacobian": 69
+        },
+        "elapsed_s": 0.264898291323334,
+        "initial_baseline_length": 0.07510245589440707
+      }
+    }
+  ],
+  "limits": {
+    "per_case_residual": 3000,
+    "per_case_jacobian": 80,
+    "per_case_seconds": 90.0,
+    "total_residual": 12000,
+    "total_jacobian": 320,
+    "total_seconds": 360.0
+  },
+  "source_runtime": {
+    "source_sha256": "09932da1a46adbc90ad06b152e06f6868d5749f2ca0e84fb64141e6326fa424f",
+    "environment": {
+      "python": "3.12.6",
+      "numpy": "2.0.1",
+      "platform": "macOS-26.5-arm64-arm-64bit",
+      "revision": "2c176297de12107a3c1cb8d9b0339240a50a30ed",
+      "working_tree_dirty": true
+    },
+    "executable": "/Users/sasha/venvs/my/bin/python",
+    "python": "3.12.6",
+    "numpy": "2.0.1",
+    "scipy": "1.15.3",
+    "opencv": "4.13.0",
+    "threads": {
+      "OPENBLAS_NUM_THREADS": "1",
+      "OMP_NUM_THREADS": "1",
+      "MKL_NUM_THREADS": null,
+      "VECLIB_MAXIMUM_THREADS": null,
+      "NUMEXPR_NUM_THREADS": null
+    }
+  },
+  "total_work": {
+    "residual": 3749,
+    "jacobian": 298
+  }
+}

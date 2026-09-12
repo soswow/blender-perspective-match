@@ -21,6 +21,12 @@ also traces the actual Same Lens numerical API with a five-evaluation search;
 the result distinguishes a local shared-scale correction from the still-open
 independent no-VP focal path. Use `unknown_focal.py` for ledgered replay.
 
+The [independent-focal prototype](independent-focal-results.md) jointly varies
+three unrelated focals, camera poses and free points from saved 2D-only Sync
+starts. Four exact controls and a separate local-sensitivity check are bounded
+and preserved with exact optimizer inputs/results. This is numerical tooling,
+not a sidebar option or a production acceptance rule.
+
 ## Run and inspect
 
 From the repository root, using Python with NumPy:
