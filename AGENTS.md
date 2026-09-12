@@ -108,6 +108,8 @@ Headless helpers under `tools/` (and `scripts/validate_addon.py`) for investigat
 
 Parallel agent work uses isolated worktrees and distinct file ownership; see `docs/development.md#parallel-agent-work`.
 
+- `tools/synthetic_sync/budget.py` — POSIX experiment ledger reserves each instrumented numerical call before execution, caps calls and cumulative active time, retains exact inputs/results/failures, and rejects reuse with changed metadata or limits. Python signal deadlines can be delayed in native code; use an outer process timeout for hard limits. It does not count model tokens or uninstrumented solves.
+
 ## Do not
 
 - Do not save a user-provided `.blend` file in place. Treat it as read-only unless the user explicitly asks for a save or saving is required for the fix. If a save is necessary, write a sibling copy with a modified base name and report its exact path; otherwise do not save a `.blend` at all.

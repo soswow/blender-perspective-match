@@ -76,10 +76,17 @@ Before a numerical experiment, specify the permitted cases, total solver-call
 budget (including drafts, failed attempts and retries), wall-time limit and stop
 condition. An outer lens search can contain many Sync calls: define and count
 both, rather than calling an entire search one solve. The next harness improvement
-should enforce this budget and save an attempt ledger before each invocation;
-written limits alone have already been exceeded. Reuse results only when exact
+uses [ExperimentBudget](../tools/synthetic_sync/budget.py) to enforce this budget
+and save an attempt ledger before each invocation; written limits alone have
+already been exceeded. Instrument every inner Sync call, not just the outer
+search. Reuse results only when exact
 input, source, options and relevant environment fingerprints match. Preserve
-failures and timeouts as evidence too. This ledger is proposed, not implemented.
+failures and timeouts as evidence too. The ledger is POSIX/main-thread only and
+uses Python signal deadlines; pair it with an outer process timeout if native
+code could block signal delivery. Resuming retains call counts and charges
+interrupted attempts their reserved time. The caller must supply source-content,
+environment and option fingerprints; a Git revision plus a dirty flag is not
+sufficient. Cached values are serialized evidence, not reusable live solver objects.
 
 Measure a task's main-thread usage delta plus its children, with input, cached
 input and output separate. Cached input is part of input; reasoning output is
