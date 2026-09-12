@@ -18,6 +18,8 @@ if "match_perspective" not in sys.modules:
 
 from match_perspective.core import sync
 from sync_fixtures import _project, _synthetic_scene, _three_view_scene
+from tools.synthetic_sync.scenarios import generate
+from tools.synthetic_sync.solver import calibration
 
 
 def _append_points(matches, observations, true_sim, points: dict[str, np.ndarray]) -> None:
@@ -72,6 +74,64 @@ class PlaneGroupSyncTests(unittest.TestCase):
         centroid, normal = fitted
         distances = [abs(float(np.dot(normal, point - centroid))) for point in points]
         self.assertLess(max(distances), 1.0e-12)
+
+    def test_supported_hard_plane_preserves_compatible_fixed_line_direction(self) -> None:
+        """A plane refit must retain an exact axis or Known 3D direction."""
+        case = generate("mixed_lines", seed=0, noise_px=0.3)
+        point_ids = [point["id"] for point in case["request"]["points"][:4]]
+        groups = [(key, "Y", 1) for key in point_ids] + [("edge_1", "Y", 1)]
+        line_observations = [
+            sync.SyncLineObservation(**item)
+            for item in case["request"]["line_observations"]
+            if item["landmark_id"] == "edge_1"
+        ]
+        matches = {
+            camera["id"]: sync.SyncMatchInput(camera["id"], calibration(camera))
+            for camera in case["truth"]["cameras"]
+        }
+        identity = sync.SimilarityTransform(np.float64(1.0), np.eye(3), np.zeros(3))
+        poses = {key: identity for key in matches}
+        reference = tuple(
+            np.asarray(end, dtype=float)
+            for end in case["truth"]["lines"]["edge_0"]
+        )
+        for name, links in (
+            ("world-axis", [("edge_1", "WORLD_AXIS_Z")]),
+            ("known-line", [("edge_1", "edge_0")]),
+            ("incompatible", [("edge_1", "WORLD_AXIS_Y")]),
+            ("no-weight", [("edge_1", "WORLD_AXIS_Z")]),
+        ):
+            with self.subTest(name=name):
+                segment = tuple(
+                    np.asarray(end, dtype=float)
+                    for end in case["truth"]["lines"]["edge_1"]
+                )
+                lines = {"edge_1": segment}
+                known_lines = {"edge_0": reference} if name == "known-line" else {}
+                landmarks = {
+                    key: np.asarray(case["truth"]["points"][key], dtype=float)
+                    for key in point_ids
+                }
+                landmarks["edge_1"] = 0.5 * (segment[0] + segment[1])
+                items = line_observations if name != "no-weight" else [
+                    sync.SyncLineObservation(
+                        item.match_id, item.landmark_id,
+                        item.u1, item.v1, item.u2, item.v2, weight=0.0,
+                    )
+                    for item in line_observations
+                ]
+                sync.enforce_plane_line_segments(
+                    lines, landmarks, groups, {"edge_1": items},
+                    poses, matches, known_lines,
+                    plane_slack=0.0, parallel_pairs=links,
+                )
+                end_a, end_b = lines["edge_1"]
+                direction = end_b - end_a
+                direction /= np.linalg.norm(direction)
+                self.assertLess(max(abs(end_a[1] + 0.9), abs(end_b[1] + 0.9)), 1e-8)
+                sine_z = float(np.linalg.norm(np.cross(direction, [0.0, 0.0, 1.0])))
+                if name != "incompatible":
+                    self.assertLess(sine_z, 1e-8)
 
     def test_axis_bucket_shares_z_and_keeps_a_second_bucket_separate(self) -> None:
         matches, observations, true_sim, _c, _s = _synthetic_scene(with_ground=True)

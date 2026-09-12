@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 from .constants import (
+    LINE_CONSTRAINT_DIRECTION_TOLERANCE,
     LINE_PLANE_MIN_SINE,
     LINE_RECONSTRUCT_TRUNCATE_PX,
     PLANE_AXIS_ALIGNED_MIN,
@@ -17,6 +18,7 @@ from .constants import (
 from .projection import _intersect_planes_to_line, _plane_from_line_observation, camera_ray_private
 from .lines import (
     _finite_segment_from_line_observations,
+    _fixed_parallel_line_directions,
     _fit_line_fixed_direction,
     _line_observation_rms_px,
 )
@@ -522,6 +524,8 @@ def _line_on_supported_plane(
     observations: list[SyncLineObservation],
     similarities: dict[str, SimilarityTransform],
     matches: dict[str, SyncMatchInput],
+    *,
+    fixed_direction: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray] | None:
     """Fit posed strokes within a fixed plane; never project an unconstrained fit."""
     plane = np.r_[normal, -normal @ origin]
@@ -533,6 +537,23 @@ def _line_on_supported_plane(
         image_plane = _plane_from_line_observation(observation, calibration, pose)
         if image_plane is not None:
             records.append((observation, calibration, pose, image_plane))
+    if fixed_direction is not None:
+        unit = fixed_direction / max(float(np.linalg.norm(fixed_direction)), 1.0e-12)
+        if abs(float(normal @ unit)) <= LINE_CONSTRAINT_DIRECTION_TOLERANCE:
+            across = np.cross(normal, unit)
+            point = normal * float(normal @ origin)
+            numerator = denominator = 0.0
+            for item, _calibration, _pose, image_plane in records:
+                coefficient = float(image_plane[:3] @ across)
+                residual = float(image_plane[:3] @ point + image_plane[3])
+                weight = max(float(item.weight), 0.0)
+                numerator -= weight * coefficient * residual
+                denominator += weight * coefficient * coefficient
+            if denominator > 1.0e-12:
+                point += across * (numerator / denominator)
+                if np.isfinite(point).all():
+                    return point, unit
+            return None
     best = None
     for _observation, _calibration, _pose, image_plane in records:
         sine = float(np.linalg.norm(np.cross(normal, image_plane[:3])))
@@ -564,6 +585,7 @@ def enforce_plane_line_segments(
     known_lines: dict[str, tuple[np.ndarray, np.ndarray]],
     *,
     plane_slack: float,
+    parallel_pairs: list[tuple[str, str]] | None = None,
     ground_landmark_ids: list[str] | None = None,
     excluded_support_ids: set[str] | None = None,
 ) -> None:
@@ -576,6 +598,7 @@ def enforce_plane_line_segments(
         ground_landmark_ids=ground_landmark_ids,
         excluded_support_ids=excluded_support_ids,
     )
+    fixed_directions = _fixed_parallel_line_directions(parallel_pairs, known_lines)
     line_points = {
         landmark_id: 0.5 * (segment[0] + segment[1])
         for landmark_id, segment in line_segments.items()
@@ -621,7 +644,13 @@ def enforce_plane_line_segments(
             items = line_observations_by_landmark.get(landmark_id, [])
             if landmark_id in independent:
                 plane_origin, plane_normal = independent[landmark_id]
-                fitted = _line_on_supported_plane(plane_origin, plane_normal, items, similarities, matches)
+                direction = fixed_directions.get(landmark_id)
+                if direction is not None and abs(float(plane_normal @ direction)) > LINE_CONSTRAINT_DIRECTION_TOLERANCE:
+                    direction = None
+                fitted = _line_on_supported_plane(
+                    plane_origin, plane_normal, items, similarities, matches,
+                    fixed_direction=direction,
+                )
                 if fitted is not None:
                     segment = _finite_segment_from_line_observations(
                         fitted[0], fitted[1], items, similarities, matches,
@@ -636,6 +665,9 @@ def enforce_plane_line_segments(
             unit = _direction_in_plane(direction, normal)
             if unit is None:
                 continue
+            fixed = fixed_directions.get(landmark_id)
+            if fixed is not None and abs(float(normal @ fixed)) <= LINE_CONSTRAINT_DIRECTION_TOLERANCE:
+                unit = fixed
             midpoint = 0.5 * (point_a + point_b)
             midpoint = midpoint - normal * float(np.dot(midpoint - centroid, normal))
             items = line_observations_by_landmark.get(landmark_id, [])

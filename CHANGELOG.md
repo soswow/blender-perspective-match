@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Free lines in a hard shared plane retain a compatible world-axis or Known 3D parallel direction.
 - Solve Sync no longer crashes when a recovered camera triggers a geometry update in a scene containing free lines.
 - Refine Lenses can recover from an initially rejected Sync by registering cameras afresh at new focal candidates while preserving explicit pose locks.
 - Loading another file cancels Diagnose and Refine Lenses jobs; late callbacks from an old job cannot cancel or overwrite a newer one.

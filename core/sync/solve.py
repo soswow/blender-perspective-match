@@ -925,6 +925,7 @@ def _rebuild_free_line_segments(state: _SolveState) -> None:
             state.match_map,
             state.known_lines,
             plane_slack=float(getattr(state, "plane_slack", 0.0) or 0.0),
+            parallel_pairs=state.parallel_pairs,
             ground_landmark_ids=ground_ids,
             excluded_support_ids=getattr(state,"plane_seeded_ids",set()),
         )

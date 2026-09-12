@@ -645,3 +645,15 @@ produce accuracy flags while the diagnostic completes successfully; unbiased
 controls must pass. Replay a frozen `cases/biased-reference-exact-*.json` using
 `run.py --case ... --out ...` to enforce its ordinary accuracy contract as the
 exit status. See [the measured tradeoffs and limitations](biased-reference-results.md).
+
+### Accepted recovered-camera updates
+
+`python3 tools/synthetic_sync/accepted_recovery.py --out /tmp/pm-accepted-recovery`
+observes an applied recovered-camera geometry update and compares a control that
+freezes only that stage. Add `--case tools/synthetic_sync/cases/accepted-recovery.json`
+to replay the frozen input. The already posed camera is explicitly
+marked recovered: this is a stage control, not evidence that natural registration
+routes it there. Camera and line truth checks are separate from exact declared
+parallel direction and signed hard coplanarity. Final finite extent is checked
+separately from the infinite line; intermediate endpoints can slide along that
+line. See [the evidence and limits](accepted-recovery-results.md).
