@@ -10,7 +10,8 @@ import numpy as np
 
 from match_perspective.core import geometry, lens_refine, sync
 from match_perspective.core.focal_bundle import (
-    FocalBundleOutcome, _fits_noise_model, _has_depth_evidence, _homography_forward_error,
+    EPIPOLAR_HINT_MAX_FITS, FocalBundleOutcome, _epipolar_conflict_pairs, _fits_noise_model,
+    _has_depth_evidence, _homography_forward_error,
     _project_with_depth_penalty,
     fit_independent_focals,
 )
@@ -60,6 +61,75 @@ def _saved_initial(case, matches, label):
 
 
 class PointFocalBundleTests(TestCase):
+    def test_bad_two_view_correspondence_adds_tentative_pair_hint_on_refusal(self):
+        for name in ("noisy-mixed", "noisy-shared"):
+            case, matches, observations = _inputs(name)
+            ids = [item.match_id for item in matches]
+            with self.subTest(name=name):
+                self.assertEqual(_epipolar_conflict_pairs(ids, observations, 1.0), [])
+                self.assertEqual(_epipolar_conflict_pairs(ids, observations, 0.5), [])
+                # This point occurs only in views 1 and 2, so the wrong pick
+                # can be absorbed into a free 3D point with a small fit RMSE.
+                wrong = next(o for o in observations
+                             if o.match_id == "view_2" and o.landmark_id == "point_08")
+                wrong.u += 20.0
+                wrong.v -= 15.0
+                self.assertIn(("view_1", "view_2"),
+                              _epipolar_conflict_pairs(ids, observations, 1.0))
+                self.assertIn(("view_1", "view_2"),
+                              _epipolar_conflict_pairs(ids, observations, 0.5))
+                initial = _saved_initial(case, matches, name)
+                result = fit_independent_focals(
+                    {item.match_id: item.base_calibration for item in matches},
+                    observations, initial, anchor_id="view_0", pick_sigma_px=1.0)
+                self.assertFalse(result.accepted)
+                self.assertIn("view_1 and view_2", result.reason)
+                self.assertIn("may be inconsistent", result.reason)
+                self.assertNotIn("point_08", result.reason)
+
+    def test_pair_hint_is_lazy_and_bounded(self):
+        case, matches, observations = _inputs("noisy-mixed")
+        initial = _saved_initial(case, matches, "noisy-mixed")
+        with mock.patch("match_perspective.core.focal_bundle._epipolar_conflict_pairs",
+                        side_effect=AssertionError("successful fits should not run a hint")):
+            result = fit_independent_focals(
+                {item.match_id: item.base_calibration for item in matches},
+                observations, initial, anchor_id="view_0", pick_sigma_px=1.0)
+        self.assertTrue(result.accepted, result.reason)
+        self.assertEqual(_epipolar_conflict_pairs(
+            [item.match_id for item in matches], observations, 1.0,
+            cancel_check=lambda: True), [])
+        # Eight cameras with all 80 points visible would otherwise require
+        # 28 × 80 leave-one-out models on a refusal path.
+        many = [sync.SyncObservation(f"camera_{camera}", f"point_{point}",
+                                     float(point * 17 % 997), float(point * 41 % 719))
+                for camera in range(8) for point in range(80)]
+        import match_perspective.core.focal_bundle as bundle
+        with mock.patch.object(bundle, "_fit_fundamental", wraps=bundle._fit_fundamental) as fit:
+            self.assertEqual(_epipolar_conflict_pairs(
+                [f"camera_{camera}" for camera in range(8)], many, 1.0), [])
+        self.assertEqual(fit.call_count, EPIPOLAR_HINT_MAX_FITS)
+
+    def test_insufficient_camera_support_names_camera_and_count(self):
+        case, matches, observations = _inputs("four-view")
+        initial = _saved_initial(case, matches, "four-view")
+        kept = {item.landmark_id for item in observations if item.match_id == "view_0"}
+        kept = set(sorted(kept)[:8])
+        sparse = [item for item in observations if item.landmark_id in kept]
+        initial.landmarks = {key: value for key, value in initial.landmarks.items() if key in kept}
+        result = fit_independent_focals(
+            {item.match_id: item.base_calibration for item in matches},
+            sparse, initial, anchor_id="view_0", pick_sigma_px=1.0)
+        self.assertFalse(result.accepted)
+        self.assertRegex(result.reason, r"view_[123] has [0-7] point picks")
+        with mock.patch.object(lens_refine, "_run_sync") as run:
+            public = lens_refine.refine_lenses_from_landmarks(
+                matches, sparse, anchor_id="view_0",
+                estimate_focal_from_points=True, pick_sigma_px=1.0)
+        self.assertFalse(public.improved)
+        self.assertEqual(public.refusal_reason, result.reason)
+        run.assert_not_called()
+
     def test_near_duplicate_first_view_does_not_set_the_scale_gauge(self):
         _case, matches, observations = _inputs("four-view")
         initial = _saved_initial(_case, matches, "four-view")
@@ -142,6 +212,8 @@ class PointFocalBundleTests(TestCase):
             with self.subTest(name=name):
                 self.assertFalse(_has_depth_evidence(
                     [item.match_id for item in matches], observations, 1.0))
+                self.assertEqual(_epipolar_conflict_pairs(
+                    [item.match_id for item in matches], observations, 1.0), [])
         case, matches, observations = _inputs("four-view")
         self.assertTrue(_has_depth_evidence(
             [item.match_id for item in matches], observations, 1.0))

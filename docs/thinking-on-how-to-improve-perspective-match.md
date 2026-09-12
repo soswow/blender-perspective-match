@@ -9,6 +9,40 @@ The deeper product issue is that three different promises are currently close to
 
 ## Current frontier — 12 September 2026
 
+**Authorized continuation:** first establish practical point-FOV reliability
+with incomplete/imperfect picks and alternative initial FOVs, carrying findings
+through to product fixes or actionable diagnostics; then support Is in Plane
+and point symmetry in focal fitting. Keep these as sequential integration
+phases, with bounded experiments and coherent outcome commits.
+
+**Imperfect-pick phase:** the [frozen reliability follow-up](../tools/synthetic_sync/cases/independent-focal-reliability/README.md)
+separates 24 saved-start optimizer trials from eight fresh Sync calls (six
+distinct inputs and two recorded harness duplicates), then 12 fresh-start
+bundle trials. Selected eligible exact/noisy 12-point, noisy 16-point and
+alternative-initial-FOV cases fit successfully. Noisy maximum focal errors
+remain about 7.8–10%, within the broad local intervals; neither an eight-point
+recipe nor calibrated 95% coverage on real picks is established. Naive 8/12
+subsets of this partially visible object were ineligible on per-camera counts.
+The product now names an under-supported camera and its pick count before
+registration. A failed fit may suggest checking a pair of views using a bounded
+raw-correspondence diagnostic. It deliberately does not accuse one landmark or
+gate acceptance: withheld-model uncertainty and leverage make that stronger
+claim unjustified. Success incurs no diagnostic work. The 25 focused numerical
+tests pass after integration; broader combined verification follows the
+authorized plane/symmetry phase. Initial guesses and noisy geometry remain
+recorded limitations, not closed findings. This phase is a diagnostic outcome,
+not a new accuracy guarantee.
+
+**Open question for later — symmetry without a supplied plane:** the user may
+know several pairs of corresponding mirror landmarks and that all pairs share
+one symmetry plane, without knowing its position/orientation or having an Empty
+to represent it. Investigate estimating that common plane jointly with cameras
+and structure, including partial visibility and approximate symmetry. Establish
+when the observations determine it, which freedoms remain, and how to report
+ambiguity. Existing Mirror Slack only adjusts an already supplied plane along
+its normal; it does not establish this missing-plane workflow. This question
+is retained separately, not added to the current implementation scope.
+
 ### Finding disposition — keep fixes and unresolved evidence distinct
 
 Confirmed reproducible defects should proceed to a focused regression and fix

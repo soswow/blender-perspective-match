@@ -87,6 +87,16 @@ mode declines to change the cameras. A successful result applies the jointly
 fitted cameras and points together; a refusal leaves the existing scene intact.
 Scale remains arbitrary without a separate metric reference.
 
+The eight-pick minimum is an eligibility rule, not an accuracy guarantee.
+Frozen tests include successful exact and noisy 12- and 16-landmark sets with
+partial overlap, but noisy focal errors can still approach 10% while lying
+inside the reported intervals. More points on the same weak part of the object
+do not necessarily determine its depth better. Check the rest of the object.
+When a fit fails to converge or disagrees with the stated pick error, it may
+suggest a pair of views whose shared picks deserve review. This optional hint
+needs at least 12 shared picks in that pair; it does not identify a particular
+wrong landmark, prove a mismatch, or change whether a result is accepted.
+
 ### Calibrated ground-only workflow (no VP lines)
 
 When the anchor has no usable VP solve, **Solve Sync** and **Diagnose** can initialize its ground frame directly from calibrated views:

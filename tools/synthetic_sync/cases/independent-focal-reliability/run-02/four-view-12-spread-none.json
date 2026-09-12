@@ -1,0 +1,21 @@
+{
+  "label": "four-view-12-spread-none",
+  "assessment": {
+    "classification": "useful_refusal",
+    "focal_relative_error": {},
+    "focal_within_limit": false,
+    "independent_geometry": {
+      "passed": false,
+      "violations": [
+        "Solver rejected a constrained case: Every camera needs at least eight point picks",
+        "Need four reconstructed training landmarks to align an unscaled scene"
+      ],
+      "cameras": {},
+      "gauge": "similarity",
+      "expected_outcome": "solve",
+      "warnings": [],
+      "line_accuracy_failures": []
+    }
+  },
+  "interval_coverage": {}
+}

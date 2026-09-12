@@ -1,0 +1,21 @@
+{
+  "label": "noisy-shared-23-spread-bad_pick",
+  "assessment": {
+    "classification": "useful_refusal",
+    "focal_relative_error": {},
+    "focal_within_limit": false,
+    "independent_geometry": {
+      "passed": false,
+      "violations": [
+        "Solver rejected a constrained case: Point focal fit did not converge",
+        "Need four reconstructed training landmarks to align an unscaled scene"
+      ],
+      "cameras": {},
+      "gauge": "similarity",
+      "expected_outcome": "solve",
+      "warnings": [],
+      "line_accuracy_failures": []
+    }
+  },
+  "interval_coverage": {}
+}

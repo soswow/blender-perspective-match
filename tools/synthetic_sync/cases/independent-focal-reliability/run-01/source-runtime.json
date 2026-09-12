@@ -1,0 +1,21 @@
+{
+  "source_sha256": {
+    "core/focal_bundle.py": "caf8878488e3d38af8680e4b9787e6b4f9f93dcf4546f992608c8912d60f23b6",
+    "core/lens_refine.py": "d052f840899367be24023ccecc621875541eecbd099ebae51b930cf9763c07b2",
+    "tools/synthetic_sync/independent_focal_reliability.py": "8cd0d820910ccdc5fc3cdf0672f2e9258f598423feb3ddaab5be4ce9e7fe7f8a"
+  },
+  "environment": {
+    "python": "3.12.6",
+    "numpy": "2.0.1",
+    "platform": "macOS-26.5-arm64-arm-64bit",
+    "revision": "6f77f4f098bb4dba0eb750b9fdab2f927aacac8c",
+    "working_tree_dirty": true
+  },
+  "saved_starts": "independent-focal-production/run-03/sync-ledger.jsonl",
+  "limits": {
+    "inner_sync_calls": 0,
+    "bundle_attempts": 14,
+    "per_bundle_seconds": 30,
+    "cumulative_bundle_seconds": 300
+  }
+}

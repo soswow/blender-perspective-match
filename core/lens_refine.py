@@ -476,6 +476,10 @@ def refine_lenses_from_landmarks(
         point_count = len({item.landmark_id for item in observations})
         if not 8 <= point_count <= MAX_POINTS:
             return refusal(f"Point focal estimation needs 8–{MAX_POINTS} free points")
+        for match_id in match_ids:
+            count = sum(item.match_id == match_id for item in observations)
+            if count < 8:
+                return refusal(f"{match_id} has {count} point picks; each camera needs at least eight")
         if not np.isfinite(pick_sigma_px) or pick_sigma_px <= 0:
             return refusal("Pick sigma must be positive and finite")
         if not np.isfinite(fx_span) or not 0 < fx_span < 1:

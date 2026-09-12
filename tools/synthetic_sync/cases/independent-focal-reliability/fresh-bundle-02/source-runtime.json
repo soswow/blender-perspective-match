@@ -1,0 +1,27 @@
+{
+  "source_sha256": {
+    "core/focal_bundle.py": "4c4a19bce34c1875da6f4d12732af50d1019abfd0a53d045b8187f8ed68e38f5",
+    "core/lens_refine.py": "d052f840899367be24023ccecc621875541eecbd099ebae51b930cf9763c07b2",
+    "tests/test_focal_bundle.py": "01ad40718abc97959abb197127ff3f757e0480cefe551415969173738dd11f41",
+    "tools/synthetic_sync/solver.py": "3ff8f27230f3bc9c39711f9cbb23296f743d25fa7bdc5c4b3a665104c1478dc3",
+    "tools/synthetic_sync/no_vp_bootstrap.py": "a9f431860b93dc703f1d7b3da520985233459151c4f316fc4d3893236a8cf27f",
+    "tools/synthetic_sync/independent_focal_reliability.py": "405ef26631d634b73d686f435e2c97ce72b4f9d3489a921c8c3b5e7ed04f562e"
+  },
+  "environment": {
+    "python": "3.12.6",
+    "numpy": "2.0.1",
+    "platform": "macOS-26.5-arm64-arm-64bit",
+    "revision": "6f77f4f098bb4dba0eb750b9fdab2f927aacac8c",
+    "working_tree_dirty": true
+  },
+  "sync_ledgers": [
+    "fresh-sync-01",
+    "fresh-sync-02"
+  ],
+  "limits": {
+    "bundle_attempts": 6,
+    "per_bundle_seconds": 30,
+    "cumulative_bundle_seconds": 180,
+    "outer_seconds": 240
+  }
+}

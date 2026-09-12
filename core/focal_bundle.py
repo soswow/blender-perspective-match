@@ -22,6 +22,9 @@ MAX_CAMERAS = 8
 MAX_POINTS = 80
 MAX_ITERATIONS = 100
 MAX_SECONDS = 30.0
+EPIPOLAR_HINT_MIN_WITHHELD_SIGMA = 8.0
+EPIPOLAR_HINT_MAX_FITS = 1000
+EPIPOLAR_HINT_MAX_SECONDS = 10.0
 
 
 @dataclass
@@ -146,6 +149,103 @@ def _homography_forward_error(first: np.ndarray, second: np.ndarray,
     return whitened
 
 
+def _fit_fundamental(first: np.ndarray, second: np.ndarray) -> np.ndarray | None:
+    """Fit a rank-two fundamental matrix from noisy image pairs."""
+    a, ta = _normalize_points(first)
+    b, tb = _normalize_points(second)
+    x, y = a.T
+    u, v = b.T
+    design = np.column_stack((u*x, u*y, u, v*x, v*y, v, x, y, np.ones(len(a))))
+    _, singular, vh = np.linalg.svd(design, full_matrices=True)
+    if singular[-2] <= singular[0] * 1.0e-10:
+        return None
+    model = vh[-1].reshape(3, 3)
+    left, values, right = np.linalg.svd(model)
+    values[-1] = 0.0
+    return tb.T @ ((left * values) @ right) @ ta
+
+
+def _epipolar_errors(model: np.ndarray, first: np.ndarray,
+                     second: np.ndarray) -> np.ndarray:
+    """Return first-order symmetric squared transfer errors in pixels."""
+    a = np.column_stack((first, np.ones(len(first))))
+    b = np.column_stack((second, np.ones(len(second))))
+    fa = a @ model.T
+    ftb = b @ model
+    numerator = np.sum(b * fa, axis=1)
+    denominator = np.sum(fa[:, :2]**2, axis=1) + np.sum(ftb[:, :2]**2, axis=1)
+    return numerator**2 / np.maximum(denominator, 1.0e-20)
+
+
+def _epipolar_conflict_pairs(ids: list[str], observations: list[SyncObservation],
+                             sigma: float, *, cancel_check=None) -> list[tuple[str, str]]:
+    """Find tentative pair conflicts as a bounded refusal diagnostic."""
+    picks: dict[str, dict[str, tuple[float, float]]] = {camera_id: {} for camera_id in ids}
+    for observation in observations:
+        picks[observation.match_id][observation.landmark_id] = (observation.u, observation.v)
+    conflicts = []
+    pair_count = len(ids) * (len(ids) - 1) // 2
+    started = time.monotonic()
+    model_fits = 0
+    for index, first_id in enumerate(ids):
+        for second_id in ids[index + 1:]:
+            if (cancel_check and cancel_check()) or time.monotonic() - started > EPIPOLAR_HINT_MAX_SECONDS:
+                return []
+            common = sorted(picks[first_id].keys() & picks[second_id].keys())
+            # Leave-one-out fits need enough redundancy beyond the eight-point
+            # minimum; thin overlaps rely on the later fit/noise checks.
+            if len(common) < 12:
+                continue
+            first = np.asarray([picks[first_id][key] for key in common], float)
+            second = np.asarray([picks[second_id][key] for key in common], float)
+            best = None
+            for omitted in range(len(common)):
+                if ((cancel_check and cancel_check()) or
+                    time.monotonic() - started > EPIPOLAR_HINT_MAX_SECONDS or
+                    model_fits >= EPIPOLAR_HINT_MAX_FITS):
+                    return []
+                kept = np.arange(len(common)) != omitted
+                model_fits += 1
+                try:
+                    model = _fit_fundamental(first[kept], second[kept])
+                except (ValueError, np.linalg.LinAlgError):
+                    continue
+                if model is None:
+                    continue
+                errors = _epipolar_errors(model, first, second)
+                if not np.isfinite(errors).all():
+                    continue
+                inlier_sse = float(np.sum(errors[kept]))
+                if best is None or inlier_sse < best[0]:
+                    best = (inlier_sse, float(errors[omitted]))
+            if best is None:
+                continue
+            # This heuristic compares one withheld Sampson error with an
+            # inlier fit. It omits model uncertainty, so its camera-pair hint
+            # cannot classify a pick or justify a separate acceptance gate.
+            dof = max(len(common) - 8, 1)
+            tail = math.log(100.0 * pair_count)
+            inlier_limit = sigma**2 * (dof + 2 * math.sqrt(dof * tail) + 2 * tail)
+            # Eight-point estimates can have high leverage. Eight assumed
+            # coordinate sigmas is a deliberately strong diagnostic heuristic,
+            # not a calibrated probability or an acceptance threshold.
+            heldout_limit = (EPIPOLAR_HINT_MIN_WITHHELD_SIGMA * sigma)**2
+            if best[0] <= inlier_limit and best[1] > heldout_limit:
+                conflicts.append((first_id, second_id))
+    return conflicts
+
+
+def _conflict_hint(ids: list[str], observations: list[SyncObservation],
+                   sigma: float, *, cancel_check=None) -> str:
+    pairs = _epipolar_conflict_pairs(ids, observations, sigma,
+                                     cancel_check=cancel_check)
+    if not pairs:
+        return ""
+    first, second = sorted(pairs[0])
+    return (f" Check shared picks between {first} and {second}; "
+            "they may be inconsistent with the stated pick error.")
+
+
 def _has_depth_evidence(ids: list[str], observations: list[SyncObservation],
                         sigma: float) -> bool:
     """Require a connected graph of pairs with evidence against a homography."""
@@ -243,9 +343,10 @@ def fit_independent_focals(
     if any(len({item.match_id for item in observations if item.landmark_id == point_id}) < 2
            for point_id in point_ids):
         return refuse("Every point needs at least two picks")
-    if any(sum(item.match_id == camera_id for item in observations) < 8
-           for camera_id in ids):
-        return refuse("Every camera needs at least eight point picks")
+    for camera_id in ids:
+        count = sum(item.match_id == camera_id for item in observations)
+        if count < 8:
+            return refuse(f"{camera_id} has {count} point picks; each camera needs at least eight")
     if not _has_depth_evidence(ids, observations, float(pick_sigma_px)):
         return refuse(
             "Not enough depth evidence for independent FOV fitting. Add views "
@@ -430,7 +531,11 @@ def fit_independent_focals(
                 converged = converged or not accepted_step and np.linalg.norm(gradient, ord=np.inf) < 1.0e-5
                 break
         if not converged:
-            return refuse("Point focal fit did not converge")
+            hint = _conflict_hint(ids, observations, pick_sigma_px,
+                                  cancel_check=cancel_check)
+            if cancel_check and cancel_check():
+                return refuse("Cancelled")
+            return refuse("Point focal fit did not converge." + hint)
         fitted_residual, jac, depths = residual_and_jacobian(x, jacobian=True)
         end_raw = fitted_residual.reshape(-1, 2) / weights[:, None]
         fitted_rmse = float(np.sqrt(np.mean(np.sum(end_raw**2, axis=1))))
@@ -440,7 +545,12 @@ def fit_independent_focals(
             return refuse("Fitted focal reached the search bound; widen Lens Search %", fitted=fitted_rmse)
         # Residual count and model dimensions make this a noise-aware fit test.
         if not _fits_noise_model(end_raw, len(x), pick_sigma_px):
-            return refuse("Point fit is inconsistent with the stated pick noise", fitted=fitted_rmse)
+            hint = _conflict_hint(ids, observations, pick_sigma_px,
+                                  cancel_check=cancel_check)
+            if cancel_check and cancel_check():
+                return refuse("Cancelled")
+            return refuse("Point fit is inconsistent with the stated pick noise." + hint,
+                          fitted=fitted_rmse)
         # Reject serious camera-specific regression even if total cost improves.
         start_per_camera = initial_raw
         end_per_camera = end_raw
