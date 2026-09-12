@@ -9,6 +9,43 @@ The deeper product issue is that three different promises are currently close to
 
 ## Current frontier — 12 September 2026
 
+### Finding disposition — keep fixes and unresolved evidence distinct
+
+Confirmed reproducible defects should proceed to a focused regression and fix
+within the reliability work, not accumulate as reports. An experimental stop
+limits that experiment; it does not close the finding. Close a defect only with
+the fixing commit and verification. Keep accuracy flags with uncertain causes
+visible until diagnosed; do not relabel conflicting evidence as fixed geometry
+or relax its oracle to make a status green. Update this register when a finding's
+disposition changes; the dated reports below retain the original measurements.
+
+| Finding | Current disposition | Evidence / next action |
+| --- | --- | --- |
+| Exact 2D-only startup accepts inaccurate geometry despite correct intrinsics | **Active diagnosis and fix** | [Frozen case](../tools/synthetic_sync/no-vp-bootstrap-results.md); trace the earliest bad stage, preserve 2D-only input and independent checks. Sol owns the bounded investigation; main owns review/integration. |
+| Mild noisy free-scale/overhead cases and five of ten noisy graph cases exceed provisional accuracy limits | **Open accuracy findings; cause not established** | [Initial pilot](../tools/synthetic_sync/pilot-results.md), [evidence placement](../tools/synthetic_sync/evidence-results.md), [graph sweep](../tools/synthetic_sync/graph-results.md). Reassess after the exact startup fix; compare input uncertainty with reconstruction sensitivity before claiming a solver defect. |
+| Weak mirror-line geometry under noisy or biased strokes | **Geometry limit still open; weak-support warning fixed** | [Constraint evidence](../tools/synthetic_sync/constraint-results.md). Depth is poorly determined by nearly coincident supporting planes. More copies of the same weak evidence do not establish accuracy; test better evidence or an honest uncertainty response. |
+| Contradictory recovered camera remains above the withheld limit | **Open inconsistent-evidence outcome; healthy-camera corruption fixed** | [Recovery evidence](../tools/synthetic_sync/recovery-results.md), [line-bearing continuation](../tools/synthetic_sync/recovery-acceptance-results.md). Keep the remaining ~2.43 px flag; do not expect exact geometry from intentionally inconsistent picks. |
+| Biased hard/soft Known 3D references displace geometry | **Intentional model conflict, not a demonstrated arithmetic defect** | [Bias controls](../tools/synthetic_sync/biased-reference-results.md). Softening helps but does not certify truth. Current prior-release pilot adds no detection beyond the existing anchor warning; test hidden bias before adding a product warning. |
+| Promoted reconstruction points treated as trusted Known 3D | **Open workflow/representation issue** | User clarification below: these are working estimates with shared uncertainty. Preserve this distinction in future fitting/diagnostics; no automatic promotion to independent evidence. |
+| Recovered-update acceptance does not protect the full line/constraint objective | **Open coverage and acceptance-contract gap** | [Accepted-stage control](../tools/synthetic_sync/accepted-recovery-results.md). No remaining natural accepted-update damage is established by that control; find a paired damaging case before changing acceptance policy. |
+| Independent unknown focal lengths without VPs | **Open product capability** | Current no-VP independent mode freezes focal lengths. Fix/understand correctly calibrated startup before resuming the frozen mixed-focal experiment. |
+| Native modal scheduling, undo/redo, platform/package/hosted CI | **Unverified boundaries** | Generated preparation/job/reopen checks cover specific paths, not these broader claims. Select one bounded check when it reaches priority. |
+| Line Jacobian reparameterization / performance prototypes | **Not promoted; no demonstrated overall improvement** | [Line-position experiments](../tools/synthetic_sync/line-position-gauge-results.md). The actual projection defect was fixed; a prototype with worse geometry is not a pending fix to ship. |
+
+**Product fixes already landed (representative grouped audit):** Fit Only mirror
+ownership (`b902124`); sparse-graph ground propagation (`76e79b1`); preservation
+of established geometry during recovered updates (`5a4a34d`); hard-ground/shared
+plane initialization (`19373fe`); supported one-view plane recovery (`3808b7b`);
+mirror/plane/parallel compatibility (`3aa0dcc`, `6d4ff2f`, `3997bd3`); stale
+Diagnose/lens results and lens rollback (`6c5712a`, `f6a7673`, `fd0633f`);
+background job retirement (`de057d2`); lens support/initialization (`2ab1165`,
+`4cd7a19`); line-bearing recovered rebuild crash (`5ce36a0`); and infinite-line
+projection (`c304fbe`). Their focused regressions and the integrated suite retain
+the fixes. This list is a disposition index, not a substitute for the linked
+case-specific contracts or a claim that every geometry is now accurate.
+
+### Current scope and checkpoint
+
 **Objective and scope:** improve Sync reliability through reproducible evidence and independent checks of the rest of the object, beyond fitted picks. Both visual alignment and metric accuracy matter. Synthetic scenes are the primary corpus; private projects are optional evidence. Images are optional. **Latest user steering:** reliable FOV estimation from shared landmarks without dependable VP lines is now a priority; both shared-lens sets and mixed lenses/zooms/crops are common. Image transformations and distortion are now in scope when they affect that workflow. Automatic AprilTag/VP detection remains optional, not a prerequisite. Earlier deferrals below are historical.
 
 **Newest result:** the 2D-only startup pilot hit its stop condition on its first
