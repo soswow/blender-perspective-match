@@ -1,0 +1,29 @@
+{
+  "accepted": true,
+  "behavior": "reference_geometry",
+  "final_cost": 1.2181063169885513e-05,
+  "independent": {
+    "alignment_scale": 1.0759860894166962,
+    "center_rmse_world": 2.505989398610351e-05,
+    "focal_relative": {
+      "view_0": -3.4489091987888187e-06,
+      "view_1": 1.208263342711291e-07,
+      "view_2": 3.0172428353569813e-06,
+      "view_3": -4.909540551878422e-09
+    },
+    "landmark_rmse_world": 3.364260504542307e-06,
+    "max_rotation_error_deg": 3.818191820832846e-06,
+    "mirror_max_gap_shifted_world": null,
+    "mirror_max_gap_world": null,
+    "mirror_midpoint_offset_world": null,
+    "mirror_midpoint_spread_world": null,
+    "plane_rms_world": 1.5053576179302077e-13,
+    "scale_ratio": 1.0759893278694617,
+    "withheld_max_px": 0.0008003524208853465,
+    "withheld_rmse_px": 0.00044578951982924024
+  },
+  "initial_cost": 0.8037258816170003,
+  "initial_sync_success": true,
+  "message": "Point focal fit \u00b7 0.00px \u00b7 95% intervals at \u03c3=0.35px",
+  "name": "axis-hard-exact"
+}

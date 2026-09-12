@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Optional independent FOV estimation from shared point picks, with approximate uncertainty ranges and refusal of weak or unsupported setups.
+- Point-based FOV refinement supports Is in Plane and point mirror pairs with a supplied Mirror Empty.
 
 ### Fixed
 - Point-based FOV refinement identifies cameras with too few picks and can suggest a view pair to check when fitting fails on inconsistent correspondences.

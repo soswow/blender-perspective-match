@@ -1,0 +1,29 @@
+{
+  "accepted": true,
+  "behavior": "reference_geometry",
+  "final_cost": 0.3437556602046025,
+  "independent": {
+    "alignment_scale": 0.1519621046949608,
+    "center_rmse_world": 0.06252499001449811,
+    "focal_relative": {
+      "view_0": 0.006014806937250761,
+      "view_1": -0.006453981723563262,
+      "view_2": 2.215680665162978e-05,
+      "view_3": 0.02188101621627636
+    },
+    "landmark_rmse_world": 0.0059524706311573266,
+    "max_rotation_error_deg": 0.2695465979543785,
+    "mirror_max_gap_shifted_world": null,
+    "mirror_max_gap_world": null,
+    "mirror_midpoint_offset_world": null,
+    "mirror_midpoint_spread_world": null,
+    "plane_rms_world": 0.0036250789175402763,
+    "scale_ratio": 0.15173002892790433,
+    "withheld_max_px": 1.7014927428317297,
+    "withheld_rmse_px": 0.8583675649760348
+  },
+  "initial_cost": 0.8817062521950426,
+  "initial_sync_success": true,
+  "message": "Point focal fit \u00b7 0.34px \u00b7 95% intervals at \u03c3=0.35px",
+  "name": "axis-soft"
+}

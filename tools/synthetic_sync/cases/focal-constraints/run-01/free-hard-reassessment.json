@@ -1,0 +1,47 @@
+{
+  "assessment_source_sha256": "c3a32988bba80bc1ff581b57a2c5f924f421bab2704fa3c03fb36edf6ce21f1b",
+  "case": "free-hard",
+  "kind": "read_only_reassessment",
+  "note": "Only one positive global scale about the fixed anchor was fitted from training-point truth; no camera rotation, translation, per-camera scale or withheld point entered alignment.",
+  "original_assessment": {
+    "center_rmse_world": 0.10569066891745799,
+    "focal_relative": {
+      "view_0": 0.015275231990788285,
+      "view_1": -0.013076120717048001,
+      "view_2": -0.02369580053908893,
+      "view_3": -0.006695036883976657
+    },
+    "landmark_rmse_world": 0.1282121698754653,
+    "max_rotation_error_deg": 0.13744968269402402,
+    "mirror_max_gap_shifted_world": null,
+    "mirror_max_gap_world": null,
+    "mirror_midpoint_offset_world": null,
+    "mirror_midpoint_spread_world": null,
+    "plane_rms_world": 1.1840386862672158e-08,
+    "scale_ratio": 1.0744139381016402,
+    "withheld_max_px": 25.40567875169433,
+    "withheld_rmse_px": 15.956336276864644
+  },
+  "original_request_sha256": "314e2c4c9f42b9e7c7c1a054e1d898b5333186e9b2b436424a72e39ab3f5b8d6",
+  "point_training_scale_assessment": {
+    "alignment_scale": 1.0942909099502465,
+    "center_rmse_world": 0.16065216839357419,
+    "focal_relative": {
+      "view_0": 0.015275231990788285,
+      "view_1": -0.013076120717048001,
+      "view_2": -0.02369580053908893,
+      "view_3": -0.006695036883976657
+    },
+    "landmark_rmse_world": 0.014188814744712192,
+    "max_rotation_error_deg": 0.13744968269402402,
+    "mirror_max_gap_shifted_world": null,
+    "mirror_max_gap_world": null,
+    "mirror_midpoint_offset_world": null,
+    "mirror_midpoint_spread_world": null,
+    "plane_rms_world": 1.1840386862672158e-08,
+    "scale_ratio": 1.0744139381016402,
+    "withheld_max_px": 3.756843933276436,
+    "withheld_rmse_px": 2.0257467154713087
+  },
+  "solver_calls": 0
+}

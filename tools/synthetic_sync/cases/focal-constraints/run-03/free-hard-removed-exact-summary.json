@@ -1,0 +1,29 @@
+{
+  "accepted": true,
+  "behavior": "relation_removed",
+  "final_cost": 2.9951634315763357e-07,
+  "independent": {
+    "alignment_scale": 1.0770863743969101,
+    "center_rmse_world": 6.418803542139426e-07,
+    "focal_relative": {
+      "view_0": -8.492915992697192e-08,
+      "view_1": 7.664072931845567e-09,
+      "view_2": 8.115487037940738e-08,
+      "view_3": -1.179792263883428e-09
+    },
+    "landmark_rmse_world": 8.085180568380447e-08,
+    "max_rotation_error_deg": 0.0,
+    "mirror_max_gap_shifted_world": null,
+    "mirror_max_gap_world": null,
+    "mirror_midpoint_offset_world": null,
+    "mirror_midpoint_spread_world": null,
+    "plane_rms_world": null,
+    "scale_ratio": 1.0770864580570993,
+    "withheld_max_px": 2.0119888163146773e-05,
+    "withheld_rmse_px": 1.0973246821575095e-05
+  },
+  "initial_cost": 0.7821665448748828,
+  "initial_sync_success": true,
+  "message": "Point focal fit \u00b7 0.00px \u00b7 95% intervals at \u03c3=0.35px",
+  "name": "free-hard-removed-exact"
+}

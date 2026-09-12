@@ -1,0 +1,27 @@
+{
+  "accepted": true,
+  "fitted_rmse_px": 1.218106317891732e-05,
+  "independent": {
+    "alignment_scale": 1.075986089416694,
+    "center_rmse_world": 2.5059894000154062e-05,
+    "focal_relative": {
+      "view_0": -3.44890920078722e-06,
+      "view_1": 1.2082633338295068e-07,
+      "view_2": 3.017242837799472e-06,
+      "view_3": -4.909540107789212e-09
+    },
+    "landmark_rmse_world": 3.364260506286861e-06,
+    "max_rotation_error_deg": 4.00455336570039e-06,
+    "mirror_max_gap_shifted_world": null,
+    "mirror_max_gap_world": null,
+    "mirror_midpoint_offset_world": null,
+    "mirror_midpoint_spread_world": null,
+    "plane_rms_world": 1.5015387778238982e-13,
+    "scale_ratio": 1.0759893278694614,
+    "withheld_max_px": 0.0008003524212842017,
+    "withheld_rmse_px": 0.0004457895200571786
+  },
+  "initial_rmse_px": 0.8037258816169729,
+  "name": "axis-hard-exact",
+  "reason": ""
+}

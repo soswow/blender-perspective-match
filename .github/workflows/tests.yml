@@ -197,6 +197,21 @@ jobs:
               --python tools/synthetic_sync/verify_point_focal_numerical_blender.py -- \
               --case "$case" --out "${RUNNER_TEMP}/synthetic-blender/point-focal/$case" --reopen
           done
+      - name: Point FOV plane and mirror constraints
+        timeout-minutes: 3
+        env:
+          OPENBLAS_NUM_THREADS: "1"
+          OMP_NUM_THREADS: "1"
+        run: |
+          # Four initial Sync calls and four bundle fits; reopens never solve.
+          for case in free-hard-exact axis-hard-exact mirror-hard-offcenter-exact mirror-through-anchor-exact; do
+            blender --factory-startup --disable-autoexec -b --python-exit-code 1 \
+              --python tools/synthetic_sync/verify_focal_constraints_blender.py -- \
+              --case "$case" --out "${RUNNER_TEMP}/synthetic-blender/focal-constraints/$case"
+            blender --factory-startup --disable-autoexec -b --python-exit-code 1 \
+              --python tools/synthetic_sync/verify_focal_constraints_blender.py -- \
+              --case "$case" --out "${RUNNER_TEMP}/synthetic-blender/focal-constraints/$case" --reopen
+          done
       - uses: actions/upload-artifact@v4
         if: always()
         with:

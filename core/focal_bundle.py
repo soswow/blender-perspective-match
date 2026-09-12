@@ -1,7 +1,8 @@
-"""Independent pinhole focal bundle adjustment for unconstrained point graphs.
+"""Independent pinhole focal bundle adjustment for supported point graphs.
 
-The anchor camera and the longest initial camera baseline fix the global similarity
-gauge. All decisions use image picks and the fitted state; no scene truth enters.
+The anchor camera fixes orientation and center. Free-scale graphs fix one camera
+baseline; an off-anchor supplied mirror plane instead fixes metric scale.
+All decisions use image picks, supplied relations and the fitted state.
 """
 
 from __future__ import annotations
@@ -13,7 +14,9 @@ import time
 import numpy as np
 
 from . import geometry as core
+from .focal_constraints import PointFocalConstraints
 from .sync import SyncObservation, SyncSolveResult, SimilarityTransform
+from .sync.constants import MIRROR_PAIR_HARD_GAP, PLANE_HARD_SLACK
 from .sync.projection import _log_rodrigues, _rodrigues
 
 
@@ -22,6 +25,8 @@ MAX_CAMERAS = 8
 MAX_POINTS = 80
 MAX_ITERATIONS = 100
 MAX_SECONDS = 30.0
+MAX_LOG_METRIC_BASELINE_CHANGE = 10.0
+METRIC_BASELINE_BOUND_MARGIN = 1e-4
 EPIPOLAR_HINT_MIN_WITHHELD_SIGMA = 8.0
 EPIPOLAR_HINT_MAX_FITS = 1000
 EPIPOLAR_HINT_MAX_SECONDS = 10.0
@@ -297,6 +302,20 @@ def _fits_noise_model(raw_residual: np.ndarray, parameter_count: int,
                 float(np.sum(raw_residual**2)) <= expected)
 
 
+def _fits_constrained_noise_model(raw_residual: np.ndarray, pixel_jacobian: np.ndarray,
+                                  pixel_influence: np.ndarray, sigma: float) -> bool:
+    """Conditional click-noise bound with geometric priors excluded as picks."""
+    operator = np.eye(raw_residual.size) - pixel_jacobian @ pixel_influence
+    singular = np.linalg.svd(operator, compute_uv=False)
+    squared = singular**2
+    tail = math.log(100.0)
+    limit = sigma**2 * (float(np.sum(squared)) +
+        2.0 * math.sqrt(float(np.sum(squared**2)) * tail) +
+        2.0 * float(np.max(squared)) * tail)
+    return bool(np.isfinite(raw_residual).all() and
+                float(raw_residual @ raw_residual) <= limit)
+
+
 def fit_independent_focals(
     calibrations: dict[str, core.Calibration],
     observations: list[SyncObservation],
@@ -304,6 +323,11 @@ def fit_independent_focals(
     *, anchor_id: str,
     pick_sigma_px: float = 1.0,
     fx_span: float = DEFAULT_POINT_FOCAL_SPAN,
+    plane_groups: list[tuple[str, str, int]] | None = None,
+    plane_slack: float = 0.0,
+    mirror_pairs: list[tuple[str, str]] | None = None,
+    mirror_plane: tuple[np.ndarray, np.ndarray] | None = None,
+    mirror_slack: float = 0.0,
     cancel_check=None,
     progress_callback=None,
 ) -> FocalBundleOutcome:
@@ -392,6 +416,15 @@ def fit_independent_focals(
                           for key in point_ids])
     if not np.isfinite(points0).all():
         return refuse("Initial point geometry is invalid")
+    try:
+        constraints = PointFocalConstraints.from_inputs(
+            point_ids, anchor_rotation=anchor_r, anchor_center=anchor_c,
+            baseline_world=baseline, plane_groups=plane_groups,
+            plane_slack=0.0 if plane_slack is None else plane_slack,
+            mirror_pairs=mirror_pairs, mirror_plane=mirror_plane,
+            mirror_slack=0.0 if mirror_slack is None else mirror_slack)
+    except (ValueError, TypeError, IndexError) as exc:
+        return refuse(str(exc))
     direction = centers0[1] / np.linalg.norm(centers0[1])
     axis = np.eye(3)[np.argmin(np.abs(direction))]
     tangent_a = np.cross(direction, axis)
@@ -400,11 +433,16 @@ def fit_independent_focals(
     tangents = np.vstack((tangent_a, tangent_b))
     ncam = len(ids)
     npoint = len(point_ids)
-    point_offset = ncam + 5 + 6 * (ncam - 2)
+    scale_columns = int(constraints.free_baseline)
+    point_offset = ncam + 5 + scale_columns + 6 * (ncam - 2)
+    point_end = point_offset + 3 * npoint
+    mirror_offset_column = point_end if constraints.free_mirror_offset else None
     x = np.concatenate((np.zeros(ncam), _log_rodrigues(rotations0[1]),
-                        np.zeros(2), *[np.concatenate((_log_rodrigues(rotations0[i]),
-                                                      centers0[i])) for i in range(2, ncam)],
-                        points0.ravel()))
+                        np.zeros(2), *([np.zeros(1)] if scale_columns else []),
+                        *[np.concatenate((_log_rodrigues(rotations0[i]),
+                                          centers0[i])) for i in range(2, ncam)],
+                        points0.ravel(),
+                        *([np.zeros(1)] if constraints.free_mirror_offset else [])))
     camera_index = {key: index for index, key in enumerate(ids)}
     point_index = {key: index for index, key in enumerate(point_ids)}
     ci = np.asarray([camera_index[item.match_id] for item in observations], int)
@@ -420,14 +458,15 @@ def fit_independent_focals(
     def decode(params: np.ndarray):
         focal = base_fx * np.exp(params[:ncam])
         raw = direction + params[ncam + 3] * tangents[0] + params[ncam + 4] * tangents[1]
-        first_center = raw / np.linalg.norm(raw)
+        radius = math.exp(float(params[ncam + 5])) if scale_columns else 1.0
+        first_center = radius * raw / np.linalg.norm(raw)
         rotations = [np.eye(3), _rodrigues(params[ncam:ncam + 3])]
         centers = [np.zeros(3), first_center]
         for camera in range(2, ncam):
-            offset = ncam + 5 + 6 * (camera - 2)
+            offset = ncam + 5 + scale_columns + 6 * (camera - 2)
             rotations.append(_rodrigues(params[offset:offset + 3]))
             centers.append(params[offset + 3:offset + 6])
-        return focal, rotations, np.asarray(centers), params[point_offset:].reshape(npoint, 3)
+        return focal, rotations, np.asarray(centers), params[point_offset:point_end].reshape(npoint, 3)
 
     def residual_and_jacobian(params: np.ndarray, *, jacobian: bool):
         focal, rotations, centers, points = decode(params)
@@ -462,11 +501,14 @@ def fit_independent_focals(
                     raw = direction + params[ncam + 3] * tangents[0] + params[ncam + 4] * tangents[1]
                     norm = np.linalg.norm(raw)
                     unit = raw / norm
+                    radius = float(np.linalg.norm(centers[1]))
                     for tangent in tangents:
-                        center_j.append((tangent - unit * (unit @ tangent)) / norm)
+                        center_j.append(radius * (tangent - unit * (unit @ tangent)) / norm)
+                    if scale_columns:
+                        center_j.append(centers[1])
                     center_start = ncam + 3
                 else:
-                    rotation_start = ncam + 5 + 6 * (camera - 2)
+                    rotation_start = ncam + 5 + scale_columns + 6 * (camera - 2)
                     center_j = np.eye(3)
                     center_start = rotation_start + 3
                 jac[rows, center_start:center_start + len(center_j)] = (
@@ -478,11 +520,22 @@ def fit_independent_focals(
                     derivative = ((_rodrigues(trial) - rotations[camera]) @ offset_xyz.T).T / step
                     jac[rows, rotation_start + component] = np.einsum(
                         'nij,nj->ni', dq, derivative).ravel()
-        return residual.ravel(), jac, depths
+        pixel_residual = residual.ravel()
+        if not constraints.active:
+            return pixel_residual, jac, depths
+        offset = float(params[mirror_offset_column]) if mirror_offset_column is not None else 0.0
+        prior_residual, prior_jacobian = constraints.residual_and_jacobian(
+            points, point_offset=point_offset, parameter_count=len(params),
+            mirror_offset=offset, mirror_offset_column=mirror_offset_column,
+            jacobian=jacobian)
+        return (np.concatenate((pixel_residual, prior_residual)),
+                np.vstack((jac, prior_jacobian)) if jacobian else None, depths)
 
     try:
         initial_residual, _, _ = residual_and_jacobian(x, jacobian=False)
-        initial_raw = initial_residual.reshape(-1, 2) / weights[:, None]
+        pixel_rows = 2 * len(uv)
+        coordinate_weights = np.repeat(weights, 2)
+        initial_raw = initial_residual[:pixel_rows].reshape(-1, 2) / weights[:, None]
         initial_rmse = float(np.sqrt(np.mean(np.sum(initial_raw**2, axis=1))))
         damping = 1.0e-3
         converged = False
@@ -515,6 +568,10 @@ def fit_independent_focals(
                 step_scaled = np.linalg.lstsq(system, target, rcond=None)[0]
                 trial_x = x + step_scaled / column_scale
                 trial_x[:ncam] = np.clip(trial_x[:ncam], lower, upper)
+                if scale_columns:
+                    trial_x[ncam + 5] = np.clip(
+                        trial_x[ncam + 5], -MAX_LOG_METRIC_BASELINE_CHANGE,
+                        MAX_LOG_METRIC_BASELINE_CHANGE)
                 trial_residual, _, _ = residual_and_jacobian(trial_x, jacobian=False)
                 trial_cost = float(trial_residual @ trial_residual)
                 if np.isfinite(trial_cost) and trial_cost < cost:
@@ -537,14 +594,27 @@ def fit_independent_focals(
                 return refuse("Cancelled")
             return refuse("Point focal fit did not converge." + hint)
         fitted_residual, jac, depths = residual_and_jacobian(x, jacobian=True)
-        end_raw = fitted_residual.reshape(-1, 2) / weights[:, None]
+        end_raw = fitted_residual[:pixel_rows].reshape(-1, 2) / weights[:, None]
         fitted_rmse = float(np.sqrt(np.mean(np.sum(end_raw**2, axis=1))))
         if not np.isfinite(fitted_rmse) or np.any(depths <= 0):
             return refuse("Fitted scene has points behind a camera", fitted=fitted_rmse)
         if np.any(x[:ncam] <= lower + 1.0e-4) or np.any(x[:ncam] >= upper - 1.0e-4):
             return refuse("Fitted focal reached the search bound; widen Lens Search %", fitted=fitted_rmse)
+        if scale_columns and abs(x[ncam + 5]) >= (
+                MAX_LOG_METRIC_BASELINE_CHANGE - METRIC_BASELINE_BOUND_MARGIN):
+            return refuse("Metric scale reached its numerical bound; check Mirror Empty and anchor placement",
+                          fitted=fitted_rmse)
+        if constraints.active:
+            _focal, _rotations, _centers, final_points = decode(x)
+            plane_max, mirror_max = constraints.world_gaps(
+                final_points, mirror_offset=(float(x[mirror_offset_column])
+                                             if mirror_offset_column is not None else 0.0))
+            if plane_max > PLANE_HARD_SLACK:
+                return refuse("Fitted points violate a hard Is in Plane relation", fitted=fitted_rmse)
+            if mirror_max > MIRROR_PAIR_HARD_GAP:
+                return refuse("Fitted points violate a supplied point mirror relation", fitted=fitted_rmse)
         # Residual count and model dimensions make this a noise-aware fit test.
-        if not _fits_noise_model(end_raw, len(x), pick_sigma_px):
+        if not constraints.active and not _fits_noise_model(end_raw, len(x), pick_sigma_px):
             hint = _conflict_hint(ids, observations, pick_sigma_px,
                                   cancel_check=cancel_check)
             if cancel_check and cancel_check():
@@ -574,6 +644,19 @@ def fit_independent_focals(
             return refuse("Too few point observations for independent focal estimation", fitted=fitted_rmse)
         if np.any(null):
             return refuse("The point geometry does not determine a full 3D scene", fitted=fitted_rmse)
+        # Only the weighted image rows receive independent click noise. Hard
+        # constraints and soft springs affect the fit, never the pick count.
+        pixel_influence = ((vh[~null].T / singular[~null]) @
+                           u[:pixel_rows, ~null].T) * coordinate_weights / column_scale[:, None]
+        if constraints.active and not _fits_constrained_noise_model(
+                end_raw.ravel(), jac[:pixel_rows] / coordinate_weights[:, None],
+                pixel_influence, pick_sigma_px):
+            hint = _conflict_hint(ids, observations, pick_sigma_px,
+                                  cancel_check=cancel_check)
+            if cancel_check and cancel_check():
+                return refuse("Cancelled")
+            return refuse("Point fit is inconsistent with the stated pick noise." + hint,
+                          fitted=fitted_rmse)
         focal, rotations, centers, points = decode(x)
         intervals = {}
         for camera, camera_id in enumerate(ids):
@@ -582,8 +665,7 @@ def fit_independent_focals(
             # Weighted fitting with homoscedastic raw pixel noise uses sandwich
             # covariance. Sync weights change the estimator, not the noise of
             # an independent click: influence = (W^1/2 J)^+ W^1/2.
-            influence = ((vh[~null, camera] / singular[~null]) @
-                         u[:, ~null].T) * np.repeat(weights, 2) / column_scale[camera]
+            influence = pixel_influence[camera]
             sigma_log = pick_sigma_px * np.linalg.norm(influence)
             if not np.isfinite(sigma_log):
                 return refuse("Focal uncertainty is unbounded", fitted=fitted_rmse)

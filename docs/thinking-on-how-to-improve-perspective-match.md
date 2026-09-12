@@ -1,5 +1,5 @@
 **Perspective Match: reliability and AI development proposal**
-Investigation baseline: commit `5d876f6` / extension 0.5.0, 10 September 2026. Latest product checkpoint: optional independent FOV estimation from free point picks, 12 September 2026, described under **Current frontier**. Read that section first; the dated checkpoints preserve history, and the original proposal is retained for rationale rather than as an implementation checklist.
+Investigation baseline: commit `5d876f6` / extension 0.5.0, 10 September 2026. Latest product checkpoint: point-FOV evidence diagnostics and plane/mirror constraints, 12 September 2026, described under **Current frontier**. Read that section first; the dated checkpoints preserve history, and the original proposal is retained for rationale rather than as an implementation checklist.
 
 **My recommendation is to make every solver decision reproducible from a complete, versioned input, and judge it with checks independent of the implementation.** Build that foundation around the existing fixtures, Blender smoke test, and diagnostics. Then use it to improve calibration ownership, quality reporting, and selected solver decisions. This would turn a debugging session into an addition to a reusable capability.
 
@@ -9,11 +9,12 @@ The deeper product issue is that three different promises are currently close to
 
 ## Current frontier — 12 September 2026
 
-**Authorized continuation:** first establish practical point-FOV reliability
+**Completed implementation scope:** investigate practical point-FOV reliability
 with incomplete/imperfect picks and alternative initial FOVs, carrying findings
-through to product fixes or actionable diagnostics; then support Is in Plane
-and point symmetry in focal fitting. Keep these as sequential integration
-phases, with bounded experiments and coherent outcome commits.
+through to actionable diagnostics; then support Is in Plane and supplied point
+symmetry in focal fitting. The two sequential phases below retain bounded
+experiments and coherent outcome commits. Remaining accuracy limitations are
+explicit; this does not close the wider reliability plan.
 
 **Imperfect-pick phase:** the [frozen reliability follow-up](../tools/synthetic_sync/cases/independent-focal-reliability/README.md)
 separates 24 saved-start optimizer trials from eight fresh Sync calls (six
@@ -28,10 +29,62 @@ registration. A failed fit may suggest checking a pair of views using a bounded
 raw-correspondence diagnostic. It deliberately does not accuse one landmark or
 gate acceptance: withheld-model uncertainty and leverage make that stronger
 claim unjustified. Success incurs no diagnostic work. The 25 focused numerical
-tests pass after integration; broader combined verification follows the
-authorized plane/symmetry phase. Initial guesses and noisy geometry remain
+tests pass after integration; combined verification is recorded with the
+plane/symmetry phase below. Initial guesses and noisy geometry remain
 recorded limitations, not closed findings. This phase is a diagnostic outcome,
 not a new accuracy guarantee.
+
+**Plane and symmetry phase:** the point-FOV path now supports X/Y/Z and Free
+Is in Plane buckets and point mirror pairs with a supplied Mirror Empty,
+including Plane Slack and normal-only Mirror Slack. It keeps the anchor's
+stored orientation and position fixed; external axis/mirror references must
+be meaningful in that frame. Every point still needs two picked views, so
+one-view constraint seeding remains a separate extension. Known 3D, Ground,
+lines, locks, missing mirror planes and unsupported camera roles are refused.
+The raw-pick depth screen remains conservative even when constraints could
+otherwise supply depth. Conditional focal uncertainty propagates click noise
+through the constrained fit without counting geometric springs as new picks.
+
+The [constraint evidence](../tools/synthetic_sync/cases/focal-constraints/RESULTS.md)
+uses 11 of 12 reserved Sync calls and 15 of 18 bundle fits, with source archives
+and exact inputs. Four exact hard positives and matched removal controls fit
+accurately; final-source replays pass hard-gap and metric-scale-bound guards.
+An off-anchor supplied mirror needs a free baseline parameter because anchor
+placement makes scale conditional on that plane. Through-anchor mirrors keep
+the unobservable scale gauge. Translation-invariance and input-immutability
+regressions protect that decision and its normal conversion.
+
+Noisy Free-plane enforcement gave essentially the same withheld error as
+removal (2.026 vs 2.022 px); no general accuracy gain is claimed. A noisy soft
+axis case reached 0.858 px withheld RMS with 2.19% maximum focal error. A biased
+mirror offset produced 13.59 px raw-world withheld error but 0.458 px after a
+separate training-derived scale alignment: that is conditional metric bias,
+not a newly discovered mismatch that pixels can resolve. The old baseline-ratio
+checker exaggerated another noisy error; immutable evidence retains it and
+links the corrected training-point-only scale assessment. Never align cameras
+individually or use withheld points to choose that scale.
+
+Integrated Blender 5.1.0 checks passed four exact hard cases and two noisy soft
+cases through preparation, numerical isolation, stale-constraint rejection,
+direct joint application and fresh-process read-only reopening. The exact
+native-camera withheld RMS values are below 0.001 px. The soft cases retain
+their accuracy flags; application/reopening success does not relabel them as
+accurate reference-world geometry. Seven native initial Sync/bundle calls were
+used: six distinct cases and one explicitly retained retry after correcting
+the Blender checker's old scale convention. Logs, source archives and generated
+scenes are under `.local/focal-constraints-validation/` (the failed first soft-axis
+attempt is retained). The verifier now saves applied generated state before
+the native check so future checker corrections can reopen it without solving.
+Four exact cases and their read-only reopens are wired into CI; hosted execution
+remains unverified. The combined numerical run executed 418 tests in 463.923 s
+with two optional local-YAML skips. Its only failures were 21 subcases of the
+new frozen-fixture comparison, which demanded bit-identical generated floats
+across NumPy environments. That test now checks structure exactly and floats
+at 1e-14 relative/absolute tolerance, consistent with existing fixture tests;
+the frozen inputs and geometry accuracy thresholds are unchanged. The affected
+constraint and focal modules then passed all 32 tests in 1.574 s. The complete
+suite was not repeated after this test-only correction. The Blender 5.1.0
+`validate_addon.py` smoke test passed. No private project was modified.
 
 **Open question for later — symmetry without a supplied plane:** the user may
 know several pairs of corresponding mirror landmarks and that all pairs share
@@ -65,7 +118,7 @@ disposition changes; the dated reports below retain the original measurements.
 | Biased hard/soft Known 3D references displace geometry | **Intentional model conflict, not a demonstrated arithmetic defect** | [Bias controls](../tools/synthetic_sync/biased-reference-results.md). Softening helps but does not certify truth. Current prior-release pilot adds no detection beyond the existing anchor warning; test hidden bias before adding a product warning. |
 | Promoted reconstruction points treated as trusted Known 3D | **Open workflow/representation issue** | User clarification below: these are working estimates with shared uncertainty. Preserve this distinction in future fitting/diagnostics; no automatic promotion to independent evidence. |
 | Recovered-update acceptance does not protect the full line/constraint objective | **Open coverage and acceptance-contract gap** | [Accepted-stage control](../tools/synthetic_sync/accepted-recovery-results.md). No remaining natural accepted-update damage is established by that control; find a paired damaging case before changing acceptance policy. |
-| Independent unknown focal lengths without VPs | **Implemented and verified for bounded free-point graphs** | [Production controls](../tools/synthetic_sync/cases/independent-focal-production/README.md), `core/focal_bundle.py`, and [user workflow](sync.md#independent-fov-estimates-from-shared-points-no-vp-lines). NumPy joint fitting accepts exact mixed/shared and four-view controls; translated planar, weak and rotation controls are refused. Real Blender mixed/shared fit/apply/reopen and weak/rotation no-op refusals pass. Local uncertainty is conditional; noisy 2% focal / 1 px withheld flags remain. Unsupported constraints, distortion and unknown crop offsets are not handled by this mode. |
+| Independent unknown focal lengths without VPs | **Implemented for bounded point graphs, including plane and supplied-mirror relations** | [Production controls](../tools/synthetic_sync/cases/independent-focal-production/README.md), [imperfect-pick evidence](../tools/synthetic_sync/cases/independent-focal-reliability/README.md), [constraint controls](../tools/synthetic_sync/cases/focal-constraints/RESULTS.md), and [user workflow](sync.md#independent-fov-estimates-from-shared-points-no-vp-lines). Exact controls and native fit/apply/reopen pass; weak depth is refused and selected failed fits now identify a pair to check. Local uncertainty remains conditional and noisy accuracy flags remain. One-view relation members, missing-plane inference, other constraint types, distortion and unknown crop offsets are not handled by this mode. |
 | Native modal scheduling, undo/redo, platform/package/hosted CI | **Unverified boundaries** | Generated preparation/job/reopen checks cover specific paths, not these broader claims. Select one bounded check when it reaches priority. |
 | Line Jacobian reparameterization / performance prototypes | **Not promoted; no demonstrated overall improvement** | [Line-position experiments](../tools/synthetic_sync/line-position-gauge-results.md). The actual projection defect was fixed; a prototype with worse geometry is not a pending fix to ship. |
 
@@ -88,10 +141,11 @@ case-specific contracts or a claim that every geometry is now accurate.
 **Newest result:** **Estimate FOV from Points** is an opt-in product mode under
 Refine Lenses when Same Lens is off. It jointly fits independent focal lengths,
 camera poses and free 3D points without VP lines or Known 3D. The implemented
-scope is 3–8 cameras and 8–80 free points, at least eight picks per camera and
-two views per point, fixed principal points and zero distortion. Existing
-constraints and unsupported camera roles cause an explicit refusal; they are
-not silently omitted. Manual FOV supplies the starting values, with a separate
+scope is 3–8 cameras and 8–80 points, at least eight picks per camera and
+two views per point, fixed principal points and zero distortion. The current
+plane/symmetry continuation adds Is in Plane and supplied point-mirror
+relations; Known 3D, Ground, lines and unsupported camera roles still cause an
+explicit refusal rather than being omitted. Manual FOV supplies the starting values, with a separate
 default ±40% focal window. Existing lens searches keep their ±18% default.
 The full workflow is in [the Sync guide](sync.md#independent-fov-estimates-from-shared-points-no-vp-lines).
 
@@ -145,8 +199,8 @@ changelog and documentation belong to one coherent feature commit.
 **Next priorities:** challenge this mode with held-out noisy and biased picks,
 alternative initial FOVs, partial overlap and crop/principal-point errors;
 measure erroneous acceptance as well as useful refusal and withheld geometry.
-Use those results to improve the product's evidence guidance and decide which
-constraints deserve support. Separately extend honest ambiguity handling to
+Use those results to improve the product's evidence guidance beyond the bounded
+plane/point-mirror support. Separately extend honest ambiguity handling to
 ordinary Sync and preserve the distinction between promoted working references
 and independent Known 3D. Do not close the noisy mixed accuracy flag solely
 because the focal fit converges or its local interval is finite. Each bounded

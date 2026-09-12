@@ -45,7 +45,8 @@ Keep this map accurate when you add a module, move a stage, or change a named co
 | VP / single-camera geometry | `core/geometry.py` |
 | Landmark-graph sync | `core/sync/` (package; import as `match_perspective.core.sync`) |
 | Focal search | `core/lens_refine.py` (supported-point reprojection score, successful-incumbent support retention and pose reuse; refused candidates restart registration while explicit pose locks remain active) |
-| Independent FOV from free points | `core/focal_bundle.py` (NumPy joint focal/pose/point fit, bounded runtime and size, raw-pick depth screen, weighted-fit sensitivity under explicit pixel noise; optional route in `core/lens_refine.py`) |
+| Independent FOV from point picks | `core/focal_bundle.py` (NumPy joint focal/pose/point fit, bounded runtime and size, raw-pick depth screen, conditional sensitivity under explicit pixel noise; optional route in `core/lens_refine.py`) |
+| Point-FOV plane and mirror constraints | `core/focal_constraints.py` (fixed-anchor coordinate conversion, axis/Free-plane and supplied point-mirror springs, normal-only Mirror Slack and appropriate baseline scale freedom; geometric rows are not independent image picks) |
 | Lens job input and execution | `scene/__init__.py` (`LensRefinePrep.solver_kwargs`, `run_lens_refine`; `collect_lens_refine_inputs` reads without preparation; apply checks numerical inputs, scene identity and camera targets; `PinSyncSnapshot` also restores state after an application error) |
 | Sync input collection and Diagnose result ownership | `scene/__init__.py` (`collect_sync_request` reads without preparation; Diagnose checks its captured request hash and scene identity before applying diagnostics) |
 | Known-3D pin refine | `core/pin_refine.py` (Iterate Known 3D loop is applied in `scene/__init__.py`) |
@@ -125,6 +126,9 @@ Parallel agent work uses isolated worktrees and distinct file ownership; see `do
 - `tools/synthetic_sync/independent_focal_reliability.py` and `independent_focal_epipolar_probe.py` — bounded incomplete/noisy/bad-pick/alternative-FOV controls, explicitly separated saved-start isolation and fresh-registration evidence. The pair hint is tentative context for an existing refusal, never a new acceptance gate. See `tools/synthetic_sync/cases/independent-focal-reliability/README.md`.
 - `tools/synthetic_sync/verify_point_focal_apply.py` — generated Blender point-FOV integration with controlled numerical results: direct joint application through `scene._apply_sync_solve_result`, no-op refusal, stale settings, rollback and plate ownership.
 - `tools/synthetic_sync/verify_point_focal_numerical_blender.py` — real point-FOV fit/apply on generated mixed/shared guessed-K cases and weak/rotation refusals; at most one inner Sync per fresh case. `--prepare-only` and `--reopen` do not solve. Applies the fitted result directly, checks evaluated Blender cameras independently, and only saves generated files.
+- `tools/synthetic_sync/focal_constraints.py` — independent landmark-scaffold plane/mirror fixtures, matched removal controls and raw-world geometry checks. Free-scale assessment aligns one positive scale from training points about the fixed anchor; a supplied mirror offset can impose conditional scale without providing independent metric truth.
+- `tools/synthetic_sync/focal_constraint_trial.py` — ledgered public point-FOV constraint trials and bundle-only replay from archived initial camera/point state; preserves source archives and independent assessments. See `tools/synthetic_sync/cases/focal-constraints/RESULTS.md`.
+- `tools/synthetic_sync/verify_focal_constraints_blender.py` — generated point-FOV constraint preparation, numerical fit, stale-constraint rejection, direct application and read-only reopening, including arbitrarily oriented Mirror Empties. Each fresh numerical run permits one initial Sync and one bundle; `--prepare-only` and `--reopen` use zero solves.
 
 ## Do not
 

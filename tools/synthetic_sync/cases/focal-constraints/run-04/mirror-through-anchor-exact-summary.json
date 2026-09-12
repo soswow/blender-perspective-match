@@ -1,0 +1,27 @@
+{
+  "accepted": true,
+  "fitted_rmse_px": 9.075641105387931e-08,
+  "independent": {
+    "alignment_scale": 1.0677112726093876,
+    "center_rmse_world": 1.9413781466868084e-07,
+    "focal_relative": {
+      "view_0": -2.4923364816409332e-08,
+      "view_1": 2.233022433628662e-09,
+      "view_2": 2.5648792867372094e-08,
+      "view_3": 3.6711345074991186e-10
+    },
+    "landmark_rmse_world": 2.338624448727566e-08,
+    "max_rotation_error_deg": 1.2074182697257333e-06,
+    "mirror_max_gap_shifted_world": 1.3718007759333314e-11,
+    "mirror_max_gap_world": 1.4266552707536939e-11,
+    "mirror_midpoint_offset_world": -6.445556400975737e-13,
+    "mirror_midpoint_spread_world": 2.5653720416156924e-12,
+    "plane_rms_world": null,
+    "scale_ratio": 1.0677112979205623,
+    "withheld_max_px": 5.8327277551915625e-06,
+    "withheld_rmse_px": 3.2270763994593905e-06
+  },
+  "initial_rmse_px": 0.813699097818879,
+  "name": "mirror-through-anchor-exact",
+  "reason": ""
+}

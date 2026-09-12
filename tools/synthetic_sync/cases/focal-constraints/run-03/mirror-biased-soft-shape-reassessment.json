@@ -1,0 +1,45 @@
+{
+  "interpretation": "Secondary training-point-only positive scale diagnostic; request mirror plane fixes conditional metric scale, so this alignment does not satisfy the supplied plane and does not replace raw world assessment.",
+  "raw_reference_world": {
+    "alignment_scale": 1.0,
+    "center_rmse_world": 0.12832106410462568,
+    "focal_relative": {
+      "view_0": 0.0018416391100632978,
+      "view_1": -0.005939101025969951,
+      "view_2": -0.023230845922994958,
+      "view_3": 0.016183360756395926
+    },
+    "landmark_rmse_world": 0.1093495546463124,
+    "max_rotation_error_deg": 0.17640326561597236,
+    "mirror_max_gap_shifted_world": 0.00031173570265386537,
+    "mirror_max_gap_world": 0.0003109214493457398,
+    "mirror_midpoint_offset_world": -7.928650499186215e-06,
+    "mirror_midpoint_spread_world": 3.181199135075949e-05,
+    "plane_rms_world": null,
+    "scale_ratio": 1.003984283907382,
+    "withheld_max_px": 21.90664200256979,
+    "withheld_rmse_px": 13.590231602721738
+  },
+  "source_case": "mirror-biased-soft",
+  "source_ledger": "run-03/bundle-ledger.jsonl",
+  "training_scale_aligned_visual_shape": {
+    "alignment_scale": 1.0158807134826155,
+    "center_rmse_world": 0.09417521157265848,
+    "focal_relative": {
+      "view_0": 0.0018416391100632978,
+      "view_1": -0.005939101025969951,
+      "view_2": -0.023230845922994958,
+      "view_3": 0.016183360756395926
+    },
+    "landmark_rmse_world": 0.003037695452170753,
+    "max_rotation_error_deg": 0.17640326561597236,
+    "mirror_max_gap_shifted_world": 0.00031173570265386537,
+    "mirror_max_gap_world": 0.0003109214493457398,
+    "mirror_midpoint_offset_world": -7.928650499186215e-06,
+    "mirror_midpoint_spread_world": 3.181199135075949e-05,
+    "plane_rms_world": null,
+    "scale_ratio": 1.003984283907382,
+    "withheld_max_px": 0.9843955546860611,
+    "withheld_rmse_px": 0.45839376676341415
+  }
+}

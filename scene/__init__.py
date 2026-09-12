@@ -4131,9 +4131,12 @@ def _point_focal_interval_message(refine_result, prep: LensRefinePrep) -> str:
         )
     if not entries:
         return ""
+    assumptions = f"assumed pick error {prep.pick_sigma_px:g}px"
+    if prep.plane_groups or prep.mirror_pairs:
+        assumptions += "; fixed anchor frame and supplied constraints"
     return (
         f"At fit, horizontal FOV and approximate local 95% intervals "
-        f"(assumed pick error {prep.pick_sigma_px:g}px): " + "; ".join(entries)
+        f"({assumptions}): " + "; ".join(entries)
     )
 
 

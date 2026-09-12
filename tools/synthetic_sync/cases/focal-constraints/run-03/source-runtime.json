@@ -1,0 +1,21 @@
+{
+  "bundle_limits": {
+    "max_calls": 18,
+    "per_call_seconds": 30,
+    "wall_seconds": 540
+  },
+  "case_schema": 1,
+  "environment": {
+    "numpy": "2.4.1",
+    "platform": "macOS-26.5-arm64-arm-64bit-Mach-O",
+    "python": "3.14.7",
+    "revision": "e1dec541bba9cf104d68c37421301fa015283882",
+    "working_tree_dirty": true
+  },
+  "source_sha256": "1112d251e59d2a06fbd7cbe90ad1d882895e49c3c836a6f6fe9eeff2ea18c5ff",
+  "sync_limits": {
+    "max_calls": 12,
+    "per_call_seconds": 120,
+    "wall_seconds": 600
+  }
+}

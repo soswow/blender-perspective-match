@@ -1,0 +1,29 @@
+{
+  "accepted": true,
+  "behavior": "reference_geometry",
+  "final_cost": 9.075640406938099e-08,
+  "independent": {
+    "alignment_scale": 1.0677112726093878,
+    "center_rmse_world": 1.9413781093931352e-07,
+    "focal_relative": {
+      "view_0": -2.4923363595164005e-08,
+      "view_1": 2.2330230997624767e-09,
+      "view_2": 2.5648793311461304e-08,
+      "view_3": 3.6711234052688724e-10
+    },
+    "landmark_rmse_world": 2.33862434935886e-08,
+    "max_rotation_error_deg": 1.2074182697257333e-06,
+    "mirror_max_gap_shifted_world": 1.3718661792887707e-11,
+    "mirror_max_gap_world": 1.4267303482901487e-11,
+    "mirror_midpoint_offset_world": -6.448933988019747e-13,
+    "mirror_midpoint_spread_world": 2.5654190841612875e-12,
+    "plane_rms_world": null,
+    "scale_ratio": 1.0677112979205623,
+    "withheld_max_px": 5.8327280236021995e-06,
+    "withheld_rmse_px": 3.227076255169481e-06
+  },
+  "initial_cost": 0.8136990978188942,
+  "initial_sync_success": true,
+  "message": "Point focal fit \u00b7 0.00px \u00b7 95% intervals at \u03c3=0.35px",
+  "name": "mirror-through-anchor-exact"
+}

@@ -264,11 +264,10 @@ class PointFocalBundleTests(TestCase):
         self.assertFalse(_fits_noise_model(np.asarray(errors), 83, 0.1))
         self.assertTrue(_fits_noise_model(np.asarray(errors), 83, 1.0))
 
-    def test_constraints_and_same_lens_refuse_before_registration(self):
+    def test_unsupported_constraints_and_same_lens_refuse_before_registration(self):
         _case, matches, observations = _inputs("four-view")
         for option in (dict(share_lens=True), dict(known_world={"point_00": np.ones(3)}),
                        dict(lock_rotation=True), dict(readonly_match_ids={"view_1"}),
-                       dict(plane_groups=[("point_00", "X", 1)]),
                        dict(line_observations=[sync.SyncLineObservation(
                            "view_0", "edge_0", 0.0, 0.0, 1.0, 1.0)])):
             with self.subTest(option=option), mock.patch.object(lens_refine, "_run_sync") as run:

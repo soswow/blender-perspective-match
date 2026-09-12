@@ -437,8 +437,8 @@ def refine_lenses_from_landmarks(
     ``progress_callback(step, total, label)`` reports progress (may be called
     from a worker thread — keep it bpy-free).
 
-    ``estimate_focal_from_points`` opts into a separate unconstrained point
-    bundle fit, with an explicit per-coordinate pixel-noise assumption.
+    ``estimate_focal_from_points`` opts into a point-only bundle fit, with an
+    explicit per-coordinate pixel-noise assumption.
     """
     if not matches:
         raise ValueError("No matches to refine")
@@ -451,8 +451,8 @@ def refine_lenses_from_landmarks(
 
     if estimate_focal_from_points:
         # This path fits the existing private camera poses through root
-        # similarities. It is deliberately restricted to unconstrained 2D
-        # point graphs: silently omitting any constraint would change meaning.
+        # similarities. Only fully supported 2D point relations enter this fit;
+        # silently omitting any other constraint would change its meaning.
         initial_cals = {item.match_id: item.base_calibration for item in matches
                         if item.base_calibration is not None}
         empty_sync = sync_module.SyncSolveResult(
@@ -475,7 +475,7 @@ def refine_lenses_from_landmarks(
             return refusal(f"Point focal estimation needs 3–{MAX_CAMERAS} cameras")
         point_count = len({item.landmark_id for item in observations})
         if not 8 <= point_count <= MAX_POINTS:
-            return refusal(f"Point focal estimation needs 8–{MAX_POINTS} free points")
+            return refusal(f"Point focal estimation needs 8–{MAX_POINTS} points")
         for match_id in match_ids:
             count = sum(item.match_id == match_id for item in observations)
             if count < 8:
@@ -484,11 +484,22 @@ def refine_lenses_from_landmarks(
             return refusal("Pick sigma must be positive and finite")
         if not np.isfinite(fx_span) or not 0 < fx_span < 1:
             return refusal("Focal search span must lie between 0 and 100%")
+        point_ids = {item.landmark_id for item in observations}
+        picked_views = {point_id: {item.match_id for item in observations
+                                   if item.landmark_id == point_id}
+                        for point_id in point_ids}
+        if any(len(views) < 2 for views in picked_views.values()):
+            return refusal("Point focal estimation needs at least two camera picks per point; one-view plane and mirror members are not supported yet")
+        if mirror_pairs and mirror_plane is None:
+            return refusal("Point mirror pairs need a supplied Mirror Empty")
+        relation_ids = {item[0] for item in (plane_groups or ())} | {
+            point_id for pair in (mirror_pairs or ()) for point_id in pair}
+        if not relation_ids <= point_ids:
+            return refusal("Point plane or mirror relation contains a landmark without two-view picks")
 
         unsupported = (
             share_lens or bool(known_world) or bool(line_observations) or
             bool(known_lines) or bool(parallel_pairs) or bool(fixed_similarities) or
-            bool(mirror_pairs) or mirror_plane is not None or bool(plane_groups) or
             bool(readonly_match_ids) or lock_rotation or lock_translation or
             any(item.on_ground for item in observations) or
             any(any(item.line_bundles.values()) or item.reorient_from_vp
@@ -496,7 +507,7 @@ def refine_lenses_from_landmarks(
             (location_match_ids is not None and set(location_match_ids) != set(match_ids))
         )
         if unsupported:
-            return refusal("Point focal estimation supports free 2D points only; remove camera roles, pose locks and geometric constraints")
+            return refusal("Point focal estimation supports point picks, Is in Plane and supplied point mirrors only; remove camera roles, pose locks, lines, Known 3D and On Ground")
         if cancel_check and cancel_check():
             return refusal("Cancelled", cancelled=True)
         if progress_callback:
@@ -505,6 +516,9 @@ def refine_lenses_from_landmarks(
             initial = _run_sync(
                 initial_cals, match_ids, observations, [], anchor_id, {}, {}, [],
                 fixed_similarities=None, lock_rotation=False, lock_translation=False,
+                plane_groups=plane_groups, plane_slack=plane_slack,
+                mirror_pairs=mirror_pairs, mirror_plane=mirror_plane,
+                mirror_slack=mirror_slack,
                 location_match_ids=location_match_ids, cancel_check=cancel_check)
         except sync_module.SyncCancelled:
             return refusal("Cancelled", cancelled=True)
@@ -518,6 +532,9 @@ def refine_lenses_from_landmarks(
         outcome = fit_independent_focals(
             initial_cals, observations, initial, anchor_id=anchor_id,
             pick_sigma_px=pick_sigma_px, fx_span=fx_span,
+            plane_groups=plane_groups, plane_slack=plane_slack,
+            mirror_pairs=mirror_pairs, mirror_plane=mirror_plane,
+            mirror_slack=mirror_slack,
             cancel_check=cancel_check,
             progress_callback=point_progress)
         if not outcome.accepted or outcome.sync_result is None:
