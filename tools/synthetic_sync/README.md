@@ -633,3 +633,15 @@ traces a real lens search in ordinary Python. It retains each candidate's
 independent supported-pick and withheld-object errors so a lower reported score
 cannot hide worse alignment. See [the reproduced failure and recovery
 controls](lens-results.md); the unit regressions enforce their stated contracts.
+
+
+### Biased references
+
+`python3 tools/synthetic_sync/biased_references.py --out /tmp/pm-biased-references`
+runs four controls with identical exact picks and truth: accurate or locally
+biased Known 3D, each hard or soft. It retains reference drift, group residuals
+and withheld camera errors in a fixed world frame. Deliberately biased cases can
+produce accuracy flags while the diagnostic completes successfully; unbiased
+controls must pass. Replay a frozen `cases/biased-reference-exact-*.json` using
+`run.py --case ... --out ...` to enforce its ordinary accuracy contract as the
+exit status. See [the measured tradeoffs and limitations](biased-reference-results.md).
