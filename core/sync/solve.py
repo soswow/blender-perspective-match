@@ -1733,6 +1733,7 @@ def solve_landmark_sync(
             or (resolved_location is not None and resolved_location != set(match_map))
             or any(observation.on_ground for observation in usable_observations)
         ),
+        progress_callback=progress_callback,
     )
     if similarities is None:
         return SyncSolveResult(

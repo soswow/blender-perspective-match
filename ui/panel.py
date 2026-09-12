@@ -854,14 +854,18 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             opts_row.enabled = False
             if not workspace.share_lens:
                 point_opts.enabled = False
-            progress = refine_row.row(align=True)
-            progress.enabled = False
-            progress.prop(
-                workspace,
-                "lens_refine_progress",
-                text="Refining",
-                slider=True,
-            )
+            startup_label = operators.lens_refine_startup_label()
+            if startup_label is not None:
+                refine_row.label(text=startup_label, icon="TIME")
+            else:
+                progress = refine_row.row(align=True)
+                progress.enabled = False
+                progress.prop(
+                    workspace,
+                    "lens_refine_progress",
+                    text="Refining",
+                    slider=True,
+                )
             refine_row.operator(
                 "perspective_match.cancel_refine_lenses",
                 text="Cancel",

@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Refine Lenses shows live registration activity and elapsed time instead of a zero progress slider during startup.
 - Estimate FOV from Points supports up to 32 cameras in one joint fit; Assumed Pick Error explains its role in noise checks and FOV uncertainty.
 
 ### Added
@@ -17,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Point-based FOV refinement supports Is in Plane and point mirror pairs with a supplied Mirror Empty.
 
 ### Fixed
+- Independent FOV fitting can provisionally place a camera omitted by initial Sync before checking the complete joint fit, and identifies focal search limits even when fitting has not converged.
 - Independent FOV estimation names cameras missing from initial registration.
 - Point-based FOV estimation identifies unsupported line landmarks instead of reporting their mirror relations as missing point picks.
 - Mirror landmark and mirror-partner dropdowns retain the chosen selection.

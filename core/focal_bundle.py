@@ -16,6 +16,7 @@ import numpy as np
 from . import geometry as core
 from .focal_constraints import PointFocalConstraints
 from .focal_lines import LineChart, endpoint_distances
+from .focal_startup import provisional_poses
 from .sync import SyncObservation, SyncLineObservation, SyncSolveResult, SimilarityTransform, SyncMatchInput
 from .sync.constants import MIRROR_PAIR_HARD_GAP, PLANE_HARD_SLACK
 from .sync.lines import (_reconstruct_line_from_observations,
@@ -34,6 +35,7 @@ MAX_LINE_STROKES = 96
 LINE_MIRROR_DIRECTION_HARD_SINE = 0.01
 MAX_ITERATIONS = 100
 MAX_SECONDS = 30.0
+FOCAL_BOUND_MARGIN = 1.0e-4
 MAX_LOG_METRIC_BASELINE_CHANGE = 10.0
 METRIC_BASELINE_BOUND_MARGIN = 1e-4
 EPIPOLAR_HINT_MIN_WITHHELD_SIGMA = 8.0
@@ -362,7 +364,7 @@ def fit_independent_focals(
         return refuse("Pick sigma must be positive and finite")
     if not np.isfinite(fx_span) or not 0.0 < fx_span < 1.0:
         return refuse("Focal search span must lie between 0 and 100%")
-    if not initial.success or set(initial.similarities) != set(ids):
+    if not initial.success or not set(initial.similarities) <= set(ids):
         missing = sorted(set(ids) - set(initial.similarities))
         detail = ": " + ", ".join(missing) if missing else ""
         return refuse("Initial Sync must support every camera" + detail)
@@ -412,6 +414,12 @@ def fit_independent_focals(
             "Not enough depth evidence for independent FOV fitting. Add views "
             "from different positions and shared points at different depths."
         )
+
+    initial, startup_refusal = provisional_poses(
+        calibrations, observations, initial, anchor_id=anchor_id,
+        cancel_check=cancel_check, progress_callback=progress_callback)
+    if startup_refusal:
+        return refuse(startup_refusal)
 
     anchor_cal = calibrations[anchor_id]
     anchor_sim = initial.similarities[anchor_id]
@@ -786,6 +794,16 @@ def fit_independent_focals(
             if converged or not accepted_step:
                 converged = converged or not accepted_step and np.linalg.norm(gradient, ord=np.inf) < 1.0e-5
                 break
+        bounded = [ids[i] + (" (wider FOV)" if x[i] <= lower + FOCAL_BOUND_MARGIN else " (narrower FOV)")
+                   for i in range(ncam)
+                   if x[i] <= lower + FOCAL_BOUND_MARGIN or x[i] >= upper - FOCAL_BOUND_MARGIN]
+        if bounded:
+            hint = _conflict_hint(ids, observations, pick_sigma_px,
+                                  cancel_check=cancel_check)
+            if cancel_check and cancel_check():
+                return refuse("Cancelled")
+            return refuse("Fitted focal reached the search bound for " + ", ".join(bounded) +
+                          "; widen Lens Search % or revise starting FOVs." + hint)
         if not converged:
             hint = _conflict_hint(ids, observations, pick_sigma_px,
                                   cancel_check=cancel_check)
@@ -798,8 +816,6 @@ def fit_independent_focals(
         fitted_rmse = float(np.sqrt(np.mean(np.sum(end_raw**2, axis=1))))
         if not np.isfinite(fitted_rmse) or np.any(depths <= 0):
             return refuse("Fitted scene has points behind a camera", fitted=fitted_rmse)
-        if np.any(x[:ncam] <= lower + 1.0e-4) or np.any(x[:ncam] >= upper - 1.0e-4):
-            return refuse("Fitted focal reached the search bound; widen Lens Search %", fitted=fitted_rmse)
         if scale_columns and abs(x[ncam + 5]) >= (
                 MAX_LOG_METRIC_BASELINE_CHANGE - METRIC_BASELINE_BOUND_MARGIN):
             return refuse("Metric scale reached its numerical bound; check Mirror Empty and anchor placement",

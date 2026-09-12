@@ -210,12 +210,27 @@ def check(out):
 
     # Exercise the registered operator's real invoke/finish plumbing with a
     # stubbed refusal. No numerical entry point is called in this check.
-    with patch.object(scene, "run_lens_refine", return_value=refusal), \
+    callbacks = []
+    def pending_progress(_prep, **kwargs):
+        callback = kwargs['progress_callback']
+        callbacks.append(callback)
+        callback(0, 101, 'Registering camera pair')
+        return refusal
+
+    with patch.object(scene, "run_lens_refine", side_effect=pending_progress), \
             patch.object(operators, "threading", SimpleNamespace(
                 Thread=InlineWorker, Event=threading.Event)):
         operator = SimpleNamespace(_timer=None, report=lambda *_: None)
         status = operators.PM_OT_refine_lenses.invoke(operator, context, None)
         assert status == {"RUNNING_MODAL"}
+        assert operators.lens_refine_startup_label() == 'Registering camera pair'
+        operator._result_box['done'] = False
+        operators.PM_OT_refine_lenses.modal(operator, context, SimpleNamespace(type='TIMER'))
+        assert 'Registering camera pair' in space.sync_status and 'elapsed' in space.sync_status
+        assert '0/101' not in space.sync_status
+        callbacks[0](2, 101, 'Fitting landmarks')
+        assert operators.lens_refine_startup_label() is None
+        operator._result_box['done'] = True
         status = operators.PM_OT_refine_lenses._finish_job(operator, context, cancelled=False)
         assert status == {"FINISHED"}
     space.share_lens = True

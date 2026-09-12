@@ -221,6 +221,9 @@ jobs:
           blender --factory-startup --disable-autoexec -b --python-exit-code 1 \
             --python tools/synthetic_sync/verify_focal_lines_blender.py -- \
             --fresh --out "${RUNNER_TEMP}/synthetic-blender/focal-lines"
+          blender --factory-startup --disable-autoexec -b --python-exit-code 1 \
+            --python tools/synthetic_sync/verify_focal_lines_blender.py -- \
+            --partial-startup --out "${RUNNER_TEMP}/synthetic-blender/focal-partial-startup"
       - name: Live landmark mirror plane
         timeout-minutes: 3
         env:

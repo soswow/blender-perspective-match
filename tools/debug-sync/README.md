@@ -28,6 +28,15 @@ inputs and startup state are retained in `report.json.inputs.json` and
 `report.json.startup.json`. These can contain private scene evidence: keep them
 outside the repository. No mode saves the source blend.
 
+Reuse those sidecars with `probe_focal_startup.py` under the development Python
+environment with OpenCV. By default it compares a missing camera against the
+saved provisional cloud across nine focal candidates and checks raw image-pair
+consistency. That cloud is not ground truth, and a small fundamental-matrix fit
+cannot certify correspondences. `--joint` instead runs one complete production
+focal bundle from the saved startup, without another Sync or scene application.
+Optional `--span-percent 40` changes only that replay's search range. Keep the
+input/startup files and the `--out` report together as private artifacts.
+
 The main solves in `dump_sync.py`, `probe_graph.py` and `probe_resected.py` use
 the same complete prepared request as Solve Sync and Diagnose, including live
 pose locks, workspace rotation/translation locks, all slack settings, confidence

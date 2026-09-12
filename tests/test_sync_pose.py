@@ -200,12 +200,16 @@ class PoseSyncTests(unittest.TestCase):
             observe("back", landmark_id, point)
             observe("bottom", landmark_id, point)
 
+        progress_labels = []
         result = sync.solve_landmark_sync(
             matches,
             observations,
             anchor_id="anchor",
+            progress_callback=progress_labels.append,
         )
         self.assertTrue(result.success, result.message)
+        self.assertTrue(any("testing anchor pair" in label for label in progress_labels))
+        self.assertTrue(any("testing bridges" in label for label in progress_labels))
         recovered = result.similarities["bottom"]
         recovered_center = recovered.transform_point(local_center)
         self.assertLess(float(recovered_center[2]), -0.5)

@@ -46,7 +46,9 @@ def generate(*, inconsistent: bool = False, weak: bool = False) -> dict:
                 raise ValueError(f"Line {line_id} leaves {camera['id']} image")
             oracle[line_id][camera["id"]] = uv.tolist()
             if inconsistent and line_id == "mirror_edge_b" and camera_index == 2:
-                uv = uv + np.array([0.0, 75.0])
+                direction = uv[1] - uv[0]
+                perpendicular = np.array([-direction[1], direction[0]]) / np.linalg.norm(direction)
+                uv = uv + 75.0 * perpendicular
             observations.append(dict(match_id=camera["id"], landmark_id=line_id,
                                      u1=float(uv[0, 0]), v1=float(uv[0, 1]),
                                      u2=float(uv[1, 0]), v2=float(uv[1, 1]), weight=1.0))

@@ -66,6 +66,24 @@ values; the **%** field bounds the focal search around those values (40% by
 default in this mode, separate from the existing 18% lens search). A result
 at the search boundary is refused with a suggestion to widen the range.
 
+If initial Sync omits a camera despite enough picks, this mode can now try a
+provisional pose against the reconstructed point cloud and then fit all cameras,
+lenses and geometry together. The provisional cloud is not treated as Known 3D.
+The final fit must still pass the same noise, geometry and uncertainty checks.
+Plenty of picks supplies redundancy, but does not guarantee that the current
+FOV, provisional 3D or correspondences agree.
+
+A search-limit message names affected cameras and whether they need a wider
+or narrower FOV. Try a wider **%** range or revise that camera's **Manual FOV**
+starting estimate. A repeatedly saturated limit is not a measured calibration:
+inconsistent picks, incorrect geometric constraints or unsupported image
+calibration can also push fitting to a boundary. Do not reduce Assumed Pick
+Error or delete picks just to force an accepted result.
+
+During initial registration the sidebar shows the active stage/camera pair and
+elapsed time. It shows numerical progress once joint fitting begins; that
+fraction describes iterations, not a prediction of time remaining.
+
 **Assumed Pick Error (px)** is your assumed standard deviation of error in each picked
 image coordinate. It is used to assess weak evidence and estimate local focal
 ranges; it is not a measured accuracy score. Start conservatively when picks

@@ -23,7 +23,7 @@ from tools.synthetic_sync.geometry import project
 from tools.synthetic_sync.verify_focal_constraints_blender import build
 
 
-def check(out, fresh=False):
+def check(out, fresh=False, partial=False):
     from match_perspective import properties, scene
     from match_perspective.core import lens_refine, sync
 
@@ -45,6 +45,8 @@ def check(out, fresh=False):
         similarities[item.match_id] = sync.SimilarityTransform(
             1., rotation, np.asarray(true['center']) - rotation @ cal.camera_center)
     similarities[prep.anchor_id] = sync.SimilarityTransform()
+    if partial:
+        del similarities[case['request']['cameras'][-1]['id']]
     initial = sync.SyncSolveResult(
         similarities=similarities,
         landmarks={k: np.asarray(p) for k, p in case['truth']['points'].items()},
@@ -96,7 +98,7 @@ def check(out, fresh=False):
         else:
             raise AssertionError('Changed line stroke did not invalidate the job')
     pick.x2, pick.y2 = endpoint
-    report = dict(passed=True, bundles=1, fresh_registration=fresh,
+    report = dict(passed=True, bundles=1, fresh_registration=fresh, partial_startup=partial,
                   withheld_max_px=float(max(errors)), lines=len(result.sync_result.line_segments))
     (out / 'result.json').write_text(json.dumps(report, indent=2))
     print('Line FOV Blender PASS:', report)
@@ -106,11 +108,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--out', required=True)
     parser.add_argument('--fresh', action='store_true')
+    parser.add_argument('--partial-startup', action='store_true')
     args = parser.parse_args(sys.argv[sys.argv.index('--') + 1:])
+    if args.fresh and args.partial_startup:
+        parser.error('--partial-startup uses the prepared oracle start, not --fresh')
     out = Path(args.out).resolve()
     out.mkdir(parents=True, exist_ok=False)
     register_extension()
-    check(out, args.fresh)
+    check(out, args.fresh, args.partial_startup)
 
 
 if __name__ == '__main__':

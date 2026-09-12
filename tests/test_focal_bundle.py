@@ -61,6 +61,69 @@ def _saved_initial(case, matches, label):
 
 
 class PointFocalBundleTests(TestCase):
+    def test_sync_wrapper_forwards_registration_callback(self):
+        _case, matches, observations = _inputs("four-view")
+        received = []
+
+        def solve(*args, **kwargs):
+            kwargs["progress_callback"]("Preparing sync graph")
+            return object()
+
+        with mock.patch.object(lens_refine.sync_module, "solve_landmark_sync",
+                               side_effect=solve):
+            lens_refine._run_sync(
+                {item.match_id: item.base_calibration for item in matches},
+                [item.match_id for item in matches], observations, [],
+                "view_0", {}, {}, [], progress_callback=received.append)
+        self.assertEqual(received, ["Preparing sync graph"])
+
+    def test_point_startup_reports_sync_activity_before_registration_refusal(self):
+        _case, matches, observations = _inputs("four-view")
+        failed = sync.SyncSolveResult(
+            similarities={}, landmarks={}, mean_reprojection_px=0.0,
+            per_match_rmse_px={}, per_landmark_rmse_px={},
+            message="Could not register", success=False)
+        updates = []
+
+        def register(*args, **kwargs):
+            kwargs["progress_callback"]("Registering cameras: testing anchor pair")
+            return failed
+
+        with mock.patch.object(lens_refine, "_run_sync", side_effect=register):
+            result = lens_refine.refine_lenses_from_landmarks(
+                matches, observations, anchor_id="view_0",
+                estimate_focal_from_points=True,
+                progress_callback=lambda step, total, label: updates.append(
+                    (step, total, label)))
+        self.assertFalse(result.improved)
+        self.assertEqual(updates[0][:2], (0, 101))
+        self.assertIn("Registering cameras", updates[1][2])
+        self.assertTrue(all(step == 0 for step, _, _ in updates))
+
+    def test_point_bundle_zero_step_remains_indeterminate(self):
+        _case, matches, observations = _inputs("four-view")
+        initial = sync.SyncSolveResult(
+            similarities={item.match_id: sync.SimilarityTransform() for item in matches},
+            landmarks={}, mean_reprojection_px=0.0,
+            per_match_rmse_px={}, per_landmark_rmse_px={},
+            message="Registered", success=True)
+        updates = []
+
+        def bundle(*args, **kwargs):
+            kwargs["progress_callback"](0, 100, "Preparing provisional cameras")
+            kwargs["progress_callback"](1, 100, "Estimating focal from points")
+            return FocalBundleOutcome(False, "Controlled refusal")
+
+        with mock.patch.object(lens_refine, "_run_sync", return_value=initial), \
+             mock.patch.object(lens_refine, "fit_independent_focals", side_effect=bundle):
+            result = lens_refine.refine_lenses_from_landmarks(
+                matches, observations, anchor_id="view_0",
+                estimate_focal_from_points=True,
+                progress_callback=lambda step, total, label: updates.append(
+                    (step, total, label)))
+        self.assertFalse(result.improved)
+        self.assertEqual([step for step, _, _ in updates], [0, 0, 2])
+
     def test_line_relations_refuse_before_expensive_registration(self):
         _case, matches, observations = _inputs("four-view")
         strokes = [sync.SyncLineObservation(key, "edge", 0., 0., 10., 10.)

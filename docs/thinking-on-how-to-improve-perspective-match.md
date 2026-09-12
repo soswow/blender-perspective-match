@@ -27,13 +27,27 @@ one-view setup refuse. Native preparation/bundle/apply checks, including a four-
 registration run, reached under 0.001px maximum withheld error; changed strokes invalidate pending application.
 These exact controls do not establish noisy real-data confidence coverage.
 
-**Current practical blocker:** point-only startup can still omit a camera at
-approximate initial FOVs, before joint lines/focals can help. A bounded real-data
-trial reproduced this, without applying or saving anything. The refusal now
-names missing cameras; the lens probe can retain numerical inputs and startup
-state for reuse. Next investigate recovering omitted cameras while allowing
-their lenses to change, using a generic regression and independent held-out
-checks. Do not classify picks as wrong solely from residuals at guessed FOVs.
+**Startup/progress follow-up:** a skipped camera can now receive a bounded,
+provisional linear/planar PnP pose against the partial point cloud and enter the
+complete joint fit. `core/focal_startup.py` does not certify that pose, freeze
+its 3D, or alter ordinary Sync acceptance. A generic missing-camera regression
+failed before this change and now recovers withheld geometry; an inconsistent
+stroke control still refuses. The negative fixture now moves the stroke
+perpendicular to its direction, since an image-axis shift can mostly slide
+along the same infinite line. Native partial-startup/apply checks pass.
+
+Initial registration now reports actual stage/pair activity and elapsed time;
+the sidebar hides the misleading zero slider until numerical iterations begin.
+Focal-bound diagnostics run even before convergence and name both the camera
+and wider/narrower FOV direction, retaining independent raw-pair conflict hints.
+`probe_focal_startup.py --joint` reuses preserved startup for bounded lens trials
+without another full Sync. This exposed a remaining real-data limitation:
+provisional completion allowed the joint fit to begin, but wider focal ranges
+and an alternative starting focal still reached limits; no accepted solution
+was established. Do not interpret those boundary pressures as calibrated
+lenses or delete specific picks on that basis. Next investigate joint startup
+with larger initial lens errors and calibration-model mismatch using generic
+regressions, preserved optimizer states and independent withheld checks.
 
 **Earlier camera-count and eligibility follow-up:** independent point-FOV fitting
 allows 3–32 cameras in one joint fit. Eight was an implementation cap, not a

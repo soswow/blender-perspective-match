@@ -3663,6 +3663,7 @@ def _register_from_relative_pose(
     cancel_check: Callable[[], bool] | None = None,
     location_match_ids: set[str] | None = None,
     free_point_graph_only: bool = False,
+    progress_callback: Callable[[str], None] | None = None,
 ) -> tuple[dict[str, SimilarityTransform] | None, str]:
     """Register free matches vs anchor, then bridge via triangulated landmarks."""
     _check_cancelled(cancel_check)
@@ -3728,6 +3729,10 @@ def _register_from_relative_pose(
 
     def solve_vs_anchor(match_id: str) -> tuple[str, SimilarityTransform | None, str]:
         _check_cancelled(cancel_check)
+        if progress_callback is not None:
+            progress_callback(
+                f"Registering cameras: testing anchor pair ({len(similarities)}/{len(free_match_ids) + 1} posed)"
+            )
         solved, detail = _relative_pose_from_correspondences(
             anchor_id,
             match_id,
@@ -3798,6 +3803,10 @@ def _register_from_relative_pose(
         ).items():
             landmarks.setdefault(landmark_id, point)
         pending_now = list(pending)
+        if progress_callback is not None:
+            progress_callback(
+                f"Registering cameras: testing bridges ({len(similarities)}/{len(free_match_ids) + 1} posed)"
+            )
         relatives_by_match: dict[str, dict[str, SimilarityTransform | None]] = {
             match_id: {} for match_id in pending_now
         }
@@ -3840,6 +3849,10 @@ def _register_from_relative_pose(
             known_world_ids,
         ):
             _check_cancelled(cancel_check)
+            if progress_callback is not None:
+                progress_callback(
+                    f"Registering cameras: fitting next camera ({len(similarities)}/{len(free_match_ids) + 1} posed)"
+                )
             collected = _collect_pnp_correspondences(
                 match_id,
                 observations_by_landmark,

@@ -357,6 +357,7 @@ def _run_sync(
     location_match_ids: set[str] | None = None,
     readonly_match_ids: set[str] | None = None,
     cancel_check=None,
+    progress_callback=None,
 ) -> sync_module.SyncSolveResult:
     sync_matches = [
         sync_module.SyncMatchInput(match_id=match_id, calibration=calibrations[match_id])
@@ -386,6 +387,7 @@ def _run_sync(
         location_match_ids=location_match_ids,
         readonly_match_ids=readonly_match_ids,
         cancel_check=cancel_check,
+        progress_callback=progress_callback,
     )
 
 
@@ -556,7 +558,10 @@ def refine_lenses_from_landmarks(
                 # constrained 3D start before the focal parameters are free.
                 plane_groups=None, plane_slack=0.0,
                 mirror_pairs=None, mirror_plane=None, mirror_slack=0.0,
-                location_match_ids=location_match_ids, cancel_check=cancel_check)
+                location_match_ids=location_match_ids, cancel_check=cancel_check,
+                progress_callback=(
+                    (lambda label: progress_callback(0, 101, label))
+                    if progress_callback else None))
         except sync_module.SyncCancelled:
             return refusal("Cancelled", cancelled=True)
         initial_rmse = _sync_rmse(initial, observations, initial_cals)
@@ -565,7 +570,10 @@ def refine_lenses_from_landmarks(
                            initial=initial, initial_rmse=initial_rmse)
         def point_progress(step: int, total: int, label: str) -> None:
             if progress_callback:
-                progress_callback(step + 1, total + 1, label)
+                # A zero-step status (including provisional startup) is
+                # activity, not completed numerical progress.
+                progress_callback(0 if step <= 0 else step + 1,
+                                  total + 1, label)
         outcome = fit_independent_focals(
             initial_cals, observations, initial, anchor_id=anchor_id,
             pick_sigma_px=pick_sigma_px, fx_span=fx_span,
