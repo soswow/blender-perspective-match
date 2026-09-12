@@ -56,10 +56,8 @@ def _record_fit(case: dict, initial, *, sigma: float) -> dict:
     calibrations = {item.match_id: item.calibration for item in arguments["matches"]}
     result = fit_independent_focals(calibrations, arguments["observations"], initial,
                                     anchor_id=arguments["anchor_id"], pick_sigma_px=sigma)
-    record = (result_record(result.sync_result, [
-        dict(camera, fx=result.calibrations[camera["id"]].intrinsics.fx,
-             fy=result.calibrations[camera["id"]].intrinsics.fy)
-        for camera in case["request"]["cameras"]]) if result.accepted else
+    record = (result_record(result.sync_result, case["request"]["cameras"],
+                            calibrations=result.calibrations) if result.accepted else
         dict(success=False, message=result.reason, cameras={}, landmarks={},
              reported_rmse_px=result.fitted_rmse_px))
     return dict(accepted=result.accepted, reason=result.reason,

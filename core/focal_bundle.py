@@ -18,6 +18,7 @@ from .focal_constraints import PointFocalConstraints
 from .focal_lines import LineChart, endpoint_distances
 from .focal_line_constraints import LineFocalConstraints, LINE_RELATION_DIRECTION_HARD_SINE
 from .focal_optimizer import bounded_lm_step
+from .focal_orientation import orientation_basis, overall_rotation
 from .focal_startup import provisional_poses
 from .sync import SyncObservation, SyncLineObservation, SyncSolveResult, SimilarityTransform, SyncMatchInput
 from .sync.constants import MIRROR_PAIR_HARD_GAP, PLANE_HARD_SLACK
@@ -35,7 +36,7 @@ MAX_POINTS = 80
 MAX_LINES = 24
 MAX_LINE_STROKES = 96
 LINE_MIRROR_DIRECTION_HARD_SINE = 0.01
-MAX_ITERATIONS = 100
+MAX_ITERATIONS = 200
 MAX_SECONDS = 30.0
 FOCAL_BOUND_MARGIN = 1.0e-4
 MAX_LOG_METRIC_BASELINE_CHANGE = 10.0
@@ -578,13 +579,17 @@ def fit_independent_focals(
     point_end = point_offset + 3 * npoint
     line_offset = point_end
     line_end = line_offset + 4 * len(line_ids)
-    mirror_offset_column = line_end if constraints.free_mirror_offset else None
+    rotation_basis = orientation_basis(
+        constraints, line_constraints, points0, [chart.decode(chart.initial) for chart in line_charts])
+    orientation_end = line_end + len(rotation_basis)
+    mirror_offset_column = orientation_end if constraints.free_mirror_offset else None
     x = np.concatenate((np.zeros(ncam), _log_rodrigues(rotations0[1]),
                         np.zeros(2), *([np.zeros(1)] if scale_columns else []),
                         *[np.concatenate((_log_rodrigues(rotations0[i]),
                                           centers0[i])) for i in range(2, ncam)],
                         points0.ravel(),
                         *[chart.initial for chart in line_charts],
+                        np.zeros(len(rotation_basis)),
                         *([np.zeros(1)] if constraints.free_mirror_offset else [])))
     camera_index = {key: index for index, key in enumerate(ids)}
     point_index = {key: index for index, key in enumerate(point_ids)}
@@ -626,6 +631,13 @@ def fit_independent_focals(
     def line_geometry(params: np.ndarray):
         return [chart.decode(params[line_offset + 4*i:line_offset + 4*i + 4])
                 for i, chart in enumerate(line_charts)]
+
+    def frame_rotation(params):
+        return overall_rotation(params[line_end:orientation_end], rotation_basis)
+
+    def prior_geometry(params, points, geometry):
+        rotation = frame_rotation(params)
+        return points @ rotation.T, [(rotation @ p, rotation @ d) for p, d in geometry]
 
     def line_image_residual(params: np.ndarray, focal, rotations, centers, geometry):
         result = np.empty((len(luv), 2))
@@ -740,14 +752,29 @@ def fit_independent_focals(
         if not has_geometric_priors:
             return pixel_residual, jac, depths
         offset = float(params[mirror_offset_column]) if mirror_offset_column is not None else 0.0
+        constrained_points, constrained_lines = prior_geometry(params, points, geometry)
         prior_residual, prior_jacobian = constraints.residual_and_jacobian(
-            points, point_offset=point_offset, parameter_count=len(params),
+            constrained_points, point_offset=point_offset, parameter_count=len(params),
             mirror_offset=offset, mirror_offset_column=mirror_offset_column,
             jacobian=jacobian)
-        mirror_line_residual = line_prior(params, points, geometry)
+        if jacobian and len(rotation_basis):
+            point_block = prior_jacobian[:, point_offset:point_end].reshape(-1, npoint, 3)
+            prior_jacobian[:, point_offset:point_end] = (
+                point_block @ frame_rotation(params)).reshape(-1, 3 * npoint)
+            for column in range(line_end, orientation_end):
+                step = 1e-6 * max(1.0, abs(params[column]))
+                shifted = params.copy()
+                shifted[column] += step
+                changed_points = points @ frame_rotation(shifted).T
+                changed, _ = constraints.residual_and_jacobian(
+                    changed_points, point_offset=point_offset, parameter_count=len(params),
+                    mirror_offset=offset, mirror_offset_column=mirror_offset_column,
+                    jacobian=False)
+                prior_jacobian[:, column] = (changed - prior_residual) / step
+        mirror_line_residual = line_prior(params, constrained_points, constrained_lines)
         if jacobian and len(mirror_line_residual):
             mirror_jac = np.zeros((len(mirror_line_residual), len(params)))
-            relevant = set(range(line_offset, line_end))
+            relevant = set(range(line_offset, orientation_end))
             for point in line_constraints.point_indices:
                 relevant.update(range(point_offset + 3 * point, point_offset + 3 * point + 3))
             if constraints.mirror_reference_index is not None:
@@ -760,8 +787,10 @@ def fit_independent_focals(
                 shifted = params.copy()
                 shifted[column] += step
                 shifted_points = shifted[point_offset:point_end].reshape(npoint, 3)
+                changed_points, changed_lines = prior_geometry(
+                    shifted, shifted_points, line_geometry(shifted))
                 mirror_jac[:, column] = (
-                    line_prior(shifted, shifted_points, line_geometry(shifted)) - mirror_line_residual) / step
+                    line_prior(shifted, changed_points, changed_lines) - mirror_line_residual) / step
         else:
             mirror_jac = None
         return (np.concatenate((pixel_residual, prior_residual, mirror_line_residual)),
@@ -829,6 +858,7 @@ def fit_independent_focals(
         endpoint_residual, _, endpoint_depths = residual_and_jacobian(x, jacobian=False)
         point_raw = endpoint_residual[:point_rows].reshape(-1, 2) / weights[:, None]
         endpoint_rmse = float(np.sqrt(np.mean(np.sum(point_raw**2, axis=1))))
+        world_from_internal = anchor_r.T @ frame_rotation(x)
         if diagnostic_callback is not None:
             # Capture the numerical endpoint even when a later acceptance gate
             # refuses it. This is diagnostic data, never an applicable result.
@@ -843,6 +873,8 @@ def fit_independent_focals(
             diagnostic_callback({
                 "iterations": iterations,
                 "converged": bool(converged),
+                "orientation_parameters": len(rotation_basis),
+                "world_rotation": (world_from_internal @ anchor_r).tolist(),
                 "focal_bound_hits": {
                     camera_id: ("wider_fov" if x[i] <= lower + FOCAL_BOUND_MARGIN else
                                 "narrower_fov" if x[i] >= upper - FOCAL_BOUND_MARGIN else None)
@@ -851,11 +883,11 @@ def fit_independent_focals(
                              for i, camera_id in enumerate(ids)},
                 "cameras": {
                     camera_id: {
-                        "rotation_w2c": (endpoint_rotations[i] @ anchor_r).tolist(),
-                        "center": (anchor_r.T @ (endpoint_centers[i] * baseline) + anchor_c).tolist(),
+                        "rotation_w2c": (endpoint_rotations[i] @ world_from_internal.T).tolist(),
+                        "center": (world_from_internal @ (endpoint_centers[i] * baseline) + anchor_c).tolist(),
                     } for i, camera_id in enumerate(ids)},
                 "points": {
-                    point_id: (anchor_r.T @ (endpoint_points[i] * baseline) + anchor_c).tolist()
+                    point_id: (world_from_internal @ (endpoint_points[i] * baseline) + anchor_c).tolist()
                     for i, point_id in enumerate(point_ids)},
                 "point_rmse_px": rms(np.linalg.norm(point_raw, axis=1)),
                 "line_rmse_px": rms(np.linalg.norm(line_raw, axis=1)),
@@ -896,6 +928,7 @@ def fit_independent_focals(
                           fitted=fitted_rmse)
         if constraints.active:
             _focal, _rotations, _centers, final_points = decode(x)
+            final_points, final_geometry = prior_geometry(x, final_points, line_geometry(x))
             plane_max, mirror_max = constraints.world_gaps(
                 final_points, mirror_offset=(float(x[mirror_offset_column])
                                              if mirror_offset_column is not None else 0.0))
@@ -904,7 +937,6 @@ def fit_independent_focals(
             if mirror_max > MIRROR_PAIR_HARD_GAP:
                 return refuse("Fitted points violate a supplied point mirror relation", fitted=fitted_rmse)
             if line_mirrors:
-                final_geometry = line_geometry(x)
                 normal = constraints.mirror_normal
                 assert normal is not None
                 householder = np.eye(3) - 2 * np.outer(normal, normal)
@@ -926,7 +958,8 @@ def fit_independent_focals(
         if len(luv):
             final_geometry = line_geometry(x)
             focal_check, rotations_check, centers_check, _points = decode(x)
-            plane_gap, direction_gap = line_constraints.world_gaps(_points, final_geometry)
+            constrained_points, constrained_geometry = prior_geometry(x, _points, final_geometry)
+            plane_gap, direction_gap = line_constraints.world_gaps(constrained_points, constrained_geometry)
             if plane_gap > PLANE_HARD_SLACK:
                 return refuse("Fitted lines violate a hard Is in Plane relation", fitted=fitted_rmse)
             if direction_gap > LINE_RELATION_DIRECTION_HARD_SINE:
@@ -1003,11 +1036,11 @@ def fit_independent_focals(
                 return refuse("Focal uncertainty is too broad to use", fitted=fitted_rmse)
             intervals[camera_id] = (float(focal[camera] * math.exp(-1.96 * sigma_log)),
                                     float(focal[camera] * math.exp(1.96 * sigma_log)))
-        # Preserve private poses; the fitted world poses go into the existing
-        # root similarities, and points return to the original anchor world.
+        # Persist anchor orientation in its private calibration so subsequent
+        # Sync keeps the corrected frame with an identity anchor root.
         result_sims = {anchor_id: SimilarityTransform()}
         result_cals = {}
-        result_points = {point_ids[index]: anchor_r.T @ (point * baseline) + anchor_c
+        result_points = {point_ids[index]: world_from_internal @ (point * baseline) + anchor_c
                          for index, point in enumerate(points)}
         for camera, camera_id in enumerate(ids):
             source = calibrations[camera_id]
@@ -1016,13 +1049,14 @@ def fit_independent_focals(
                 intrinsics=core.CameraIntrinsics(float(focal[camera]), float(focal[camera]),
                                                  source_k.cx, source_k.cy,
                                                  source_k.image_width, source_k.image_height),
-                rotation_w2c=np.array(source.rotation_w2c, copy=True),
+                rotation_w2c=np.array(world_from_internal.T if camera == 0 and len(rotation_basis) else
+                                      source.rotation_w2c, copy=True),
                 camera_center=np.array(source.camera_center, copy=True),
                 division_lambda=0.0, brown_conrady=())
             if camera == 0:
                 continue
-            global_rotation = rotations[camera] @ anchor_r
-            global_center = anchor_r.T @ (centers[camera] * baseline) + anchor_c
+            global_rotation = rotations[camera] @ world_from_internal.T
+            global_center = world_from_internal @ (centers[camera] * baseline) + anchor_c
             sim_rotation = global_rotation.T @ source.rotation_w2c
             old_scale = float(initial.similarities[camera_id].scale)
             result_sims[camera_id] = SimilarityTransform(
@@ -1033,8 +1067,8 @@ def fit_independent_focals(
         match_inputs = {key: SyncMatchInput(key, result_cals[key]) for key in ids}
         for index, line_id in enumerate(line_ids):
             local_point, local_direction = geometry[index]
-            world_point = anchor_r.T @ (local_point * baseline) + anchor_c
-            world_direction = anchor_r.T @ local_direction
+            world_point = world_from_internal @ (local_point * baseline) + anchor_c
+            world_direction = world_from_internal @ local_direction
             segment = _finite_segment_from_line_observations(
                 world_point, world_direction,
                 [item for item in line_observations if item.landmark_id == line_id],

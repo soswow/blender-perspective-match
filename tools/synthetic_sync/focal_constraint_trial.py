@@ -89,7 +89,7 @@ def _outcome_record(outcome, request_cameras: list[dict]) -> dict:
     return dict(accepted=True, reason="", intervals_px=outcome.intervals_px,
                 initial_rmse_px=outcome.initial_rmse_px,
                 fitted_rmse_px=outcome.fitted_rmse_px,
-                fitted=result_record(outcome.sync_result, cameras))
+                fitted=result_record(outcome.sync_result, cameras, calibrations=outcome.calibrations))
 
 
 def run(out: Path, names: tuple[str, ...], *, stop_on_positive_failure: bool = True) -> None:
@@ -159,7 +159,7 @@ def run(out: Path, names: tuple[str, ...], *, stop_on_positive_failure: bool = T
                     updated.update(fx=result.calibrations[camera["id"]].intrinsics.fx,
                                    fy=result.calibrations[camera["id"]].intrinsics.fy)
                     fitted_cameras.append(updated)
-                record = result_record(result.sync_result, fitted_cameras)
+                record = result_record(result.sync_result, fitted_cameras, calibrations=result.calibrations)
                 summary["independent"] = assess(case, dict(
                     cameras=record["cameras"], landmarks=record["landmarks"]))
             (out / f"{name}-summary.json").write_text(

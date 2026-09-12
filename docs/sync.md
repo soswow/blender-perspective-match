@@ -191,11 +191,24 @@ Plane and mirror relations are enforced in the joint fit after preliminary
 camera registration from the image picks. This helps weak camera arrangements
 whose guessed starting FOV previously left the constrained fit stuck.
 
-The anchor camera's stored orientation and position remain fixed. X/Y/Z
-groups and the Mirror Empty are interpreted in that world frame; this mode
-does not infer a missing anchor orientation from them. Free coplanarity needs
-no supplied plane orientation. The reported uncertainty is conditional on
-the anchor frame and constraints, not a check that those references are true.
+The fit can rotate the cameras and reconstructed landmarks together to satisfy
+X/Y/Z planes, a supplied mirror normal, or world-axis line parallelism. This
+lets those relations orient a reconstruction whose starting anchor orientation
+was only a guess. The anchor camera center stays fixed. Rotation freedoms that
+the relations do not measure retain a starting-frame convention; two points in
+one axis bucket constrain less rotation than a fully supported plane. Free
+coplanarity and line-to-line parallelism alone keep the original anchor orientation.
+The fitted anchor orientation is stored in its camera calibration, so the next
+Sync uses the corrected frame. This applies to **Estimate FOV from Landmarks**;
+ordinary Sync and VP-based refinement retain their existing anchor rules.
+
+The joint fit allows up to 200 iterations within its existing 30-second time
+limit; preliminary camera registration has separate work limits. Weak setups
+can need more iterations when orientation is fitted too.
+
+The reported uncertainty includes fitted orientation freedoms but remains
+conditional on the supplied constraints and fixed camera center. It does not
+check that those references are true.
 A Mirror Empty can fix scale relative to the stored anchor placement, but
 that establishes real dimensions only if that placement is trustworthy.
 An incorrect mirror offset can change reconstructed scale without worsening
@@ -285,7 +298,7 @@ ignores those pairs and says so in the status line.
 
 ### Shared planes
 
-A point or line landmark can join an **Is in Plane** bucket: **X**, **Y**, or **Z** (share that world coordinate with others in the same **#1–#10** bucket) or **Free** (lie on the same unknown plane). Two landmarks tagged **Z #2** share some height that is not necessarily Z=0; **Z #1** is a different height. **On Ground** remains the Z=0 floor — putting On Ground points in a Z bucket pulls the rest of that bucket toward the floor. A Free plane can also meet that floor: initialization preserves On Ground seeds, and nonzero Ground Slack controls whether they can move during refinement. **Free** only constrains once four or more members are reconstructed (three points always define a plane). Lines are pulled so their midpoint lies in the plane; a zero **Plane Slack** also keeps the stroke direction in that plane. The same landmark can also be **Is Mirror Of** a partner; Solve Sync applies both.
+A point or line landmark can join an **Is in Plane** bucket: **X**, **Y**, or **Z** (share that world coordinate with others in the same **#1–#10** bucket) or **Free** (lie on the same unknown plane). The group menu shows assigned landmark counts, such as **#1 (7)** or **#4 (empty)**. Counts include point and line landmarks of the selected plane type, including those disabled for Sync; **X #1** and **Z #1** have separate counts. Two landmarks tagged **Z #2** share some height that is not necessarily Z=0; **Z #1** is a different height. **On Ground** remains the Z=0 floor — putting On Ground points in a Z bucket pulls the rest of that bucket toward the floor. A Free plane can also meet that floor: initialization preserves On Ground seeds, and nonzero Ground Slack controls whether they can move during refinement. **Free** only constrains once four or more members are reconstructed (three points always define a plane). Lines are pulled so their midpoint lies in the plane; a zero **Plane Slack** also keeps the stroke direction in that plane. The same landmark can also be **Is Mirror Of** a partner; Solve Sync applies both.
 
 With **Plane Slack = 0**, a point picked in one **Solve** or **Lock Pose** camera can also be placed using its plane bucket. X/Y/Z need at least one other reconstructed member to establish the shared coordinate; Free needs at least three other non-collinear members to establish the plane. The camera must already be placed. A grazing ray, an intersection behind the camera, insufficient support, or a Fit Only pick does not supply a new point this way. This route currently handles points and hard planes only.
 

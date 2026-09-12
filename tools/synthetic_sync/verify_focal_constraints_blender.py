@@ -186,7 +186,7 @@ def fresh(case, out, prepare_only):
     check_result_contract(case, prep, result)
     cameras = [dict(c, fx=result.calibrations[c["id"]].intrinsics.fx,
                     fy=result.calibrations[c["id"]].intrinsics.fy) for c in case["request"]["cameras"]]
-    record = result_record(result.sync_result, cameras)
+    record = result_record(result.sync_result, cameras, calibrations=result.calibrations)
     record["focal_intervals"] = json_values(result.focal_intervals)
     record["joint_result"] = json_values(result.sync_result)
     write_json(out / "record.json", record)

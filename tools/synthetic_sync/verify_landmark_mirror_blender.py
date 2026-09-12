@@ -185,7 +185,8 @@ def fresh(case, out, mode, prepare_only):
         for camera in cameras:
             k = result.calibrations[camera['id']].intrinsics
             camera.update(fx=k.fx, fy=k.fy)
-    record = result_record(joint, cameras)
+    record = result_record(joint, cameras,
+                           calibrations=result.calibrations if mode == 'focal' else None)
     record['joint_result'] = json_values(joint)
     write_json(out / 'record.json', record)
     # A new reference while a job is in flight invalidates its result.

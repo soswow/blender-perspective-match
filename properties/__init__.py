@@ -72,9 +72,38 @@ PLANE_AXIS_ITEMS = (
 )
 
 PLANE_GROUP_ITEMS = tuple(
-    (str(index), f"#{index}", f"Plane bucket {index}")
+    (str(index), f"#{index}", f"Plane bucket {index}", index - 1)
     for index in range(1, 11)
 )
+
+# Dynamic enum strings must remain referenced for Blender's lifetime. The
+# stored enum numbers are the original 0–9 values, including unsaved default 0.
+_COUNTED_PLANE_GROUP_ITEMS: dict[tuple[int, ...], tuple] = {}
+
+
+def _counted_plane_group_items(self, _context):
+    counts = [0] * len(PLANE_GROUP_ITEMS)
+    axis = self.plane_axis
+    if axis != "NONE":
+        scene = self.id_data
+        space = getattr(scene, "match_perspective", None)
+        if space is not None:
+            for landmark in space.landmarks:
+                if landmark.plane_axis != axis:
+                    continue
+                # Reading landmark.plane_group here would call this callback
+                # again. Blender stores each enum's numeric value as ID data.
+                number = landmark.get("plane_group", 0)
+                if isinstance(number, int) and 0 <= number < len(counts):
+                    counts[number] += 1
+    key = tuple(counts)
+    if key not in _COUNTED_PLANE_GROUP_ITEMS:
+        _COUNTED_PLANE_GROUP_ITEMS[key] = tuple(
+            (identifier, f"{label} ({count if count else 'empty'})", description, number)
+            for (identifier, label, description, number), count in zip(PLANE_GROUP_ITEMS, key)
+        )
+    return _COUNTED_PLANE_GROUP_ITEMS[key]
+
 
 # Dynamic enum tuples must stay referenced (Blender string-lifetime bug).
 _MIRROR_OF_NONE = (("NONE", "None", "No mirror partner", 0, 0),)
@@ -1006,10 +1035,11 @@ class PMLandmark(bpy.types.PropertyGroup):
         name="Plane Bucket",
         description=(
             "Which Is in Plane bucket this landmark belongs to. "
-            "Z #2 is a different height from Z #1"
+            "Z #2 is a different height from Z #1. Counts include all point and "
+            "line landmarks assigned to this plane type, even when disabled for Sync"
         ),
-        items=PLANE_GROUP_ITEMS,
-        default="1",
+        items=_counted_plane_group_items,
+        default=0,
         update=_touch_sync_ui,
     )
     known_object: bpy.props.PointerProperty(

@@ -1,5 +1,5 @@
 **Perspective Match: reliability and AI development proposal**
-Investigation baseline: commit `5d876f6` / extension 0.5.0, 10 September 2026. Latest checkpoint: conservative pair diagnostics and investigation of anchor-frame assumptions, 12 September 2026, described under **Current frontier**. Read that section first; the dated checkpoints preserve history, and the original proposal is retained for rationale rather than as an implementation checklist.
+Investigation baseline: commit `5d876f6` / extension 0.5.0, 10 September 2026. Latest checkpoint: independent focal fitting can correct the overall orientation, 13 September 2026, described under **Current frontier**. Read that section first; the dated checkpoints preserve history, and the original proposal is retained for rationale rather than as an implementation checklist.
 
 **My recommendation is to make every solver decision reproducible from a complete, versioned input, and judge it with checks independent of the implementation.** Build that foundation around the existing fixtures, Blender smoke test, and diagnostics. Then use it to improve calibration ownership, quality reporting, and selected solver decisions. This would turn a debugging session into an addition to a reusable capability.
 
@@ -7,7 +7,7 @@ Your clarification is that both metric accuracy and visual alignment matter, dep
 
 The deeper product issue is that three different promises are currently close together: “these measurements fit,” “this reconstruction is well determined,” and “the Blender viewport represents that reconstruction.” The code has made substantial progress on each, but failures still occur at their boundaries. Another recurring issue is that a geometric model can be wrong for the evidence: uncertain calibration, approximate CAD, imperfect symmetry, or images of different versions of an object can make precise simultaneous agreement impossible.
 
-## Current frontier — 12 September 2026
+## Current frontier — 13 September 2026
 
 **Latest diagnostic fix:** a sparse leave-one-out fundamental-matrix fit could
 warn about correct shared picks because its omitted observation had too much
@@ -20,27 +20,43 @@ model fits within the noise budget. This intentional loss of recall avoids an
 unjustified accusation; the underlying focal refusal and acceptance checks are
 unchanged. All 18 focal-bundle tests pass, including the fit-count cap.
 
-**Current investigation frontier: orientation, not just focal range.** A fresh
-private capture with revised starting lenses reproduced a bound refusal. Cached
-counterfactual trials isolated substantially more residual pressure from plane
-constraints than from mirror relations. Replacing an axis-aligned plane by an
-otherwise equivalent Free plane substantially reduced residuals while preserving
-coplanarity; much wider focal bounds alone helped little. These are diagnostic
-comparisons, not permission to delete valid physical constraints or evidence of
-correct reconstructed geometry. No private scene was changed and no accepted
-complete fit was established.
+**Latest solver fix: overall orientation during independent FOV fitting.**
+The cameras and reconstructed landmarks can now rotate together relative to the
+supplied axis-plane, mirror-normal and world-axis line relations. The fit holds
+the anchor camera center fixed and releases only the locally measured rotation
+freedoms. A sparse two-point axis group supplies one condition, not a complete
+plane orientation. Free coplanarity and line-to-line parallelism alone do not
+change the anchor frame. Accepted results persist the new anchor orientation in
+its private calibration with an identity root, so subsequent Sync input collection
+retains it. Noise, depth, focal-bound and uncertainty checks remain active. A frozen weak
+axis-plane case needed 171 iterations with the extra freedoms, so the ceiling
+is now 200 within the unchanged 30-second bundle time cap. Numerical conditioning
+remains an improvement opportunity; the larger iteration allowance is not a speedup.
 
-The current focal mode fixes the anchor orientation even with no VP calibration.
-World-axis planes/directions may therefore impose incompatible information if
-that orientation is only approximate. Next distinguish intended physical-axis
-knowledge from mere coplanarity. A useful bounded experiment would keep an
-independent oracle and its valid axis-plane/mirror relations fixed, perturb only
-the stored anchor orientation, then compare fixed and refinable frame controls
-using withheld pixels and world-direction checks. Only observable orientation
-freedoms should be fitted; remaining coordinate freedoms need an explicit
-convention. This capability is not implemented. Focal limits/uncertainty remain
-separate concerns even if orientation is corrected. Do not default back to
-repeated pick edits or larger search percentages.
+An independent exact oracle keeps true geometry, cameras, picks and world priors
+unchanged while tilting only the stored anchor by 12 degrees. Disabling the new
+rotation parameters reproduces a focal-bound refusal on those exact picks. Production bundle
+regressions and a generated Blender fit/apply check recover the world constraints
+and unused object projections (maximum native withheld error about 0.00049 px).
+Generated save/reload also preserves the corrected anchor calibration and cameras.
+A matched free control keeps its original frame. Startup is an oracle cloud to
+isolate this defect; these checks do not establish fresh-registration robustness
+or accuracy on noisy real images. Tools: `focal_orientation.py` and
+`verify_focal_orientation_blender.py` under `tools/synthetic_sync/`.
+
+**Small workflow improvement:** Is in Plane group choices display per-plane-type
+landmark counts, including disabled point/line members, or `(empty)`. Generated
+Blender checks cover updates, scene isolation and unchanged stored bucket IDs.
+
+**Remaining real-data frontier: bounds and calibration assumptions.** One cached
+private startup with its original plane/mirror constraints improved from 6.47 px
+to 1.84 px after this correction. Two focal lengths still reached their bounds;
+there was no accepted result or camera application. No user file was changed.
+This resolves one demonstrated modeling restriction, not the separate ambiguity
+between narrow FOV, geometry and principal-point assumptions. Do not default back
+to repeated pick edits or larger search percentages. Next use preserved inputs
+for bounded calibration/uncertainty experiments, with independent crop controls
+and held-out geometry where truth exists.
 
 **Previous addition: line planes and parallelism during focal fitting.**
 `core/focal_line_constraints.py` adds line position/direction in a point-supported
@@ -93,9 +109,8 @@ Recover original frame/crop metadata before considering joint unknown crop-offse
 estimation. Unknown offsets add two parameters per camera and need independent
 withheld checks and weak-evidence controls. The existing Manual PP Offset UI
 also clamps to the image, while a crop's true optical center can lie outside it.
-World-axis constraints combined with a fixed, approximate anchor orientation
-are another untested model limitation; do not infer a fix from constraint removal
-alone. See `tools/synthetic_sync/focal-optimizer-results.md` for evidence and limits.
+The overall-orientation defect is addressed by the latest fix above; correcting
+it did not remove every focal-bound refusal. See `tools/synthetic_sync/focal-optimizer-results.md` for evidence and limits.
 
 **Still open:** an explicit review/preview of a rejected candidate may help visual
 modeling, but must retain its refusal, before/after residuals, and reversible state.

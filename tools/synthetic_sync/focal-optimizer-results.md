@@ -81,3 +81,72 @@ fixed principal points. Unknown-offset fitting would need separate weak-case
 and withheld-observation experiments. Keep rejected candidates diagnostic until
 there is an explicit reversible preview workflow; a lower residual is not a
 claim that the cameras are closer to reality.
+
+## Overall orientation follow-up — 13 September 2026
+
+Independent focal fitting now includes a common rotation of the cameras and
+reconstructed geometry relative to supplied world-axis planes, mirror normals
+and world-axis line directions. Only locally measured rotations are released;
+for example, two equal-coordinate points supply one rotational condition.
+Free planes and line-to-line parallelism alone retain the starting frame.
+The anchor center stays fixed, and accepted anchor orientation is stored in
+its private calibration so later Sync input collection preserves it.
+
+`focal_orientation.py` fixes an independent exact oracle and perturbs only the
+stored anchor by 12 degrees. With the common rotation disabled, its production
+bundle refuses at a focal bound (4.64 px candidate point RMSE). The corrected
+fit satisfies the original plane/mirror evidence and unused object projections.
+Generated Blender application gives about 0.00049 px maximum withheld error;
+its free control gives about 0.0025 px in its original coordinate frame.
+Save/reload checks preserve the fitted anchor calibration and evaluated cameras.
+A sparse two-point axis group and a tilted case with line planes and world-axis
+parallelism have separate numerical regressions. These tests use oracle startup
+to isolate fitting and application; they do not test difficult registration.
+
+A later private capture, distinct from the older saved-objective table above,
+retained its original plane/mirror constraints and cached initial registration.
+Common-rotation fitting reduced its point RMSE from 6.47 px to 1.84 px in one
+bundle replay, without another full Sync or scene application. Two focals still
+reached their bounds. This is evidence of reduced model conflict, not correct
+real-world geometry, nor an accepted solution. Focal limits and fixed principal
+points remain separate investigation targets.
+
+Run the native oracle checks in fresh output directories:
+
+```sh
+blender --factory-startup --disable-autoexec -b --python-exit-code 1 \
+  --python tools/synthetic_sync/verify_focal_orientation_blender.py -- \
+  --out /tmp/pm-focal-orientation
+blender --factory-startup --disable-autoexec -b --python-exit-code 1 \
+  --python tools/synthetic_sync/verify_focal_orientation_blender.py -- \
+  --free-control --out /tmp/pm-focal-orientation-free
+```
+
+Each command performs one bundle and no Sync registration, then saves and
+reopens only its generated scene. CI runs both and the plane-group label check.
+
+A frozen weak-axis case remains feasible with the additional orientation
+freedoms but needs 171 iterations, exceeding the former 100-iteration ceiling.
+It retains sub-4-pixel withheld shape error. Staged fitting and eliminating the
+rotation from the damped step did not give a reliable improvement within the
+old budget and were not retained. The production iteration ceiling is now 200;
+the existing 30-second bundle time limit and all acceptance checks stay intact.
+This buys convergence headroom, not better conditioning or a general speedup.
+The crop regression also now uses the returned anchor calibration; its wrong-K
+control must refuse, whether at a focal bound or the pick-noise check.
+
+The slow-axis comparison is reproducible without another Sync. The saved-start
+tool archives the current core source and exact request/endpoint, records one
+budgeted bundle, and evaluates with the returned anchor calibration. Its
+production replay converges at 171 iterations with 0.23194 px point RMSE and
+1.13 px withheld shape RMSE after alignment using training points only.
+
+```sh
+python -m tools.synthetic_sync.focal_constraint_saved_start \
+  /tmp/pm-axis-orientation \
+  tools/synthetic_sync/cases/focal-constraint-reliability/run-04 \
+  --pair weak-axis-hard weak-axis-hard
+```
+
+Use a new output directory for `--fixed-frame` or `--max-iterations 100` controls.
+Fixed-frame results are historical counterfactuals, not production candidates.

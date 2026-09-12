@@ -55,6 +55,45 @@ def _fit(case):
 
 
 class FocalLineConstraintIntegrationTests(TestCase):
+    def test_tilted_anchor_recovers_line_planes_and_world_parallel_direction(self):
+        from tools.synthetic_sync.focal_orientation import rotation
+
+        case = focal_line_constraints.generate(axis_parallel=True)
+        calibrations, observations, initial = _inputs(case)
+        request = case['request']
+        anchor = request['anchor_id']
+        center = calibrations[anchor].camera_center.copy()
+        turn = rotation()
+        calibrations[anchor].rotation_w2c = calibrations[anchor].rotation_w2c @ turn.T
+        initial.landmarks = {key: center + turn @ (point - center)
+                             for key, point in initial.landmarks.items()}
+        for camera in case['truth']['cameras']:
+            key = camera['id']
+            target_rotation = np.asarray(camera['rotation']) @ turn.T
+            target_center = center + turn @ (np.asarray(camera['center']) - center)
+            sim_rotation = target_rotation.T @ calibrations[key].rotation_w2c
+            initial.similarities[key] = sync.SimilarityTransform(
+                1., sim_rotation, target_center - sim_rotation @ calibrations[key].camera_center)
+        initial.similarities[anchor] = sync.SimilarityTransform()
+        result = fit_independent_focals(
+            calibrations, observations, initial, anchor_id=anchor,
+            pick_sigma_px=case['pick_sigma_px'],
+            line_observations=[sync.SyncLineObservation(**item)
+                               for item in request['line_observations']],
+            plane_groups=request['plane_groups'], parallel_pairs=request['parallel_pairs'])
+        self.assertTrue(result.accepted, result.reason)
+        for key, truth_line in case['truth']['lines'].items():
+            self.assertLess(_infinite_line_error(result.sync_result.line_segments[key], truth_line), .002)
+        for camera in case['truth']['cameras']:
+            key = camera['id']
+            cal, sim = result.calibrations[key], result.sync_result.similarities[key]
+            fitted = dict(camera, fx=cal.intrinsics.fx, fy=cal.intrinsics.fy,
+                          rotation=cal.rotation_w2c @ sim.rotation.T,
+                          center=sim.transform_point(cal.camera_center))
+            for point in case['truth']['holdouts'].values():
+                self.assertLess(np.linalg.norm(project([point], camera)[0] -
+                                                project([point], fitted)[0]), .01)
+
     def test_parallel_only_uses_constrained_noise_accounting(self):
         case = focal_line_constraints.generate()
         case['request']['plane_groups'] = []

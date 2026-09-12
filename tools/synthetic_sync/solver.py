@@ -71,10 +71,15 @@ def solver_arguments(request: dict) -> dict:
     return arguments
 
 
-def result_record(result, cameras: list[dict]) -> dict:
+def result_record(result, cameras: list[dict], *, calibrations=None) -> dict:
     """Resolve private poses into world cameras independently of projection code."""
     recovered = {}
     for camera in cameras:
+        if calibrations is not None:
+            cal = calibrations[camera["id"]]
+            k = cal.intrinsics
+            camera = dict(camera, fx=k.fx, fy=k.fy, cx=k.cx, cy=k.cy,
+                          center=cal.camera_center, rotation=cal.rotation_w2c)
         similarity = result.similarities.get(camera["id"])
         if similarity is None:
             continue

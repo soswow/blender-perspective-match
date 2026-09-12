@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Independent FOV fitting allows more iterations within the existing time limit for weakly constrained orientation.
+- Is in Plane group choices show how many point and line landmarks use each group, with empty groups labeled explicitly.
 - Refine Lenses shows live registration activity and elapsed time instead of a zero progress slider during startup.
 - Estimate FOV from Points supports up to 32 cameras in one joint fit; Assumed Pick Error explains its role in noise checks and FOV uncertainty.
 
@@ -19,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Point-based FOV refinement supports Is in Plane and point mirror pairs with a supplied Mirror Empty.
 
 ### Fixed
+- Independent FOV fitting can correct the overall camera and landmark orientation to satisfy supplied world-axis and mirror constraints instead of distorting geometry to fit a guessed anchor frame.
 - FOV refinement avoids misleading shared-pick warnings when a model using all the pair's picks already agrees with the assumed noise.
 - Independent FOV fitting recalculates coupled camera and geometry steps when a focal reaches its limit, and reports candidate point error on boundary or convergence refusal.
 - Refine Lenses no longer shows a misleading 0–100% jump during independent FOV fitting; other lens-search progress bars use the correct scale.

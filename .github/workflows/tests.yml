@@ -229,6 +229,21 @@ jobs:
           blender --factory-startup --disable-autoexec -b --python-exit-code 1 \
             --python tools/synthetic_sync/verify_focal_lines_blender.py -- \
             --relations --out "${RUNNER_TEMP}/synthetic-blender/focal-line-relations"
+      - name: Focal world orientation and plane bucket labels
+        timeout-minutes: 2
+        env:
+          OPENBLAS_NUM_THREADS: "1"
+          OMP_NUM_THREADS: "1"
+        run: |
+          # Oracle startup isolates two bundle fits; no Sync registration.
+          blender --factory-startup --disable-autoexec -b --python-exit-code 1 \
+            --python tools/synthetic_sync/verify_focal_orientation_blender.py -- \
+            --out "${RUNNER_TEMP}/synthetic-blender/focal-orientation"
+          blender --factory-startup --disable-autoexec -b --python-exit-code 1 \
+            --python tools/synthetic_sync/verify_focal_orientation_blender.py -- \
+            --free-control --out "${RUNNER_TEMP}/synthetic-blender/focal-orientation-free"
+          blender --factory-startup --disable-autoexec -b --python-exit-code 1 \
+            --python tools/synthetic_sync/verify_plane_groups_blender.py
       - name: Live landmark mirror plane
         timeout-minutes: 3
         env:

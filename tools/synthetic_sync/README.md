@@ -36,6 +36,13 @@ starts (`independent_focal_true_k_control.py`), stage traces
 are under `cases/independent-focal-noise/`. The calibrated controls exposed a
 two-view baseline-collapse bug, now covered by a focused Sync regression.
 
+The [overall-orientation follow-up](focal-optimizer-results.md#overall-orientation-follow-up--13-september-2026)
+uses `focal_orientation.py` and `verify_focal_orientation_blender.py` to test a
+guessed anchor orientation against unchanged true cameras, pixels and world
+constraints. Fixed-frame refusal, corrected fitting, free-frame and sparse-axis
+controls separate a coordinate convention from measured geometry; native checks
+include saved calibration ownership and withheld object projections.
+
 ## Run and inspect
 
 From the repository root, using Python with NumPy:

@@ -157,9 +157,8 @@ def _run_fit(request, initial):
                          if key in {o.landmark_id for o in observations}}
     fitted = fit_independent_focals(calibrations, observations, initial,
                                    anchor_id=request["anchor_id"], pick_sigma_px=1.0)
-    record = result_record(fitted.sync_result, [dict(c, fx=fitted.calibrations[c["id"]].intrinsics.fx,
-                                                fy=fitted.calibrations[c["id"]].intrinsics.fy)
-                                                 for c in cameras]) if fitted.accepted else dict(
+    record = result_record(fitted.sync_result, cameras,
+                           calibrations=fitted.calibrations) if fitted.accepted else dict(
         success=False, message=fitted.reason, cameras={}, landmarks={},
         reported_rmse_px=(fitted.fitted_rmse_px if np.isfinite(fitted.fitted_rmse_px) else None))
     return dict(accepted=fitted.accepted, reason=fitted.reason,
@@ -321,10 +320,8 @@ def fresh_bundle(out):
                     result = lens_refine.refine_lenses_from_landmarks(
                         matches, observations, anchor_id=request["anchor_id"],
                         estimate_focal_from_points=True, pick_sigma_px=1.0)
-                fitted_record = (result_record(result.sync_result, [
-                    dict(c, fx=result.calibrations[c["id"]].intrinsics.fx,
-                         fy=result.calibrations[c["id"]].intrinsics.fy)
-                    for c in request["cameras"]]) if result.improved else
+                fitted_record = (result_record(result.sync_result, request["cameras"],
+                                                calibrations=result.calibrations) if result.improved else
                     dict(success=False, message=result.refusal_reason, cameras={},
                          landmarks={}, reported_rmse_px=None))
                 fitted = dict(accepted=result.improved, reason=result.refusal_reason,

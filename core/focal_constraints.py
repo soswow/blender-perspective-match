@@ -21,7 +21,7 @@ MIRROR_ANCHOR_PLANE_RELATIVE_TOLERANCE = 1e-5
 
 @dataclass
 class PointFocalConstraints:
-    """Compiled constraints in the fixed anchor-camera/unit-seed-baseline chart."""
+    """Compiled world priors in the initial anchor-camera/unit-baseline chart."""
 
     axis_groups: list[tuple[np.ndarray, list[int]]]
     free_groups: list[list[int]]

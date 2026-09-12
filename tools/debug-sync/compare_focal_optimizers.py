@@ -64,7 +64,7 @@ def load_problem(inputs_path: Path, startup_path: Path, expected_hash: str | Non
             needed = ('residual_and_jacobian', 'decode', 'x', 'lower', 'upper',
                       'ncam', 'ids', 'point_ids', 'uv', 'luv', 'weights',
                       'line_weights', 'anchor_r', 'anchor_c', 'baseline',
-                      'scale_columns')
+                      'scale_columns', 'frame_rotation')
             if all(k in local for k in needed) and frame.f_lineno >= focal_bundle.fit_independent_focals.__code__.co_firstlineno:
                 captured.update({k: local[k] for k in needed})
                 raise CapturedProblem
@@ -103,6 +103,7 @@ def report(problem, calibrations, result, bounds, seconds):
     point_raw = residual[:npoint].reshape(-1, 2) / weights[:, None]
     line_raw = residual[npoint:npoint+nline].reshape(-1, 2) / line_weights[:, None]
     focal, rotations, centers, points = problem['decode'](x)
+    world_from_internal = problem['anchor_r'].T @ problem['frame_rotation'](x)
     ids = problem['ids']
     return {
         'success': bool(result.success), 'status': int(result.status), 'message': result.message,
@@ -119,10 +120,11 @@ def report(problem, calibrations, result, bounds, seconds):
         'fov_degrees': {key: math.degrees(2*math.atan(calibrations[key].intrinsics.image_width/(2*focal[i])))
                         for i, key in enumerate(ids)},
         'focal_px': {key: float(focal[i]) for i, key in enumerate(ids)},
-        'cameras': {key: {'rotation_w2c': (rotations[i] @ problem['anchor_r']).tolist(),
-                          'center': (problem['anchor_r'].T @ (centers[i]*problem['baseline']) + problem['anchor_c']).tolist()}
+        'world_rotation': (world_from_internal @ problem['anchor_r']).tolist(),
+        'cameras': {key: {'rotation_w2c': (rotations[i] @ world_from_internal.T).tolist(),
+                          'center': (world_from_internal @ (centers[i]*problem['baseline']) + problem['anchor_c']).tolist()}
                     for i, key in enumerate(ids)},
-        'points': {key: (problem['anchor_r'].T @ (points[i]*problem['baseline']) + problem['anchor_c']).tolist()
+        'points': {key: (world_from_internal @ (points[i]*problem['baseline']) + problem['anchor_c']).tolist()
                    for i, key in enumerate(problem['point_ids'])},
     }
 

@@ -47,16 +47,15 @@ def _fit(case):
 def _withheld_max_px(case, outcome):
     """Project unused 3D checks with fitted cameras in the fixed oracle frame."""
     truth = case["truth"]
-    private = {camera["id"]: camera for camera in case["request"]["cameras"]}
     errors = []
     for true in truth["cameras"]:
         camera_id = true["id"]
         similarity = outcome.sync_result.similarities[camera_id]
-        source = private[camera_id]
-        fitted = outcome.calibrations[camera_id].intrinsics
+        source = outcome.calibrations[camera_id]
+        fitted = source.intrinsics
         recovered = dict(true, fx=fitted.fx, fy=fitted.fy, cx=fitted.cx, cy=fitted.cy,
-                         center=(similarity.scale * similarity.rotation @ source["center"] + similarity.translation).tolist(),
-                         rotation=(np.asarray(source["rotation"]) @ similarity.rotation.T).tolist())
+                         center=similarity.transform_point(source.camera_center).tolist(),
+                         rotation=(source.rotation_w2c @ similarity.rotation.T).tolist())
         for point_id, position in truth["holdouts"].items():
             actual = project([position], recovered)[0][0]
             expected = truth["holdout_pixels"][point_id][camera_id]
@@ -89,8 +88,7 @@ class FocalCropTests(TestCase):
 
         centered = focal_crop.generate(centered_principal_point=True)
         wrong = _fit(centered)
-        if wrong.accepted:
-            bad_error = _withheld_max_px(centered, wrong)
-            self.assertGreater(bad_error, max(1.0, good_error * 10))
-        else:
-            self.assertIn("search bound", wrong.reason)
+        self.assertFalse(wrong.accepted, "Wrong crop calibration produced an applicable fit")
+        self.assertIsNone(wrong.sync_result)
+        self.assertTrue("search bound" in wrong.reason or "pick noise" in wrong.reason,
+                        wrong.reason)

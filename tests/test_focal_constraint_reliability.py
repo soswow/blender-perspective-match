@@ -136,8 +136,11 @@ class FocalConstraintReliabilityTests(TestCase):
         fitted_cameras = []
         for camera in request["cameras"]:
             updated = dict(camera)
-            updated["fx"] = outcome.calibrations[camera["id"]].intrinsics.fx
-            updated["fy"] = outcome.calibrations[camera["id"]].intrinsics.fy
+            fitted = outcome.calibrations[camera["id"]]
+            updated["fx"] = fitted.intrinsics.fx
+            updated["fy"] = fitted.intrinsics.fy
+            updated["rotation"] = fitted.rotation_w2c.tolist()
+            updated["center"] = fitted.camera_center.tolist()
             fitted_cameras.append(updated)
         record = result_record(outcome.sync_result, fitted_cameras)
         assessment = fixtures.assess(case, record)
