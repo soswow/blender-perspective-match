@@ -160,6 +160,22 @@ jobs:
             --case "${RUNNER_TEMP}/synthetic-blender/plane-support/plane-support-free-0.json" \
             --role-case "${RUNNER_TEMP}/synthetic-blender/plane-support/plane-support-free-0-fit-only.json" \
             --out "${RUNNER_TEMP}/synthetic-blender/plane-support-role" --roundtrip
+      - name: Parallel and mirror constraints survive Blender storage
+        run: |
+          python3 tools/synthetic_sync/constraint_interactions.py --float32 \
+            --out "${RUNNER_TEMP}/synthetic-blender/constraint-float32"
+          blender --factory-startup --disable-autoexec -b --python-exit-code 1 \
+            --python tools/synthetic_sync/blender_case.py -- \
+            --case tools/synthetic_sync/cases/plane-mirror-parallel.json \
+            --out "${RUNNER_TEMP}/synthetic-blender/constraint-interactions" --roundtrip
+          python3 tools/synthetic_sync/constraint_interactions.py \
+            --case tools/synthetic_sync/cases/plane-mirror-parallel.json \
+            --result "${RUNNER_TEMP}/synthetic-blender/constraint-interactions/result.json" \
+            --out "${RUNNER_TEMP}/synthetic-blender/constraint-interactions/checked"
+          python3 tools/synthetic_sync/constraint_interactions.py \
+            --case tools/synthetic_sync/cases/plane-mirror-parallel.json \
+            --result "${RUNNER_TEMP}/synthetic-blender/constraint-interactions/reopened/result.json" \
+            --out "${RUNNER_TEMP}/synthetic-blender/constraint-interactions/reopened/checked"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

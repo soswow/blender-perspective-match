@@ -603,3 +603,22 @@ Blender smoke/save-reopen cases on PRs and pushes to main. Reports and generated
 files are uploaded for 14 days. CI does not render reference images, install
 OpenCV wheels, change the release workflow or publish anything. Noisy sweeps are
 exploratory and intentionally separate from the passing deterministic CI corpus.
+
+### Combined constraints and lens-selection evidence
+
+`constraint_interactions.py --out /tmp/pm-interactions` tests eight paired
+plane/mirror/parallel controls; add `--float32` to round stored inputs while
+retaining independent truth and output limits. See [the construction, results
+and limitations](constraint-interaction-results.md). For a native Blender check,
+run `blender_case.py` on `cases/plane-mirror-parallel.json` with `--roundtrip`,
+then post-check each `result.json` using `constraint_interactions.py --case
+... --result ... --out ...`. This checks the explicit parallel/reflection
+invariants in addition to the shared runner's camera and actual geometry checks.
+Known 3D lines are checked through their two linked endpoint objects; free
+lines are checked through the generated helper mesh.
+
+`python3 tools/synthetic_sync/lens_support.py --case tools/synthetic_sync/cases/lens-recovered-score.json --out /tmp/pm-lens-score`
+traces a real lens search in ordinary Python. It retains each candidate's
+independent supported-pick and withheld-object errors so a lower reported score
+cannot hide worse alignment. See [the reproduced failure and recovery
+controls](lens-results.md); the unit regressions enforce their stated contracts.

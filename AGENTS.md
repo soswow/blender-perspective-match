@@ -39,7 +39,7 @@ Keep this map accurate when you add a module, move a stage, or change a named co
 | --- | --- |
 | VP / single-camera geometry | `core/geometry.py` |
 | Landmark-graph sync | `core/sync/` (package; import as `match_perspective.core.sync`) |
-| Focal search | `core/lens_refine.py` |
+| Focal search | `core/lens_refine.py` (supported-point reprojection score and successful-incumbent support retention) |
 | Lens job input and execution | `scene/__init__.py` (`LensRefinePrep.solver_kwargs`, `run_lens_refine`; `collect_lens_refine_inputs` reads without preparation; apply checks numerical inputs, scene identity and camera targets; `PinSyncSnapshot` also restores state after an application error) |
 | Sync input collection and Diagnose result ownership | `scene/__init__.py` (`collect_sync_request` reads without preparation; Diagnose checks its captured request hash and scene identity before applying diagnostics) |
 | Known-3D pin refine | `core/pin_refine.py` (Iterate Known 3D loop is applied in `scene/__init__.py`) |
@@ -58,14 +58,14 @@ Do not special-case a user `.blend` (filename, match names, landmark names, or t
 
 | Module | Role |
 | --- | --- |
-| `constants.py` | `WORLD_AXIS_DIRECTIONS`, `ACCEPT_RMSE_PX`, `RESECT_MISMATCH_CANDIDATE_LIMIT`, `STRETCHED_PIXEL_RATIO`, `GROUND_PLANE_Z_FRACTION`, `GROUND_SLACK_DEFAULT`, `GROUND_Z_RESIDUAL_PX`, `GROUND_Z_HARD_SLACK`, `KNOWN_3D_SLACK_DEFAULT`, `KNOWN_3D_RESIDUAL_PX`, `MIRROR_SLACK_DEFAULT`, `MIRROR_PLANE_RESIDUAL_PX`, `MIRROR_PAIR_HARD_GAP`, `MIRROR_PAIR_RESIDUAL_PX`, `PLANE_SLACK_DEFAULT`, `PLANE_RESIDUAL_PX`, `PLANE_HARD_SLACK`, `LOG_SCALE_CLIP`, `LINE_FIXED_ANCHOR_MIN`, `LINE_PLANE_MIN_SINE`, `LINE_RECONSTRUCT_TRUNCATE_PX`, `RECOVERED_HUBER_DELTA_PX`, `BA_ACCEPT_RMSE_FLOOR_PX`, `BA_ACCEPT_RMSE_SLACK_PX`, `BA_FREE_LANDMARK_LIMIT`, `SPATIAL_GRID_SIZE`, `SPATIAL_WEIGHT_CLIP`, `RADIAL_WEIGHT_GAIN`, `TRIANGULATION_GN_STEPS`, `TRIANGULATION_ANGLE_WEIGHT_FLOOR`, `TRIANGULATION_PARALLEL_COSINE`, `SYNC_WEIGHT_PROTECT` |
+| `constants.py` | `WORLD_AXIS_DIRECTIONS`, `ACCEPT_RMSE_PX`, `RESECT_MISMATCH_CANDIDATE_LIMIT`, `STRETCHED_PIXEL_RATIO`, `GROUND_PLANE_Z_FRACTION`, `GROUND_SLACK_DEFAULT`, `GROUND_Z_RESIDUAL_PX`, `GROUND_Z_HARD_SLACK`, `KNOWN_3D_SLACK_DEFAULT`, `KNOWN_3D_RESIDUAL_PX`, `MIRROR_SLACK_DEFAULT`, `MIRROR_PLANE_RESIDUAL_PX`, `MIRROR_PAIR_HARD_GAP`, `MIRROR_PAIR_RESIDUAL_PX`, `PLANE_SLACK_DEFAULT`, `PLANE_RESIDUAL_PX`, `PLANE_HARD_SLACK`, `LOG_SCALE_CLIP`, `LINE_FIXED_ANCHOR_MIN`, `LINE_PLANE_MIN_SINE`, `LINE_CONSTRAINT_DIRECTION_TOLERANCE`, `LINE_RECONSTRUCT_TRUNCATE_PX`, `RECOVERED_HUBER_DELTA_PX`, `BA_ACCEPT_RMSE_FLOOR_PX`, `BA_ACCEPT_RMSE_SLACK_PX`, `BA_FREE_LANDMARK_LIMIT`, `SPATIAL_GRID_SIZE`, `SPATIAL_WEIGHT_CLIP`, `RADIAL_WEIGHT_GAIN`, `TRIANGULATION_GN_STEPS`, `TRIANGULATION_ANGLE_WEIGHT_FLOOR`, `TRIANGULATION_PARALLEL_COSINE`, `SYNC_WEIGHT_PROTECT` |
 | `types.py` | `SimilarityTransform`, observations, `SyncSolveResult` |
 | `request.py` | Complete `SyncSolveRequest`, versioned JSON capture/restore and request fingerprint |
 | `projection.py` | Project, rays, triangulate, image-line geometry |
 | `pose.py` | Essential / PnP / IPPE / pairwise register; shared-ground seeds from registered location-enabled cameras |
 | `ground.py` | Calibrated On Ground plane init (`estimate_anchor_ground_plane`) |
-| `lines.py` | Free / Known 3D lines, Is-Parallel-To, supporting-plane angle diagnostics |
-| `mirrors.py` | Point/line Is-Mirror-Of pairs across one scene plane; reflected line fitting within compatible supported planes |
+| `lines.py` | Free / Known 3D lines, Is-Parallel-To, compatible independent axis/CAD direction priors, supporting-plane angle diagnostics |
+| `mirrors.py` | Point/line Is-Mirror-Of pairs across one scene plane; reflected line fitting within compatible supported planes and independently fixed parallel directions |
 | `planes.py` | Is-in-Plane buckets; preserve ground seeds, initialize one-view points, and fit existing lines in independently supported hard planes |
 | `ba.py` | Joint BA, residuals, leave-one-out Diagnose |
 | `solve.py` | `solve_landmark_sync` stages |
@@ -96,6 +96,9 @@ Headless helpers under `tools/` (and `scripts/validate_addon.py`) for investigat
 - `tools/synthetic_sync/verify_jobs.py` checks blocking/background lens inputs through generated Blender RNA and the actual operator worker callback, including planes, slack, locks, roles and shared/per-match lens settings. `--ownership` runs real numerical Diagnose jobs after controlled plane/role/pick edits, missing anchors and scene changes. `--lens-ownership` replays one real improved lens result against input/VP/origin/search/camera edits, with unchanged/unrelated-edit/match-switch controls and independent checks of applied cameras. Rejections must be `StaleSyncResult`, preserve current output state and avoid preparation. `--lens-ownership --apply-failures` injects errors during camera writes, Sync apply and plate rebuilding, with exact state/cache restoration and successful/numerical-refusal controls. Window-manager plumbing is substituted and job callbacks are deferred deterministically; it does not test live UI scheduling. Lens-input mode substitutes numerical search too.
 
 - `tools/synthetic_sync/verify_job_reload.py` — generated-file reload with deferred real worker callbacks; checks cancellation, new-job availability, old finish/cancel/timer isolation and successful new application against independent withheld geometry. Numerical results are solved once and replayed from identical inputs; native UI scheduling is not simulated.
+
+- `tools/synthetic_sync/lens_support.py` — traces real focal searches with exact inputs, supported-pick coverage and independent withheld geometry; successful and refused-start controls. See `tools/synthetic_sync/lens-results.md`.
+- `tools/synthetic_sync/constraint_interactions.py` — paired plane/mirror/parallel cases and float32 controls with independent direction/reflection checks; `--case ... --result ...` post-checks a saved numerical or Blender result. See `tools/synthetic_sync/constraint-interaction-results.md`.
 
 Parallel agent work uses isolated worktrees and distinct file ownership; see `docs/development.md#parallel-agent-work`.
 

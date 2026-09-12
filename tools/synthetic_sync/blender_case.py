@@ -296,11 +296,18 @@ def run_case(case, out):
                 values = [list(landmark.position), list(helper.matrix_world.translation)]
             else:
                 expected = record["line_segments"].get(key)
-                if not landmark.has_line_segment or helper.type != "MESH":
+                if not landmark.has_line_segment:
+                    assessment["violations"].append(f"{key}: reconstructed line segment is missing")
+                    continue
+                values = [[list(landmark.position), list(landmark.position_b)]]
+                if landmark.known_object is not None and landmark.known_object_b is not None:
+                    values.append([list(landmark.known_object.matrix_world.translation),
+                                   list(landmark.known_object_b.matrix_world.translation)])
+                elif helper.type == "MESH":
+                    values.append([list(helper.matrix_world @ v.co) for v in helper.data.vertices])
+                else:
                     assessment["violations"].append(f"{key}: reconstructed line helper is missing")
                     continue
-                values = [[list(landmark.position), list(landmark.position_b)],
-                          [list(helper.matrix_world @ v.co) for v in helper.data.vertices]]
             if expected is None or any(np.shape(value) != np.shape(expected)
                 or not np.allclose(value, expected, atol=1e-5, rtol=1e-6) for value in values):
                 assessment["violations"].append(f"{key}: Blender geometry differs from the solver result")
