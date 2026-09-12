@@ -72,6 +72,17 @@ defined gates: approve the question and oracle, then review a complete evidence
 packet. Escalate earlier only for a blocked decision or contradictory evidence.
 Avoid repeatedly reading partial logs or duplicating the worker's exploration.
 
+For a known failure, keep one worker responsible for diagnosis, the focused
+regression, a narrow fix and relevant controls. Authorize that full scope in the
+brief so a confirmed cause does not require a new planning session merely to
+implement it. Escalate architectural choices, contradictory evidence or exhausted
+budgets; a bounded experiment stopping is not the same as closing its finding.
+The main thread reviews the completed packet and integrates it, rather than
+repeating the numerical investigation. Start from the active finding in the
+roadmap's disposition table and its saved artifacts, not the entire chronological
+history. Apply these reductions immediately; measure whole-task usage to assess
+them without requiring a costly duplicate investigation as a benchmark.
+
 Before a numerical experiment, specify the permitted cases, total solver-call
 budget (including drafts, failed attempts and retries), wall-time limit and stop
 condition. An outer lens search can contain many Sync calls: define and count
