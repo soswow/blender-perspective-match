@@ -827,10 +827,23 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
         opts_row.prop(workspace, "share_lens", text="Same Lens")
         span = opts_row.row(align=True)
         span.ui_units_x = 4
-        span.prop(workspace, "lens_refine_span_percent", text="%")
+        span.prop(
+            workspace,
+            "point_focal_span_percent"
+            if not workspace.share_lens and workspace.estimate_focal_from_points
+            else "lens_refine_span_percent",
+            text="%",
+        )
+        if not workspace.share_lens:
+            point_opts = sync_body.column(align=True)
+            point_opts.prop(workspace, "estimate_focal_from_points")
+            if workspace.estimate_focal_from_points:
+                point_opts.prop(workspace, "focal_pick_sigma_px")
         refine_row = sync_body.row(align=True)
         if operators.lens_refine_is_running():
             opts_row.enabled = False
+            if not workspace.share_lens:
+                point_opts.enabled = False
             progress = refine_row.row(align=True)
             progress.enabled = False
             progress.prop(
@@ -846,6 +859,8 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             )
         elif operators.pin_sync_is_running():
             opts_row.enabled = False
+            if not workspace.share_lens:
+                point_opts.enabled = False
             progress = refine_row.row(align=True)
             progress.enabled = False
             progress.prop(

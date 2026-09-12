@@ -176,6 +176,27 @@ jobs:
             --case tools/synthetic_sync/cases/plane-mirror-parallel.json \
             --result "${RUNNER_TEMP}/synthetic-blender/constraint-interactions/reopened/result.json" \
             --out "${RUNNER_TEMP}/synthetic-blender/constraint-interactions/reopened/checked"
+      - name: Point FOV fit, refusal and saved camera alignment
+        timeout-minutes: 3
+        env:
+          OPENBLAS_NUM_THREADS: "1"
+          OMP_NUM_THREADS: "1"
+        run: |
+          blender --factory-startup --disable-autoexec -b --python-exit-code 1 \
+            --python tools/synthetic_sync/verify_point_focal_apply.py -- \
+            --out "${RUNNER_TEMP}/synthetic-blender/point-focal-apply"
+          # Fixed verification budget: one inner Sync and one bundle per case.
+          for case in no-vp-mixed-guessedK no-vp-shared-guessedK no-vp-weak-baseline-guessedK no-vp-pure-rotation-guessedK; do
+            blender --factory-startup --disable-autoexec -b --python-exit-code 1 \
+              --python tools/synthetic_sync/verify_point_focal_numerical_blender.py -- \
+              --case "$case" --out "${RUNNER_TEMP}/synthetic-blender/point-focal/$case"
+          done
+          # Fresh-process reopening adds no numerical solves.
+          for case in no-vp-mixed-guessedK no-vp-shared-guessedK; do
+            blender --factory-startup --disable-autoexec -b --python-exit-code 1 \
+              --python tools/synthetic_sync/verify_point_focal_numerical_blender.py -- \
+              --case "$case" --out "${RUNNER_TEMP}/synthetic-blender/point-focal/$case" --reopen
+          done
       - uses: actions/upload-artifact@v4
         if: always()
         with:

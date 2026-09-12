@@ -1558,6 +1558,43 @@ class PMWorkspace(bpy.types.PropertyGroup):
         default=True,
         update=_redraw,
     )
+    estimate_focal_from_points: bpy.props.BoolProperty(
+        name="Estimate FOV from Points",
+        description=(
+            "Estimate each still's FOV jointly from shared point picks when "
+            "Same Lens is off; requires enough camera overlap and uses no VP lines"
+        ),
+        default=False,
+        update=_redraw,
+    )
+    point_focal_span_percent: bpy.props.FloatProperty(
+        name="Lens Search %",
+        description=(
+            "Maximum focal change for Estimate FOV from Points as ± percent "
+            "of each still's current fx (40 = search 60%–140% of current focal)"
+        ),
+        default=40.0,
+        min=1.0,
+        soft_max=60.0,
+        max=80.0,
+        step=100,
+        precision=0,
+        update=_redraw,
+    )
+    focal_pick_sigma_px: bpy.props.FloatProperty(
+        name="Pick Error (px)",
+        description=(
+            "Assumed standard deviation of point-pick error in pixels for the "
+            "approximate local 95% FOV interval; this is an assumption, not "
+            "a measured calibration accuracy"
+        ),
+        default=1.0,
+        min=0.1,
+        soft_max=2.0,
+        max=10.0,
+        precision=2,
+        update=_redraw,
+    )
     ground_slack: bpy.props.FloatProperty(
         name="Ground Slack",
         description=(

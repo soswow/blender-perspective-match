@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Optional independent FOV estimation from shared point picks, with approximate uncertainty ranges and refusal of weak or unsupported setups.
+
 ### Fixed
 - Solve Sync keeps two-view camera baselines from collapsing while registering noisy shared point picks.
 

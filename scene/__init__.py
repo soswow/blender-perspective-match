@@ -3821,6 +3821,14 @@ def solve_and_apply_sync(context: bpy.types.Context):
     if not result.success:
         raise SyncSolveRejected(result)
 
+    _apply_sync_solve_result(context, result, matches)
+    return result
+
+
+def _apply_sync_solve_result(context: bpy.types.Context, result, matches) -> None:
+    """Apply an accepted Sync result, including a jointly fitted lens result."""
+    space = properties.workspace(context)
+    anchor = properties.anchor_root(context)
     root_by_name = {root.name: root for root in properties.iter_match_roots()}
     record_sync_last_ok(set(result.similarities))
     for match_id, similarity in result.similarities.items():
@@ -3876,7 +3884,6 @@ def solve_and_apply_sync(context: bpy.types.Context):
 
     sync_landmark_empties(context)
     properties.tag_sync_ui_redraw(context)
-    return result
 
 
 def clear_sync_transforms(context: bpy.types.Context) -> None:
@@ -3925,6 +3932,8 @@ class LensRefinePrep:
     lock_translation: bool = False
     fixed_similarities: dict | None = None
     share_lens: bool = True
+    estimate_focal_from_points: bool = False
+    pick_sigma_px: float = 1.0
     ground_slack: float | None = None
     known_3d_slack: float | None = None
     location_match_ids: set | None = None
@@ -3963,7 +3972,9 @@ def prepare_lens_refine(context: bpy.types.Context) -> LensRefinePrep:
     """Prepare origins, then collect the lens job's inputs and apply targets."""
     if properties.anchor_root(context) is None:
         raise ValueError("Choose an anchor match first")
-    ensure_origins_from_ground_landmarks(context)
+    space = properties.workspace(context)
+    if not (bool(space.estimate_focal_from_points) and not bool(space.share_lens)):
+        ensure_origins_from_ground_landmarks(context)
     return collect_lens_refine_inputs(context)
 
 
@@ -3990,6 +4001,7 @@ def collect_lens_refine_inputs(context: bpy.types.Context) -> LensRefinePrep:
 
     space = properties.workspace(context)
     share_lens = bool(getattr(space, "share_lens", True))
+    point_focal = bool(getattr(space, "estimate_focal_from_points", False)) and not share_lens
     anchor = properties.anchor_root(context)
     if anchor is None:
         raise ValueError("Choose an anchor match first")
@@ -4049,12 +4061,13 @@ def collect_lens_refine_inputs(context: bpy.types.Context) -> LensRefinePrep:
             root != anchor and properties.session_sync_locks_pose(settings)
         )
         freeze = pose_locked or (
-            (not share_lens) and (settings.vp_mode == "1" or not can_orient)
+            (not point_focal) and (not share_lens)
+            and (settings.vp_mode == "1" or not can_orient)
         )
         # Same Lens may still change a locked match's focal, but it must keep
         # that match's private camera pose as well as its fixed root transform.
         reorient = (
-            not pose_locked and can_orient and settings.vp_mode != "1"
+            not point_focal and not pose_locked and can_orient and settings.vp_mode != "1"
         )
         origin_image = None
         if settings.origin_is_set:
@@ -4087,9 +4100,14 @@ def collect_lens_refine_inputs(context: bpy.types.Context) -> LensRefinePrep:
         known_lines=known_lines,
         parallel_pairs=parallel_pairs,
         anchor_id=anchor.name,
-        fx_span=max(float(space.lens_refine_span_percent), 1.0) / 100.0,
+        fx_span=max(float(
+            space.point_focal_span_percent if point_focal
+            else space.lens_refine_span_percent
+        ), 1.0) / 100.0,
         root_by_name=root_by_name,
         share_lens=share_lens,
+        estimate_focal_from_points=point_focal,
+        pick_sigma_px=float(space.focal_pick_sigma_px),
         **collect_sync_solve_kwargs(context),
     )
     prep.source_scene_uid = int(context.scene.session_uid)
@@ -4097,8 +4115,30 @@ def collect_lens_refine_inputs(context: bpy.types.Context) -> LensRefinePrep:
     return prep
 
 
+def _point_focal_interval_message(refine_result, prep: LensRefinePrep) -> str:
+    """Describe fitted horizontal FOV and conditional local intervals."""
+    entries = []
+    for match_id, (low_fx, high_fx) in sorted(refine_result.focal_intervals.items()):
+        calibration = refine_result.calibrations.get(match_id)
+        if calibration is None:
+            continue
+        width = calibration.intrinsics.image_width
+        low_fov = core.hfov_from_focal(high_fx, width)
+        high_fov = core.hfov_from_focal(low_fx, width)
+        entries.append(
+            f"{match_id}: {calibration.hfov_degrees:.1f}° "
+            f"[{low_fov:.1f}–{high_fov:.1f}°]"
+        )
+    if not entries:
+        return ""
+    return (
+        f"At fit, horizontal FOV and approximate local 95% intervals "
+        f"(assumed pick error {prep.pick_sigma_px:g}px): " + "; ".join(entries)
+    )
+
+
 def apply_lens_refine_result(context: bpy.types.Context, refine_result, prep: LensRefinePrep):
-    """Write refined calibrations and re-run Solve Sync (main thread only)."""
+    """Apply accepted lenses and their Sync result on the main thread."""
     space = properties.workspace(context)
     if refine_result.cancelled:
         space.sync_status = refine_result.message
@@ -4117,6 +4157,21 @@ def apply_lens_refine_result(context: bpy.types.Context, refine_result, prep: Le
         space.sync_status = message
         space.lens_refine_progress = 0.0
         raise StaleSyncResult(message)
+
+    point_focal = bool(getattr(refine_result, "point_focal_mode", False))
+    if point_focal != prep.estimate_focal_from_points:
+        raise ValueError("Lens job returned a result from another focal mode")
+    if point_focal and getattr(refine_result, "refusal_reason", ""):
+        space.sync_status = refine_result.message or refine_result.refusal_reason
+        space.lens_refine_progress = 0.0
+        properties.tag_viewport_redraw(context)
+        return refine_result, None
+    if point_focal and (
+        not refine_result.improved
+        or refine_result.sync_result is None
+        or not refine_result.sync_result.success
+    ):
+        raise ValueError("Point FOV result has no accepted joint camera and landmark fit")
 
     snapshot = capture_pin_sync_snapshot(context)
     held_images = {}
@@ -4155,12 +4210,18 @@ def apply_lens_refine_result(context: bpy.types.Context, refine_result, prep: Le
                 update_scene_camera=True,
             )
 
-        # A numerical refusal retains improved lenses; an application error
-        # must not be presented as an ordinary failed geometric fit.
-        try:
-            sync_result = solve_and_apply_sync(context)
-        except SyncSolveRejected as error:
-            sync_result = error.result
+        if point_focal:
+            sync_result = refine_result.sync_result
+            _apply_sync_landmark_diagnostics(context, sync_result)
+            # The fitted calibrations were just written above. Reusing the old
+            # solve inputs here would overwrite their fx/fy with stale values.
+            _apply_sync_solve_result(context, sync_result, ())
+        else:
+            # The legacy search applies its accepted lenses before Solve Sync.
+            try:
+                sync_result = solve_and_apply_sync(context)
+            except SyncSolveRejected as error:
+                sync_result = error.result
         from . import distortion as distortion_module
 
         distortion_module.rebuild_undistorted_plates(context)
@@ -4180,6 +4241,10 @@ def apply_lens_refine_result(context: bpy.types.Context, refine_result, prep: Le
                 bpy.data.images.remove(image)
 
     space.sync_status = refine_result.message + " · " + sync_result.message
+    if point_focal:
+        interval_message = _point_focal_interval_message(refine_result, prep)
+        if interval_message:
+            space.sync_status += " · " + interval_message
     space.lens_refine_progress = 0.0
     properties.tag_viewport_redraw(context)
     return refine_result, sync_result

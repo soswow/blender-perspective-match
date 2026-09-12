@@ -1,0 +1,20 @@
+{
+  "name": "planar",
+  "request_sha256": "0e132bb04e4291ffb8869bb25e5ea18ccac04fa01a39d40c0bd718f02889013a",
+  "fitted": {
+    "accepted": false,
+    "reason": "Point picks are compatible with a homography; depth and independent FOV are ambiguous",
+    "intervals_px": {},
+    "initial_rmse_px": null,
+    "fitted_rmse_px": null,
+    "record": {
+      "success": false,
+      "message": "Point picks are compatible with a homography; depth and independent FOV are ambiguous",
+      "cameras": {},
+      "landmarks": {},
+      "reported_rmse_px": null
+    }
+  },
+  "assessment": null,
+  "elapsed_s": 0.0014298330061137676
+}

@@ -1,0 +1,27 @@
+{
+  "sync_source_sha256": "25a833b7d70372f2340d0085cf9ecb6fdc7a6825861c6bb55cf6a9c9fff7a6ed",
+  "environment": {
+    "python": "3.12.6",
+    "numpy": "2.0.1",
+    "platform": "macOS-26.5-arm64-arm-64bit",
+    "revision": "2eb70888130405092ae0ad2184a389cf9f8092b4",
+    "working_tree_dirty": true
+  },
+  "executable": "/Users/sasha/venvs/my/bin/python",
+  "sigma_px": 1.0,
+  "cases": [
+    "no-vp-weak-baseline-guessedK",
+    "no-vp-pure-rotation-guessedK",
+    "planar"
+  ],
+  "numerical_limits": {
+    "max_inner_sync": 12,
+    "per_sync_seconds": 120,
+    "cumulative_sync_seconds": 600,
+    "max_bundle": 12,
+    "max_bundle_iterations": 100,
+    "max_bundle_seconds": 30,
+    "max_total_bundle_seconds": 300,
+    "outer_seconds": 420
+  }
+}

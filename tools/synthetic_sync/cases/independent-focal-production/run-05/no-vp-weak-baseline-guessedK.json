@@ -1,0 +1,36 @@
+{
+  "name": "no-vp-weak-baseline-guessedK",
+  "request_sha256": "c1b8013fbd53cb4ca0c2efc29215e40c5fa57d56b5838f4a4b57d075ba75771b",
+  "fitted": {
+    "accepted": false,
+    "reason": "Point picks are compatible with a homography; depth and independent FOV are ambiguous",
+    "intervals_px": {},
+    "initial_rmse_px": null,
+    "fitted_rmse_px": null,
+    "record": {
+      "success": false,
+      "message": "Point picks are compatible with a homography; depth and independent FOV are ambiguous",
+      "cameras": {},
+      "landmarks": {},
+      "reported_rmse_px": null
+    }
+  },
+  "assessment": {
+    "classification": "useful_refusal",
+    "focal_relative_error": {},
+    "focal_within_limit": false,
+    "independent_geometry": {
+      "passed": false,
+      "violations": [
+        "Solver rejected a constrained case: Point picks are compatible with a homography; depth and independent FOV are ambiguous",
+        "Need four reconstructed training landmarks to align an unscaled scene"
+      ],
+      "cameras": {},
+      "gauge": "similarity",
+      "expected_outcome": "solve",
+      "warnings": [],
+      "line_accuracy_failures": []
+    }
+  },
+  "elapsed_s": 0.014820375014096498
+}

@@ -1,4 +1,4 @@
-"""Refine per-match focal length from landmark sync + a VP line prior.
+"""Refine focal length from landmark sync with VP priors or free 2D points.
 
 Sync keeps intrinsics frozen. This outer loop varies ``fx`` (= ``fy``), rebuilds
 orientation from VP lines at each candidate (locked-focal refine), and scores
@@ -15,6 +15,9 @@ import numpy as np
 
 from . import geometry as core
 from . import sync as sync_module
+from .focal_bundle import (
+    DEFAULT_POINT_FOCAL_SPAN, MAX_CAMERAS, MAX_POINTS, fit_independent_focals,
+)
 
 
 # Soft prior: 1 px endpoint-equivalent VP line RMS ≈ this many sync pixels.
@@ -62,6 +65,10 @@ class LensRefineResult:
     message: str = ""
     improved: bool = False
     cancelled: bool = False
+    point_focal_mode: bool = False
+    # Absolute 95% local focal intervals in pixels at the stated pick sigma.
+    focal_intervals: dict[str, tuple[float, float]] = field(default_factory=dict)
+    refusal_reason: str = ""
 
 
 def estimate_refine_evaluation_count(
@@ -347,6 +354,7 @@ def _run_sync(
     plane_slack: float | None = None,
     location_match_ids: set[str] | None = None,
     readonly_match_ids: set[str] | None = None,
+    cancel_check=None,
 ) -> sync_module.SyncSolveResult:
     sync_matches = [
         sync_module.SyncMatchInput(match_id=match_id, calibration=calibrations[match_id])
@@ -373,6 +381,7 @@ def _run_sync(
         plane_slack=plane_slack,
         location_match_ids=location_match_ids,
         readonly_match_ids=readonly_match_ids,
+        cancel_check=cancel_check,
     )
 
 
@@ -388,7 +397,7 @@ def refine_lenses_from_landmarks(
     vp_weight: float = DEFAULT_VP_WEIGHT,
     max_vp_line_rms: float = DEFAULT_MAX_VP_LINE_RMS,
     max_vp_angle_deg: float = DEFAULT_MAX_VP_ANGLE_DEG,
-    fx_span: float = DEFAULT_FX_SPAN,
+    fx_span: float | None = None,
     passes: int = 2,
     coarse_samples: int = 9,
     refine_samples: int = 7,
@@ -397,6 +406,8 @@ def refine_lenses_from_landmarks(
     lock_rotation: bool = False,
     lock_translation: bool = False,
     share_lens: bool = False,
+    estimate_focal_from_points: bool = False,
+    pick_sigma_px: float = 1.0,
     fixed_similarities: dict[str, sync_module.SimilarityTransform] | None = None,
     ground_slack: float | None = None,
     known_3d_slack: float | None = None,
@@ -425,6 +436,9 @@ def refine_lenses_from_landmarks(
     ``cancel_check`` is an optional ``() -> bool`` polled between evaluations.
     ``progress_callback(step, total, label)`` reports progress (may be called
     from a worker thread — keep it bpy-free).
+
+    ``estimate_focal_from_points`` opts into a separate unconstrained point
+    bundle fit, with an explicit per-coordinate pixel-noise assumption.
     """
     if not matches:
         raise ValueError("No matches to refine")
@@ -432,6 +446,91 @@ def refine_lenses_from_landmarks(
     match_ids = [item.match_id for item in matches]
     if anchor_id not in match_map:
         raise ValueError("Anchor match is missing from the lens refine set")
+    if fx_span is None:
+        fx_span = DEFAULT_POINT_FOCAL_SPAN if estimate_focal_from_points else DEFAULT_FX_SPAN
+
+    if estimate_focal_from_points:
+        # This path fits the existing private camera poses through root
+        # similarities. It is deliberately restricted to unconstrained 2D
+        # point graphs: silently omitting any constraint would change meaning.
+        initial_cals = {item.match_id: item.base_calibration for item in matches
+                        if item.base_calibration is not None}
+        empty_sync = sync_module.SyncSolveResult(
+            similarities={}, landmarks={}, mean_reprojection_px=float("inf"),
+            per_match_rmse_px={}, per_landmark_rmse_px={}, message="Point focal refused",
+            success=False)
+
+        def refusal(reason: str, *, initial=empty_sync, initial_rmse=float("inf"),
+                    cancelled=False) -> LensRefineResult:
+            return LensRefineResult(
+                calibrations=initial_cals, sync_result=initial,
+                initial_cost=initial_rmse, final_cost=initial_rmse,
+                initial_sync_rmse=initial_rmse, final_sync_rmse=initial_rmse,
+                message=reason, improved=False, cancelled=cancelled,
+                point_focal_mode=True, refusal_reason=reason)
+
+        if len(initial_cals) != len(matches):
+            return refusal("Point focal estimation needs a saved private camera solve for every match")
+        if not 3 <= len(matches) <= MAX_CAMERAS:
+            return refusal(f"Point focal estimation needs 3–{MAX_CAMERAS} cameras")
+        point_count = len({item.landmark_id for item in observations})
+        if not 8 <= point_count <= MAX_POINTS:
+            return refusal(f"Point focal estimation needs 8–{MAX_POINTS} free points")
+        if not np.isfinite(pick_sigma_px) or pick_sigma_px <= 0:
+            return refusal("Pick sigma must be positive and finite")
+        if not np.isfinite(fx_span) or not 0 < fx_span < 1:
+            return refusal("Focal search span must lie between 0 and 100%")
+
+        unsupported = (
+            share_lens or bool(known_world) or bool(line_observations) or
+            bool(known_lines) or bool(parallel_pairs) or bool(fixed_similarities) or
+            bool(mirror_pairs) or mirror_plane is not None or bool(plane_groups) or
+            bool(readonly_match_ids) or lock_rotation or lock_translation or
+            any(item.on_ground for item in observations) or
+            any(any(item.line_bundles.values()) or item.reorient_from_vp
+                for item in matches) or
+            (location_match_ids is not None and set(location_match_ids) != set(match_ids))
+        )
+        if unsupported:
+            return refusal("Point focal estimation supports free 2D points only; remove camera roles, pose locks and geometric constraints")
+        if cancel_check and cancel_check():
+            return refusal("Cancelled", cancelled=True)
+        if progress_callback:
+            progress_callback(0, 101, "Registering cameras for point focal estimation")
+        try:
+            initial = _run_sync(
+                initial_cals, match_ids, observations, [], anchor_id, {}, {}, [],
+                fixed_similarities=None, lock_rotation=False, lock_translation=False,
+                location_match_ids=location_match_ids, cancel_check=cancel_check)
+        except sync_module.SyncCancelled:
+            return refusal("Cancelled", cancelled=True)
+        initial_rmse = _sync_rmse(initial, observations, initial_cals)
+        if not initial.success:
+            return refusal("Initial camera registration did not support every camera and point",
+                           initial=initial, initial_rmse=initial_rmse)
+        def point_progress(step: int, total: int, label: str) -> None:
+            if progress_callback:
+                progress_callback(step + 1, total + 1, label)
+        outcome = fit_independent_focals(
+            initial_cals, observations, initial, anchor_id=anchor_id,
+            pick_sigma_px=pick_sigma_px, fx_span=fx_span,
+            cancel_check=cancel_check,
+            progress_callback=point_progress)
+        if not outcome.accepted or outcome.sync_result is None:
+            return refusal(outcome.reason, initial=initial, initial_rmse=initial_rmse,
+                           cancelled=outcome.reason == "Cancelled")
+        if progress_callback:
+            progress_callback(101, 101, "Point focal estimation complete")
+        return LensRefineResult(
+            calibrations=outcome.calibrations, sync_result=outcome.sync_result,
+            initial_cost=outcome.initial_rmse_px, final_cost=outcome.fitted_rmse_px,
+            initial_sync_rmse=outcome.initial_rmse_px,
+            final_sync_rmse=outcome.fitted_rmse_px,
+            fx_deltas={key: float(outcome.calibrations[key].intrinsics.fx -
+                                  initial_cals[key].intrinsics.fx) for key in match_ids},
+            message=f"Point focal fit · {outcome.fitted_rmse_px:.2f}px · 95% intervals at σ={pick_sigma_px:g}px",
+            improved=True, point_focal_mode=True,
+            focal_intervals=outcome.intervals_px)
 
     calibrations = {}
     for item in matches:

@@ -1,5 +1,5 @@
 **Perspective Match: reliability and AI development proposal**
-Investigation baseline: commit `5d876f6` / extension 0.5.0, 10 September 2026. Latest product fix and regression checkpoint: noisy pair-baseline collapse, 12 September 2026, described under **Current frontier**. Read that section first; the dated checkpoints preserve history, and the original proposal is retained for rationale rather than as an implementation checklist.
+Investigation baseline: commit `5d876f6` / extension 0.5.0, 10 September 2026. Latest product checkpoint: optional independent FOV estimation from free point picks, 12 September 2026, described under **Current frontier**. Read that section first; the dated checkpoints preserve history, and the original proposal is retained for rationale rather than as an implementation checklist.
 
 **My recommendation is to make every solver decision reproducible from a complete, versioned input, and judge it with checks independent of the implementation.** Build that foundation around the existing fixtures, Blender smoke test, and diagnostics. Then use it to improve calibration ownership, quality reporting, and selected solver decisions. This would turn a debugging session into an addition to a reusable capability.
 
@@ -22,16 +22,16 @@ disposition changes; the dated reports below retain the original measurements.
 | Finding | Current disposition | Evidence / next action |
 | --- | --- | --- |
 | Exact 2D-only startup accepts inaccurate geometry despite correct intrinsics | **Fixed and verified in `cc7d14d`** | [Frozen case and follow-up](../tools/synthetic_sync/no-vp-bootstrap-results.md): robust anchor connection plus direct/bridge competition restore shared- and mixed-focal true-K geometry. Actual old-solver regression fails; integrated 374-test suite and Blender solve/apply/reopen pass. |
-| Noisy calibrated 2D-only startup collapses camera baselines | **Pair-refinement defect fixed; integrated validation below** | [Noisy continuation](../tools/synthetic_sync/independent-focal-results.md): ray-distance refinement could reduce its objective by shrinking the camera baseline. Holding its unobservable scale gauge prevents that collapse. The old regression fails; fixed noisy mixed/shared fitted RMSE is 0.376/0.319 px with all withheld features in front. Mixed withheld RMS 1.974 px and center error 0.068 object diagonals remain accuracy findings, not closed by this fix. |
+| Noisy calibrated 2D-only startup collapses camera baselines | **Fixed and verified in `2eb7088`; residual accuracy findings remain** | [Noisy continuation](../tools/synthetic_sync/independent-focal-results.md): ray-distance refinement could reduce its objective by shrinking the camera baseline. Holding its unobservable scale gauge prevents that collapse. The old regression fails; fixed noisy mixed/shared fitted RMSE is 0.376/0.319 px with all withheld features in front. Mixed withheld RMS 1.974 px and center error 0.068 object diagonals remain accuracy findings, not closed by this fix. |
 | Guessed intrinsics can produce low-error but inaccurate free 3D | **Open quality/uncertainty gap** | [Unknown-focal continuation](../tools/synthetic_sync/unknown-focal-results.md): shared and mixed guessed-K Sync runs fit at ~0.49 px but fail withheld geometry. The actual Same Lens route succeeds on shared K with an explicit ±25% range; a general warning or acceptance rule needs stronger evidence. |
-| Pure rotation is accepted as reconstructed free 3D | **Open observability defect** | [Frozen true/guessed-K rotation controls](../tools/synthetic_sync/unknown-focal-results.md) both accept 23 reconstructed points at near-zero fitted RMSE despite unobservable depth. A parallax cutoff selected from only these controls is unjustified; determine a stable geometry-only warning/refusal contract with noisy and near-critical controls. |
+| Pure rotation is accepted as reconstructed free 3D | **Ordinary Sync remains open; new point-FOV mode refuses preserved controls** | [Frozen true/guessed-K rotation controls](../tools/synthetic_sync/unknown-focal-results.md) expose ordinary Sync's depth ambiguity. The optional point-FOV mode screens raw picks for a connected graph of non-homographic support, checks the stated noise model and rejects deficient local geometry. Its tested refusals do not establish a general Sync ambiguity detector or a universal false-positive rate. |
 | Mild noisy free-scale/overhead cases and five of ten noisy graph cases exceed provisional accuracy limits | **Open accuracy findings; cause not established** | [Initial pilot](../tools/synthetic_sync/pilot-results.md), [evidence placement](../tools/synthetic_sync/evidence-results.md), [graph sweep](../tools/synthetic_sync/graph-results.md). Reassess after the exact startup fix; compare input uncertainty with reconstruction sensitivity before claiming a solver defect. |
 | Weak mirror-line geometry under noisy or biased strokes | **Geometry limit still open; weak-support warning fixed** | [Constraint evidence](../tools/synthetic_sync/constraint-results.md). Depth is poorly determined by nearly coincident supporting planes. More copies of the same weak evidence do not establish accuracy; test better evidence or an honest uncertainty response. |
 | Contradictory recovered camera remains above the withheld limit | **Open inconsistent-evidence outcome; healthy-camera corruption fixed** | [Recovery evidence](../tools/synthetic_sync/recovery-results.md), [line-bearing continuation](../tools/synthetic_sync/recovery-acceptance-results.md). Keep the remaining ~2.43 px flag; do not expect exact geometry from intentionally inconsistent picks. |
 | Biased hard/soft Known 3D references displace geometry | **Intentional model conflict, not a demonstrated arithmetic defect** | [Bias controls](../tools/synthetic_sync/biased-reference-results.md). Softening helps but does not certify truth. Current prior-release pilot adds no detection beyond the existing anchor warning; test hidden bias before adding a product warning. |
 | Promoted reconstruction points treated as trusted Known 3D | **Open workflow/representation issue** | User clarification below: these are working estimates with shared uncertainty. Preserve this distinction in future fitting/diagnostics; no automatic promotion to independent evidence. |
 | Recovered-update acceptance does not protect the full line/constraint objective | **Open coverage and acceptance-contract gap** | [Accepted-stage control](../tools/synthetic_sync/accepted-recovery-results.md). No remaining natural accepted-update damage is established by that control; find a paired damaging case before changing acceptance policy. |
-| Independent unknown focal lengths without VPs | **Open product capability; numerical prototype only** | [Bounded three-focal prototype](../tools/synthetic_sync/independent-focal-results.md) recovered the exact shared case; the mixed candidate was highly accurate but hit its declared iteration cap. Under an assumed 0.5 px pick-noise model, even those exact fits have broad local focal uncertainty. Weak translation and pure rotation remain unsupported; do not promote to the UI from this evidence. |
+| Independent unknown focal lengths without VPs | **Implemented and verified for bounded free-point graphs** | [Production controls](../tools/synthetic_sync/cases/independent-focal-production/README.md), `core/focal_bundle.py`, and [user workflow](sync.md#independent-fov-estimates-from-shared-points-no-vp-lines). NumPy joint fitting accepts exact mixed/shared and four-view controls; translated planar, weak and rotation controls are refused. Real Blender mixed/shared fit/apply/reopen and weak/rotation no-op refusals pass. Local uncertainty is conditional; noisy 2% focal / 1 px withheld flags remain. Unsupported constraints, distortion and unknown crop offsets are not handled by this mode. |
 | Native modal scheduling, undo/redo, platform/package/hosted CI | **Unverified boundaries** | Generated preparation/job/reopen checks cover specific paths, not these broader claims. Select one bounded check when it reaches priority. |
 | Line Jacobian reparameterization / performance prototypes | **Not promoted; no demonstrated overall improvement** | [Line-position experiments](../tools/synthetic_sync/line-position-gauge-results.md). The actual projection defect was fixed; a prototype with worse geometry is not a pending fix to ship. |
 
@@ -51,8 +51,78 @@ case-specific contracts or a claim that every geometry is now accurate.
 
 **Objective and scope:** improve Sync reliability through reproducible evidence and independent checks of the rest of the object, beyond fitted picks. Both visual alignment and metric accuracy matter. Synthetic scenes are the primary corpus; private projects are optional evidence. Images are optional. **Latest user steering:** reliable FOV estimation from shared landmarks without dependable VP lines is now a priority; both shared-lens sets and mixed lenses/zooms/crops are common. Image transformations and distortion are now in scope when they affect that workflow. Automatic AprilTag/VP detection remains optional, not a prerequisite. Earlier deferrals below are historical.
 
-**Newest result:** the [noisy focal continuation](../tools/synthetic_sync/independent-focal-results.md)
-led to a production pair-registration fix. Correctly calibrated noisy cases
+**Newest result:** **Estimate FOV from Points** is an opt-in product mode under
+Refine Lenses when Same Lens is off. It jointly fits independent focal lengths,
+camera poses and free 3D points without VP lines or Known 3D. The implemented
+scope is 3–8 cameras and 8–80 free points, at least eight picks per camera and
+two views per point, fixed principal points and zero distortion. Existing
+constraints and unsupported camera roles cause an explicit refusal; they are
+not silently omitted. Manual FOV supplies the starting values, with a separate
+default ±40% focal window. Existing lens searches keep their ±18% default.
+The full workflow is in [the Sync guide](sync.md#independent-fov-estimates-from-shared-points-no-vp-lines).
+
+The mode uses fresh Sync initialization followed by a NumPy-only joint fit,
+so Blender needs no new SciPy dependency. Acceptance requires raw-pick depth
+evidence, convergence, complete support, positive observed depths, an interior
+focal solution, acceptable per-camera fit and a full-rank local model. The
+explicit Pick Error setting controls a noise-consistency check and local 95%
+focal intervals. Boosting landmark weights does not pretend the original
+clicks became more precise. These are local conditional sensitivity estimates,
+not certified calibration accuracy or a search for every alternative solution.
+A homography-compatible scene may be planar or rotating; the refusal asks for
+translated views and depth-spread points without claiming to identify motion.
+
+Accepted fits apply focal lengths, poses and points together through the
+existing rollback machinery, without another Solve Sync replacing the fitted
+geometry. Refusals leave scene geometry, cameras and plates unchanged. Stale
+inputs and switched modes are rejected. Restart Blender for the new RNA fields.
+Ordinary Solve Sync still lacks a general ambiguity guard; unknown crops,
+distortion, biased/correlated picks and promoted-reference uncertainty remain
+open boundaries.
+
+**Point-FOV integration checkpoint:** 393 numerical tests passed in 419.423
+seconds with the OpenCV environment (two absent optional sample-YAML skips).
+Blender 5.1.0 passed actual mixed/shared guessed-K numerical fit, independent
+withheld-object projection checks through evaluated native cameras, joint
+application and fresh-process read-only reopening of both generated scenes.
+Weak-baseline and pure-rotation cases returned useful refusals without scene
+changes. A separate controlled-result Blender check passed direct application,
+stale-input/mode rejection, rollback and image ownership without numerical
+solves. The existing broad Blender add-on smoke test also passed. The same
+fixed four-case and reopen checks are now wired into Blender
+CI with a three-minute step limit and artifact retention; hosted execution has
+not been verified. Native modal scheduling, undo/redo and platform packaging
+remain unverified; these checks do not claim them.
+
+Verification used four reserved inner Sync calls and four point-bundle calls;
+reopening added zero solves. Logs, requests and generated files are under
+`.local/point-focal-validation/`. The separate numerical exploration used ten
+of twelve reserved Sync calls and ten of twelve bundle attempts; its frozen
+requests, failed attempts and exact per-run source archives are preserved in
+[the production corpus](../tools/synthetic_sync/cases/independent-focal-production/README.md).
+Older prototype results are still historical; the new archives do not repair
+their provenance retroactively. No private project was modified. Sol workers
+implemented the numerical mode and Blender integration independently; main
+review corrected the numerical guards, covariance interpretation and native
+input/application contract before running integrated verification. This is
+delegation in practice, not a measured token-savings claim. Code, tests, tools,
+changelog and documentation belong to one coherent feature commit.
+
+**Next priorities:** challenge this mode with held-out noisy and biased picks,
+alternative initial FOVs, partial overlap and crop/principal-point errors;
+measure erroneous acceptance as well as useful refusal and withheld geometry.
+Use those results to improve the product's evidence guidance and decide which
+constraints deserve support. Separately extend honest ambiguity handling to
+ordinary Sync and preserve the distinction between promoted working references
+and independent Known 3D. Do not close the noisy mixed accuracy flag solely
+because the focal fit converges or its local interval is finite. Each bounded
+experiment must feed a fix, a usable diagnostic or an explicit unresolved
+finding; exhausting its solve budget is not by itself a reason to stop the
+authorized development task.
+
+**Previous product result — noisy pair-baseline fix:** the
+[noisy focal continuation](../tools/synthetic_sync/independent-focal-results.md)
+led to `2eb7088`. Correctly calibrated noisy cases
 previously accepted distorted geometry with withheld features behind cameras;
 two-view ray refinement now holds its seed baseline length instead of shrinking
 it to improve the residual. This removes an invalid optimization direction;
@@ -64,7 +134,8 @@ but weak-motion fits still had wrong depth. Mixed/shared noisy fits improved
 withheld alignment while retaining broad local focal uncertainty (8.7–22.2%
 upper excursions under an explicit 0.5 px noise assumption). Pure-rotation
 fits fabricated parallax despite raw picks remaining homography-compatible.
-No independent no-VP lens mode or general ambiguity detector is shipped.
+At that checkpoint no independent no-VP lens mode or general ambiguity detector
+was shipped; the point-FOV mode above supersedes the former limitation only.
 Historical guessed-K focal fits used the pre-fix initializer; their results
 must not be presented as post-fix performance. The preceding
 [unknown-focal continuation](../tools/synthetic_sync/unknown-focal-results.md)
@@ -85,7 +156,8 @@ Implementation, tests, changelog, user docs and this review checkpoint form one
 coherent fix commit. The earlier three unpublished prototype commits were
 combined in `3045dd4`; published/release history was left intact.
 
-**Next decision:** evaluate independent no-VP focal recovery from the corrected
+**Historical next decision (now addressed by the point-FOV implementation):**
+evaluate independent no-VP focal recovery from the corrected
 startup, with model comparison and explicit uncertainty. Optimizer convergence,
 positive fitted depths and fitted parallax all failed to identify ambiguous
 motion in the preserved controls. A homography-compatible scene can be planar
@@ -93,7 +165,7 @@ or rotating; do not turn this small corpus into a cutoff that claims to identify
 the motion. The surviving noisy mixed accuracy flag also needs stronger evidence
 before being called another arithmetic defect or closed as expected noise.
 
-**Independent-focal integration checkpoint:** prototype/evidence, guards and
+**Earlier independent-focal prototype checkpoint:** prototype/evidence, guards and
 corpus checks are combined in `3045dd4` (the three unpublished integration
 commits were squashed; their original history remains on
 `archive/independent-focal-before-squash`). Shared-lens user instructions are
@@ -142,8 +214,8 @@ this pilot.
 | --- | --- | --- |
 | Reproduction and independent truth | Complete versioned `SyncSolveRequest`; arbitrary saved-scene capture/replay; product/probe parity; synthetic camera, point, line and withheld-object checks; order/cache replay | Capture has no independent real-world truth. General search and arbitrary camera/operation reduction are not implemented. |
 | Constraint and graph coverage | Ground/known/free scale, sparse graphs, roles, recovery, Is in Plane, mirror/parallel combinations; paired removal controls; forbidden-geometry and named line-accuracy reduction; recovered rebuild keeps line IDs out of point triangulation; free hard-plane fits preserve compatible axis/CAD parallel directions; pinhole line projection is invariant to sliding its representative point | Four paired local CAD-bias controls now quantify hard/soft compromise; no broad guarantee for biased planes, imperfect symmetry, conflicting priors or noisy/weak geometry. Recorded accuracy flags remain flags. |
-| Blender state and jobs | Generated create/apply/reopen and selected role/removal/origin sequences; shared lens inputs; stale Diagnose/lens rejection; lens rollback; job retirement across load/cancel | Native modal scheduling, undo/redo, other operators and general transactional application remain unverified. |
-| Honest quality comparisons | Weak-line support warning, plane-derived depth labels, removal of unsupported scale wording; lens scoring includes recovered point picks and retains successful-incumbent support; refused lens trials restart registration rather than reuse placeholder poses | Truth-free prior release now measures model dependence; the first pilot adds no detection over the existing anchor warning. General sensitivity/ambiguity reporting, actual registration provenance, full constraint/line-aware acceptance and Iterate Known 3D comparison remain open. |
+| Blender state and jobs | Generated create/apply/reopen and selected role/removal/origin sequences; shared lens inputs; stale Diagnose/lens rejection; lens rollback; job retirement across load/cancel; joint point-FOV application and no-op refusal | Native modal scheduling, undo/redo, other operators and general transactional application remain unverified. |
+| Honest quality comparisons | Weak-line support warning, plane-derived depth labels, removal of unsupported scale wording; lens scoring includes recovered point picks and retains successful-incumbent support; refused lens trials restart registration rather than reuse placeholder poses; optional point-FOV depth/noise guards and conditional local intervals | Truth-free prior release measures model dependence; its first pilot added no detection over the existing anchor warning. General Sync sensitivity/ambiguity reporting, actual registration provenance, full constraint/line-aware acceptance and Iterate Known 3D comparison remain open. Point-FOV intervals do not cover unknown crops, biased picks or alternative solutions. |
 | Development workflow | Focused numerical runner; PR/main numerical and Blender CI configuration; isolated-worktree workflow with sequential integration | Hosted/package/platform validation is incomplete. Parallel work does not itself reduce model usage. |
 
 **Completed continuation from `16a6cb6`:** two Sol/high workers investigated separate numerical boundaries. Reference sensitivity landed as `d302390`; no product warning was promoted. The line-position trial led to the narrow projection fix `c304fbe` and guarded evidence tooling `8abac35`; BA/Jacobian and acceptance stayed unchanged. The main thread reviewed independent checks, corrected ownership/comparison/reporting gaps, validated and committed each increment. The line worker used 17 exploratory solves versus its assigned initial cap of 12; that overrun and its cause are recorded below. Both task worktrees were archived and removed. Existing stashes and detached baseline worktrees remain untouched.

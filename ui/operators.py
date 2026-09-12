@@ -3675,11 +3675,10 @@ class PM_OT_refine_lenses(bpy.types.Operator):
     bl_idname = "perspective_match.refine_lenses"
     bl_label = "Refine Lenses"
     bl_description = (
-        "Search focal length so landmark sync and VP lines agree better, "
-        "then Solve Sync. With Same Lens, one scale is applied "
-        "to every still (works without VP lines). Otherwise each unlocked "
-        "match is searched on its own. Runs in the background — Esc or "
-        "Cancel Refine to stop"
+        "Refine focal length with landmarks. Same Lens searches one shared "
+        "scale; Estimate FOV from Points jointly fits independent focals "
+        "without VP lines. Otherwise each unlocked match uses its VP lines. "
+        "Runs in the background — Esc or Cancel Refine to stop"
     )
     bl_options = {"REGISTER", "UNDO"}
 
@@ -3709,14 +3708,17 @@ class PM_OT_refine_lenses(bpy.types.Operator):
 
         from ..core import lens_refine
 
-        if prep.share_lens:
+        if prep.estimate_focal_from_points:
+            total = 1
+        elif prep.share_lens:
             search_count = len(prep.lens_inputs)
         else:
             search_count = sum(1 for item in prep.lens_inputs if not item.freeze_focal)
-        total = lens_refine.estimate_refine_evaluation_count(
-            search_count,
-            share_lens=bool(prep.share_lens),
-        )
+        if not prep.estimate_focal_from_points:
+            total = lens_refine.estimate_refine_evaluation_count(
+                search_count,
+                share_lens=bool(prep.share_lens),
+            )
         cancel_event = threading.Event()
         result_box: dict = {"done": False}
         progress_state = {"step": 0, "total": max(total, 1), "label": "Starting…"}
