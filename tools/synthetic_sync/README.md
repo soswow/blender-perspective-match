@@ -669,3 +669,18 @@ fit and projected camera movement, alongside the existing 5 px stored-anchor
 warning. The first pilot quantified sensitivity but did not establish additional
 detection beyond that warning; see [the results](reference-sensitivity-results.md).
 This is an experimental command, not a new product warning or automatic prior selection.
+
+### Infinite-line projection and numerical conditioning
+
+With `OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1`, run
+`python3 tools/synthetic_sync/line_position_gauge.py --out /tmp/pm-line-gauge`
+for the six-run historical-sampler/Jacobian trial. Add `--analytic --baseline-dir
+/tmp/pm-line-gauge --out /tmp/pm-line-analytic` for the three-run analytic comparison.
+Use absent output directories. The historical sampler remains explicit after the
+production correction, and cached comparisons require matching input fingerprints.
+
+The experiment exposed the infinite-line projection error fixed in `c304fbe`.
+It did not justify the separate BA optimization: lower fitted cost slightly
+worsened independent geometry on biased inputs. Diagnostic probes contaminate
+historical timing measurements; future runs separate their time. See
+[the evidence, actual solve count and limitations](line-position-gauge-results.md).
