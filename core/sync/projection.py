@@ -466,6 +466,42 @@ def _project_world_line_to_image(
     similarity: SimilarityTransform,
 ) -> np.ndarray | None:
     """Project an infinite 3D line into a match still as a homogeneous image line."""
+    if not calibration.has_distortion:
+        unit = np.asarray(direction, dtype=np.float64)
+        direction_norm = float(np.linalg.norm(unit))
+        if direction_norm <= 1.0e-12:
+            return None
+        unit = unit / direction_norm
+        camera_center_shared = similarity.transform_point(calibration.camera_center)
+        from_camera = np.asarray(point, dtype=np.float64) - camera_center_shared
+        # The viewing plane is unchanged by sliding the representative point
+        # along the line. Remove that component before taking the cross product
+        # so a far-away midpoint does not magnify cancellation.
+        perpendicular = from_camera - float(from_camera @ unit) * unit
+        normal_shared = np.cross(perpendicular, unit)
+        if float(np.linalg.norm(normal_shared)) <= 1.0e-10:
+            return None
+        world_to_camera = calibration.rotation_w2c @ similarity.rotation.T
+        direction_camera = world_to_camera @ unit
+        depth = float((world_to_camera @ from_camera)[2]) / max(
+            float(similarity.scale), 1.0e-12
+        )
+        # A camera-parallel line wholly behind the image plane has no visible
+        # portion. A line with changing depth eventually reaches the front.
+        if abs(float(direction_camera[2])) <= 1.0e-12 and depth <= 1.0e-8:
+            return None
+        normal_camera = world_to_camera @ normal_shared
+        intrinsics = calibration.intrinsics
+        a = float(normal_camera[0]) / float(intrinsics.fx)
+        b = float(normal_camera[1]) / float(intrinsics.fy)
+        c = float(normal_camera[2]) - intrinsics.cx * a - intrinsics.cy * b
+        norm = float(np.hypot(a, b))
+        if norm <= 1.0e-12:
+            return None
+        return np.array((a, b, c), dtype=np.float64) / norm
+
+    # With lens distortion, a projected 3D line is generally curved. Keep
+    # the existing local sample approximation for that case.
     unit = direction / max(float(np.linalg.norm(direction)), 1.0e-12)
     # Try several spans so a sample behind the camera does not drop the line.
     projected: list[tuple[float, float]] = []
@@ -637,4 +673,3 @@ def _image_points_collinear(
     if singular.size < 2:
         return True
     return float(singular[1]) < min_cross_spread_px
-

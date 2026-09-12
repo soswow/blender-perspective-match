@@ -87,6 +87,8 @@ Without Known 3D ends, a free line needs **three or more** stills — two views 
 
 **What “px” means:** For **point** landmarks, RMSE is how far the projected 3D Empty lands from your 2D pick. For **line** landmarks, each drawn endpoint’s perpendicular distance to the projected infinite 3D line is measured. Those two distances combine offset (the stroke sitting beside the projected edge) and heading (angle miss scaled by half the stroke length): RMS = hypot(midpoint offset, ½ length × sin(angle)). A short stroke therefore reports a parallel miss more than a heading miss; a long stroke also punishes a twist. Pose accept still uses **point** RMSE, so a line that is not yet sitting on the overlay cannot skip a still that already fits the 3D cloud. After that still is placed, recovered-camera polish still uses the line (and spatially isolated picks) to rotate it — a dense cluster of well-fitting picks cannot Huber-ignore isolated landmarks that pin orientation.
 
+For an undistorted still, sliding the 3D line helper along the same infinite edge does not change that edge's pixel error. A line that extends into the space in front of the camera can still be fitted when its helper midpoint is behind the camera. A line entirely behind the camera and parallel to the image plane has no visible projection.
+
 ## Solve Sync and related tools
 
 After placing a recovered **Solve** camera, Sync may refine the shared 3D again.
