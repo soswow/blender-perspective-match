@@ -43,6 +43,24 @@ constraints. Fixed-frame refusal, corrected fitting, free-frame and sparse-axis
 controls separate a coordinate convention from measured geometry; native checks
 include saved calibration ownership and withheld object projections.
 
+The **Use Best Fit** workflow keeps an improved physical candidate distinct
+from an accepted calibration. `tests/test_focal_candidate.py` checks numerical
+refusals and retained camera projection. Run the separate Blender lifecycle
+check with an absent output directory:
+
+```sh
+blender --factory-startup --disable-autoexec -b --python-exit-code 1 \
+  --python tools/synthetic_sync/verify_focal_candidate_blender.py -- \
+  --out /tmp/pm-focal-candidate
+```
+
+This uses controlled results and zero solvers to test refusal without changes,
+explicit application, stale-input rejection, job ownership and rollback after
+an application error. It exercises the registered apply operator but cannot
+verify an actual Undo roundtrip in headless Blender. It does not establish the
+physical accuracy of a refused fit. CI runs this check alongside the ordinary
+accepted-FOV application checks.
+
 ## Run and inspect
 
 From the repository root, using Python with NumPy:

@@ -66,6 +66,15 @@ The camera refines whenever enough required lines exist. **Auto from VPs** allow
 
 **Iterate Known 3D** (next to Refine Lenses) is the same Auto from VPs → Solve Sync cycle you can do by hand. After Sync moves a match Empty, Known 3D sits in a new private frame, so the next polish can still move FOV and camera. It runs that loop on every sync-enabled still that has **Use Known 3D**, four Known 3D picks, and enough VP lines, and stops when joint RMSE no longer falls (or after eight rounds). Esc / Cancel keeps the last improvement. Pose-locked non-anchor matches and Adjusted Camera stills are skipped. Enable **Use Known 3D** on the stills you want pulled (for example the one you were clicking Auto from VPs on).
 
+With **Same Lens** off and **Estimate FOV from Landmarks** enabled, Refine Lenses
+fits each lens from shared picks without Known 3D or VP lines. Check each match's
+**Manual PP Offset** first: this mode holds principal points fixed. No separate
+Solve Sync is required after changing FOV or PP. If an improved fit passes the
+physical checks but cannot validate calibration, **Use Best Fit** appears with
+its point error. It applies cameras and landmarks together, retains the warning,
+and supports Blender Undo. Check unused object features before trusting the
+geometry; see [independent FOV fitting](sync.md#independent-fov-estimates-from-shared-points-no-vp-lines).
+
 At the top of **Camera**, **Camera Control** chooses who owns the camera. **Perspective Match** is the normal VP/origin workflow. Choose **Adjusted Camera** before continuing the camera in Blender or another add-on: the live camera transform and FOV become authoritative, including edits made after the mode was enabled. Switching matches, reopening **View Match Camera**, and rehydrating a saved match keep the current camera rather than restoring the old VP solve. Pose is read relative to the match Origin Empty, so **Solve Sync** may still move that Empty without changing the camera's private pose. Camera-solving, Origin, principal-point, distortion-estimation, and lens-refinement controls are disabled while this mode is active. VP lines remain editable as diagnostics. Return to **Perspective Match** only when you want its stored solve to control the camera again.
 
 If **Perspective Match** still owns the camera but the Blender camera object has been grabbed, scaled, or otherwise moved off that stored pose, a Camera-section warning appears and landmark px errors hide — they were measured against the stored camera, not the viewport. **Restore Stored** puts the object back on the last Match Camera / origin pose. **Capture Live** saves the viewport pose as the stored match (then re-run **Solve Sync**). **Adjusted Camera** is the mode for *ongoing* live edits; this warning is for an accidental mismatch.

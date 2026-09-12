@@ -106,6 +106,14 @@ def main():
         result['fit'].update(status='completed', seconds=time.monotonic() - started,
             accepted=fitted.improved, refusal=fitted.refusal_reason,
             message=fitted.message, focal_intervals=fitted.focal_intervals)
+        candidate = fitted.candidate
+        result['fit']['candidate'] = (dict(
+            initial_rmse_px=candidate.initial_rmse_px,
+            fitted_rmse_px=candidate.fitted_rmse_px, reason=candidate.reason,
+            cameras=sorted(candidate.calibrations)) if candidate else None)
+        if args.out:
+            Path(args.out + '.fit.json').write_text(
+                json.dumps(json_values(fitted), indent=2) + '\n', encoding='utf-8')
         emit()
 
 

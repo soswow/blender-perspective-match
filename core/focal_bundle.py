@@ -1,13 +1,14 @@
 """Independent pinhole focal bundle adjustment for supported landmark graphs.
 
-The anchor camera fixes orientation and center. Free-scale graphs fix one camera
-baseline; an off-anchor supplied mirror plane instead fixes metric scale.
+The anchor camera fixes center; supplied world directions can fit orientation.
+Free-scale graphs fix one camera baseline; an off-anchor supplied mirror plane
+instead fixes metric scale.
 All decisions use image picks, supplied relations and the fitted state.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import math
 import time
 
@@ -47,6 +48,17 @@ EPIPOLAR_HINT_MAX_SECONDS = 10.0
 
 
 @dataclass
+class FocalFitCandidate:
+    """Improved physical fit available for explicit use, without calibration claims."""
+
+    calibrations: dict[str, core.Calibration]
+    sync_result: SyncSolveResult
+    initial_rmse_px: float
+    fitted_rmse_px: float
+    reason: str
+
+
+@dataclass
 class FocalBundleOutcome:
     accepted: bool
     reason: str
@@ -55,6 +67,7 @@ class FocalBundleOutcome:
     intervals_px: dict[str, tuple[float, float]] = field(default_factory=dict)
     initial_rmse_px: float = float("inf")
     fitted_rmse_px: float = float("inf")
+    candidate: FocalFitCandidate | None = None
 
 
 def _normalize_points(points: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -370,9 +383,13 @@ def fit_independent_focals(
     diagnostic_callback=None,
 ) -> FocalBundleOutcome:
     """Fit focal/pose/geometry; optional diagnostics capture an unvalidated endpoint."""
-    def refuse(reason: str, *, fitted: float = float("inf")) -> FocalBundleOutcome:
+    candidate = None
+
+    def refuse(reason: str, *, fitted: float = float("inf"),
+               allow_candidate: bool = False) -> FocalBundleOutcome:
+        retained = replace(candidate, reason=reason) if allow_candidate and candidate else None
         return FocalBundleOutcome(False, reason, initial_rmse_px=initial_rmse,
-                                  fitted_rmse_px=fitted)
+                                  fitted_rmse_px=fitted, candidate=retained)
 
     initial_rmse = float("inf")
     ids = list(calibrations)
@@ -897,30 +914,23 @@ def fit_independent_focals(
                 "depth_valid": bool(np.isfinite(endpoint_depths).all() and
                                     np.all(endpoint_depths > 0)),
             })
+        calibration_refusal = ""
         bounded = [ids[i] + (" (wider FOV)" if x[i] <= lower + FOCAL_BOUND_MARGIN else " (narrower FOV)")
                    for i in range(ncam)
                    if x[i] <= lower + FOCAL_BOUND_MARGIN or x[i] >= upper - FOCAL_BOUND_MARGIN]
         if bounded:
-            hint = _conflict_hint(ids, observations, pick_sigma_px,
-                                  cancel_check=cancel_check)
-            if cancel_check and cancel_check():
-                return refuse("Cancelled")
-            return refuse("Fitted focal reached the search bound for " + ", ".join(bounded) +
-                          f"; candidate point RMSE {endpoint_rmse:.2f}px. "
-                          "Check starting FOVs and image calibration before widening Lens Search %." + hint,
-                          fitted=endpoint_rmse)
-        if not converged:
-            hint = _conflict_hint(ids, observations, pick_sigma_px,
-                                  cancel_check=cancel_check)
-            if cancel_check and cancel_check():
-                return refuse("Cancelled")
-            return refuse(f"Point focal fit did not converge; candidate point RMSE {endpoint_rmse:.2f}px." + hint,
-                          fitted=endpoint_rmse)
+            calibration_refusal = (
+                "Fitted focal reached the search bound for " + ", ".join(bounded) +
+                f"; candidate point RMSE {endpoint_rmse:.2f}px. "
+                "Check starting FOVs and image calibration before widening Lens Search %.")
+        elif not converged:
+            calibration_refusal = f"Point focal fit did not converge; candidate point RMSE {endpoint_rmse:.2f}px."
         fitted_residual, jac, depths = residual_and_jacobian(x, jacobian=True)
         end_raw = fitted_residual[:point_rows].reshape(-1, 2) / weights[:, None]
         all_raw = fitted_residual[:pixel_rows] / coordinate_weights
         fitted_rmse = float(np.sqrt(np.mean(np.sum(end_raw**2, axis=1))))
-        if not np.isfinite(fitted_rmse) or np.any(depths <= 0):
+        if (not np.isfinite(fitted_rmse) or not np.isfinite(fitted_residual).all() or not np.isfinite(x).all() or
+                not np.isfinite(depths).all() or np.any(depths <= 0)):
             return refuse("Fitted scene has points behind a camera", fitted=fitted_rmse)
         if scale_columns and abs(x[ncam + 5]) >= (
                 MAX_LOG_METRIC_BASELINE_CHANGE - METRIC_BASELINE_BOUND_MARGIN):
@@ -976,14 +986,6 @@ def fit_independent_focals(
                         line_point, line_direction, centers_check[camera], ray)
                     if (rotations_check[camera] @ (support - centers_check[camera]))[2] <= 0:
                         return refuse("Fitted line stroke has geometry behind a camera", fitted=fitted_rmse)
-        # Residual count and model dimensions make this a noise-aware fit test.
-        if not has_geometric_priors and not _fits_noise_model(all_raw, len(x), pick_sigma_px):
-            hint = _conflict_hint(ids, observations, pick_sigma_px,
-                                  cancel_check=cancel_check)
-            if cancel_check and cancel_check():
-                return refuse("Cancelled")
-            return refuse("Landmark fit is inconsistent with the stated pick noise." + hint,
-                          fitted=fitted_rmse)
         # Reject serious camera-specific regression even if total cost improves.
         start_per_camera = initial_raw
         end_per_camera = end_raw
@@ -996,46 +998,7 @@ def fit_independent_focals(
                 2 * math.log(100.0))
             if end_sse > start_sse + slack:
                 return refuse("A camera's point fit deteriorated", fitted=fitted_rmse)
-        # Local covariance after fixing anchor and baseline gauges. Report
-        # unbounded focal directions rather than mistaking a pseudoinverse for
-        # evidence when the scene is rank deficient.
-        column_scale = np.maximum(np.linalg.norm(jac, axis=0), 1.0e-8)
-        u, singular, vh = np.linalg.svd(jac / column_scale, full_matrices=False)
-        tolerance = np.finfo(float).eps * max(jac.shape) * singular[0]
-        null = singular <= tolerance
-        if jac.shape[0] < jac.shape[1]:
-            return refuse("Too few point observations for independent focal estimation", fitted=fitted_rmse)
-        if np.any(null):
-            return refuse("The point geometry does not determine a full 3D scene", fitted=fitted_rmse)
-        # Only the weighted image rows receive independent click noise. Hard
-        # constraints and soft springs affect the fit, never the pick count.
-        pixel_influence = ((vh[~null].T / singular[~null]) @
-                           u[:pixel_rows, ~null].T) * coordinate_weights / column_scale[:, None]
-        if has_geometric_priors and not _fits_constrained_noise_model(
-                all_raw, jac[:pixel_rows] / coordinate_weights[:, None],
-                pixel_influence, pick_sigma_px):
-            hint = _conflict_hint(ids, observations, pick_sigma_px,
-                                  cancel_check=cancel_check)
-            if cancel_check and cancel_check():
-                return refuse("Cancelled")
-            return refuse("Landmark fit is inconsistent with the stated pick noise." + hint,
-                          fitted=fitted_rmse)
         focal, rotations, centers, points = decode(x)
-        intervals = {}
-        for camera, camera_id in enumerate(ids):
-            if np.any(np.abs(vh[null, camera]) > 1.0e-6):
-                return refuse("Focal uncertainty is unbounded", fitted=fitted_rmse)
-            # Weighted fitting with homoscedastic raw pixel noise uses sandwich
-            # covariance. Sync weights change the estimator, not the noise of
-            # an independent click: influence = (W^1/2 J)^+ W^1/2.
-            influence = pixel_influence[camera]
-            sigma_log = pick_sigma_px * np.linalg.norm(influence)
-            if not np.isfinite(sigma_log):
-                return refuse("Focal uncertainty is unbounded", fitted=fitted_rmse)
-            if sigma_log >= 10:
-                return refuse("Focal uncertainty is too broad to use", fitted=fitted_rmse)
-            intervals[camera_id] = (float(focal[camera] * math.exp(-1.96 * sigma_log)),
-                                    float(focal[camera] * math.exp(1.96 * sigma_log)))
         # Persist anchor orientation in its private calibration so subsequent
         # Sync keeps the corrected frame with an identity anchor root.
         result_sims = {anchor_id: SimilarityTransform()}
@@ -1095,6 +1058,62 @@ def fit_independent_focals(
             message=f"Independent focals fitted from points and lines in {iterations} iterations"
                     if line_ids else f"Independent point focals fitted in {iterations} iterations",
             bundle_adjusted=True)
+        if not all(np.isfinite(segment).all() for segment in result_lines.values()):
+            return refuse("Fitted line endpoints are not finite", fitted=fitted_rmse)
+        if fitted_rmse < initial_rmse - 1e-6:
+            candidate = FocalFitCandidate(result_cals, sync_result, initial_rmse, fitted_rmse, "")
+        if calibration_refusal:
+            hint = _conflict_hint(ids, observations, pick_sigma_px, cancel_check=cancel_check)
+            if cancel_check and cancel_check():
+                return refuse("Cancelled")
+            return refuse(calibration_refusal + hint, fitted=fitted_rmse, allow_candidate=True)
+        # Residual count and model dimensions make this a noise-aware fit test.
+        if not has_geometric_priors and not _fits_noise_model(all_raw, len(x), pick_sigma_px):
+            hint = _conflict_hint(ids, observations, pick_sigma_px,
+                                  cancel_check=cancel_check)
+            if cancel_check and cancel_check():
+                return refuse("Cancelled")
+            return refuse("Landmark fit is inconsistent with the stated pick noise." + hint,
+                          fitted=fitted_rmse, allow_candidate=True)
+        # Local covariance after fixing anchor and baseline gauges. Report
+        # unbounded focal directions rather than mistaking a pseudoinverse for
+        # evidence when the scene is rank deficient.
+        column_scale = np.maximum(np.linalg.norm(jac, axis=0), 1.0e-8)
+        u, singular, vh = np.linalg.svd(jac / column_scale, full_matrices=False)
+        tolerance = np.finfo(float).eps * max(jac.shape) * singular[0]
+        null = singular <= tolerance
+        if jac.shape[0] < jac.shape[1]:
+            return refuse("Too few point observations for independent focal estimation", fitted=fitted_rmse, allow_candidate=True)
+        if np.any(null):
+            return refuse("The point geometry does not determine a full 3D scene", fitted=fitted_rmse, allow_candidate=True)
+        # Only the weighted image rows receive independent click noise. Hard
+        # constraints and soft springs affect the fit, never the pick count.
+        pixel_influence = ((vh[~null].T / singular[~null]) @
+                           u[:pixel_rows, ~null].T) * coordinate_weights / column_scale[:, None]
+        if has_geometric_priors and not _fits_constrained_noise_model(
+                all_raw, jac[:pixel_rows] / coordinate_weights[:, None],
+                pixel_influence, pick_sigma_px):
+            hint = _conflict_hint(ids, observations, pick_sigma_px,
+                                  cancel_check=cancel_check)
+            if cancel_check and cancel_check():
+                return refuse("Cancelled")
+            return refuse("Landmark fit is inconsistent with the stated pick noise." + hint,
+                          fitted=fitted_rmse, allow_candidate=True)
+        intervals = {}
+        for camera, camera_id in enumerate(ids):
+            if np.any(np.abs(vh[null, camera]) > 1.0e-6):
+                return refuse("Focal uncertainty is unbounded", fitted=fitted_rmse, allow_candidate=True)
+            # Weighted fitting with homoscedastic raw pixel noise uses sandwich
+            # covariance. Sync weights change the estimator, not the noise of
+            # an independent click: influence = (W^1/2 J)^+ W^1/2.
+            influence = pixel_influence[camera]
+            sigma_log = pick_sigma_px * np.linalg.norm(influence)
+            if not np.isfinite(sigma_log):
+                return refuse("Focal uncertainty is unbounded", fitted=fitted_rmse, allow_candidate=True)
+            if sigma_log >= 10:
+                return refuse("Focal uncertainty is too broad to use", fitted=fitted_rmse, allow_candidate=True)
+            intervals[camera_id] = (float(focal[camera] * math.exp(-1.96 * sigma_log)),
+                                    float(focal[camera] * math.exp(1.96 * sigma_log)))
         return FocalBundleOutcome(True, "", result_cals, sync_result, intervals,
                                   initial_rmse, fitted_rmse)
     except (FloatingPointError, ValueError, np.linalg.LinAlgError) as exc:

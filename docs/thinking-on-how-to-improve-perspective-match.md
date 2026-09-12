@@ -1,5 +1,5 @@
 **Perspective Match: reliability and AI development proposal**
-Investigation baseline: commit `5d876f6` / extension 0.5.0, 10 September 2026. Latest checkpoint: independent focal fitting can correct the overall orientation, 13 September 2026, described under **Current frontier**. Read that section first; the dated checkpoints preserve history, and the original proposal is retained for rationale rather than as an implementation checklist.
+Investigation baseline: commit `5d876f6` / extension 0.5.0, 10 September 2026. Latest checkpoint: explicit use of improved provisional focal fits and corrected-principal-point investigation, 13 September 2026, described under **Current frontier**. Read that section first; the dated checkpoints preserve history, and the original proposal is retained for rationale rather than as an implementation checklist.
 
 **My recommendation is to make every solver decision reproducible from a complete, versioned input, and judge it with checks independent of the implementation.** Build that foundation around the existing fixtures, Blender smoke test, and diagnostics. Then use it to improve calibration ownership, quality reporting, and selected solver decisions. This would turn a debugging session into an addition to a reusable capability.
 
@@ -8,6 +8,63 @@ Your clarification is that both metric accuracy and visual alignment matter, dep
 The deeper product issue is that three different promises are currently close together: “these measurements fit,” “this reconstruction is well determined,” and “the Blender viewport represents that reconstruction.” The code has made substantial progress on each, but failures still occur at their boundaries. Another recurring issue is that a geometric model can be wrong for the evidence: uncertain calibration, approximate CAD, imperfect symmetry, or images of different versions of an object can make precise simultaneous agreement impossible.
 
 ## Current frontier — 13 September 2026
+
+**Latest workflow fix: keep a useful fit without certifying its calibration.**
+Independent FOV estimation now retains a completed, improved candidate after
+convergence, focal-bound, noise-model or uncertainty refusal, provided it passes
+the existing physical geometry and per-camera deterioration checks. **Use Best
+Fit** explicitly applies its calibrations, camera transforms and landmarks
+together through the guarded application path. Automatic acceptance is unchanged;
+the status keeps the refusal and says calibration is not validated. This closes
+the earlier all-or-nothing workflow gap. It does not establish correct real-world
+depth or replace checking unused features. Cancelled or time-limited jobs, unsupported/weak
+startup and physically invalid or unimproved fits offer no candidate.
+
+`tests/test_focal_candidate.py` checks completed nonconvergence, bounds, physical
+rejection, cancellation and propagation with an independent projection check.
+`tools/synthetic_sync/verify_focal_candidate_blender.py` checks ordinary refusal,
+explicit apply, stale edits, error rollback and job ownership with controlled
+results and zero numerical solves. The operator has Blender's Undo flag;
+actual Undo is not verified by this headless check. Candidates are temporary,
+cleared on use/new lens job/file load, and cannot overwrite changed inputs.
+Integration verification ran all 498 unit tests: 496 passed and two skipped
+because optional sample YAML files were unavailable. Blender registration/scene
+smoke and the controlled candidate lifecycle checks also passed.
+
+**Updated real-data evidence:** the user identified incorrect Manual PP Offsets
+and supplied a corrected save. Earlier private optimizer measurements below
+were conditional on those incorrect intrinsics. The corrected capture has the
+same picks, line strokes, geometric constraints and focal starts, but centered
+principal points and Assumed Pick Error changed from 2 to 3 px. It is therefore
+not a strict one-variable causal experiment. All cameras register; the current
+bundle converges in 102 iterations and reduces point RMSE from 6.395 to 1.823 px.
+It passes the physical and per-camera checks and supplies a complete provisional
+candidate. One focal still reaches its +80% search bound, so calibration remains
+unvalidated. No user file was saved or rewritten by these diagnostics.
+An in-memory application of this saved candidate also passes: evaluated point
+RMSE is 1.82327 px versus 1.82321 px numerically, and the maximum camera
+projection difference is about 0.0039 px. The reusable
+`tools/debug-sync/verify_focal_candidate_apply.py` checks source inputs before
+application and does not run another solve or save. This establishes viewport
+fidelity to the candidate, not accuracy against unobserved real geometry.
+
+The corrected bundle replay took about 6.9 seconds using saved startup; a full
+fresh capture took about 210 seconds, mostly registration. An independent
+optimizer continuation on the older, incorrect-PP inputs improved its objective
+by only about 0.001% beyond 200 evaluations. These bounded comparisons do not
+justify another optimizer rewrite or more iterations as the next fix.
+Reusing startup avoided repeated registration. Preserve `.inputs.json`,
+`.startup.json` and complete `.fit.json` artifacts via `probe_lens_inputs.py`;
+`probe_focal_startup.py --joint` also preserves a candidate in its outcome.
+
+**Next decision:** assess provisional alignment on unpicked features and recover
+any available lens/crop evidence before more calibration freedom. The remaining
+search-bound behavior is unresolved; a low fitted residual cannot distinguish
+a real narrow lens from distorted depth or incorrect fixed calibration. A future
+automatic strategy needs independent geometry/weak-evidence controls, not just
+a lower objective. Actual interactive Undo verification and a persistent result
+review with before/after overlays remain useful follow-ups. Principal points
+remain fixed; the tooltip and user workflow now make that explicit.
 
 **Latest diagnostic fix:** a sparse leave-one-out fundamental-matrix fit could
 warn about correct shared picks because its omitted observation had too much
@@ -48,11 +105,12 @@ or accuracy on noisy real images. Tools: `focal_orientation.py` and
 landmark counts, including disabled point/line members, or `(empty)`. Generated
 Blender checks cover updates, scene isolation and unchanged stored bucket IDs.
 
-**Remaining real-data frontier: bounds and calibration assumptions.** One cached
+**Earlier real-data checkpoint: bounds and calibration assumptions.** One cached
 private startup with its original plane/mirror constraints improved from 6.47 px
 to 1.84 px after this correction. Two focal lengths still reached their bounds;
 there was no accepted result or camera application. No user file was changed.
-This resolves one demonstrated modeling restriction, not the separate ambiguity
+These measurements used the earlier principal-point settings; see the updated
+capture at the top. This resolves one demonstrated modeling restriction, not the separate ambiguity
 between narrow FOV, geometry and principal-point assumptions. Do not default back
 to repeated pick edits or larger search percentages. Next use preserved inputs
 for bounded calibration/uncertainty experiments, with independent crop controls
@@ -112,11 +170,10 @@ also clamps to the image, while a crop's true optical center can lie outside it.
 The overall-orientation defect is addressed by the latest fix above; correcting
 it did not remove every focal-bound refusal. See `tools/synthetic_sync/focal-optimizer-results.md` for evidence and limits.
 
-**Still open:** an explicit review/preview of a rejected candidate may help visual
-modeling, but must retain its refusal, before/after residuals, and reversible state.
-Numerical endpoint capture is implemented; a user-facing preview/apply workflow
-is not. Lower fitting error alone does not establish that a candidate is closer
-to reality. Wider focal bounds alone did not establish a usable real-data result.
+**Candidate review status:** explicit provisional application is now implemented
+above. A persistent before/after visual comparison is still open. Lower fitting
+error alone does not establish that a candidate is closer to reality, and the
+calibration warning remains attached when using it.
 
 **Latest extension: lines in independent FOV fitting.** The option is now
 **Estimate FOV from Landmarks**. Free lines and line-to-line mirror pairs join

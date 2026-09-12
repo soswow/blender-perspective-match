@@ -211,7 +211,7 @@ def fresh(case, out, prepare_only):
         _, applied = scene.apply_lens_refine_result(bpy.context, result, prep)
     assert applied is result.sync_result
     if prep.plane_groups or prep.mirror_pairs:
-        assert "fixed anchor frame and supplied constraints" in workspace.sync_status
+        assert "fixed anchor center and supplied constraints" in workspace.sync_status
     assert_equivalent(mirror_before, state()["mirror_matrix"], "Mirror Empty stayed put")
     # Preserve applied generated state even if the independent checker fails,
     # so a checker correction can use --reopen without another numerical fit.

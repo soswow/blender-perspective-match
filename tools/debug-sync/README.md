@@ -24,8 +24,10 @@ arguments when inspecting an external file). It lists per-camera point counts,
 line landmarks, and named plane/mirror members with their point views. By
 default it only collects inputs. Optional `--fit-seconds 180` runs a cooperative
 time-bounded trial without applying it; with `--out report.json`, numerical
-inputs and startup state are retained in `report.json.inputs.json` and
-`report.json.startup.json`. These can contain private scene evidence: keep them
+inputs, startup and the full fit result (including any provisional candidate)
+are retained in `report.json.inputs.json`, `report.json.startup.json` and
+`report.json.fit.json`. The summary identifies candidate availability and its
+before/after point error; capture alone never applies it. These can contain private scene evidence: keep them
 outside the repository. No mode saves the source blend.
 
 Reuse those sidecars with `probe_focal_startup.py` under the development Python
@@ -36,6 +38,22 @@ cannot certify correspondences. `--joint` instead runs one complete production
 focal bundle from the saved startup, without another Sync or scene application.
 Optional `--span-percent 40` changes only that replay's search range. Keep the
 input/startup files and the `--out` report together as private artifacts.
+
+To check application of a saved `--joint` candidate without another solver call:
+
+```sh
+blender --factory-startup --disable-autoexec -b --python-exit-code 1 \
+  --python tools/debug-sync/verify_focal_candidate_apply.py -- \
+  --blend /path/to/source.blend --inputs /tmp/capture.json.inputs.json \
+  --result /tmp/joint-report.json --out /tmp/candidate-apply-report.json
+```
+
+This requires the source's collected numerical inputs to match the capture.
+It applies only in the disposable Blender process, compares evaluated camera
+projections and landmark state with the candidate, checks picked-point RMSE,
+then exits without saving. This verifies application fidelity, not independent
+real-world accuracy or interactive Undo. It currently reads the `--joint`
+report format, not the full `.fit.json` from the original capture.
 
 The main solves in `dump_sync.py`, `probe_graph.py` and `probe_resected.py` use
 the same complete prepared request as Solve Sync and Diagnose, including live

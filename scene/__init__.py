@@ -4153,16 +4153,20 @@ def _point_focal_interval_message(refine_result, prep: LensRefinePrep) -> str:
         return ""
     assumptions = f"assumed pick error {prep.pick_sigma_px:g}px"
     if prep.plane_groups or prep.mirror_pairs:
-        assumptions += "; fixed anchor frame and supplied constraints"
+        assumptions += "; fixed anchor center and supplied constraints"
     return (
         f"At fit, horizontal FOV and approximate local 95% intervals "
         f"({assumptions}): " + "; ".join(entries)
     )
 
 
-def apply_lens_refine_result(context: bpy.types.Context, refine_result, prep: LensRefinePrep):
-    """Apply accepted lenses and their Sync result on the main thread."""
+def apply_lens_refine_result(
+    context: bpy.types.Context, refine_result, prep: LensRefinePrep, *, use_candidate: bool = False
+):
+    """Apply accepted lenses or an explicitly chosen provisional fit."""
     space = properties.workspace(context)
+    if use_candidate and (refine_result.cancelled or not prep.estimate_focal_from_points):
+        raise ValueError("Only a completed point FOV job can supply a best fit")
     if refine_result.cancelled:
         space.sync_status = refine_result.message
         space.lens_refine_progress = 0.0
@@ -4176,7 +4180,7 @@ def apply_lens_refine_result(context: bpy.types.Context, refine_result, prep: Le
         except (ValueError, ReferenceError, RuntimeError):
             pass
     if current != prep.source_request_sha256:
-        message = "Inputs or cameras changed while Refine Lenses was running. Run Refine Lenses again."
+        message = "Inputs or cameras changed since Refine Lenses started. Run Refine Lenses again."
         space.sync_status = message
         space.lens_refine_progress = 0.0
         raise StaleSyncResult(message)
@@ -4184,12 +4188,18 @@ def apply_lens_refine_result(context: bpy.types.Context, refine_result, prep: Le
     point_focal = bool(getattr(refine_result, "point_focal_mode", False))
     if point_focal != prep.estimate_focal_from_points:
         raise ValueError("Lens job returned a result from another focal mode")
-    if point_focal and getattr(refine_result, "refusal_reason", ""):
+    candidate = getattr(refine_result, "candidate", None) if use_candidate else None
+    if use_candidate and (
+        candidate is None or not candidate.calibrations or candidate.sync_result is None
+        or not candidate.sync_result.success
+    ):
+        raise ValueError("Point FOV result has no usable best fit")
+    if point_focal and getattr(refine_result, "refusal_reason", "") and not use_candidate:
         space.sync_status = refine_result.message or refine_result.refusal_reason
         space.lens_refine_progress = 0.0
         properties.tag_viewport_redraw(context)
         return refine_result, None
-    if point_focal and (
+    if point_focal and not use_candidate and (
         not refine_result.improved
         or refine_result.sync_result is None
         or not refine_result.sync_result.success
@@ -4207,7 +4217,8 @@ def apply_lens_refine_result(context: bpy.types.Context, refine_result, prep: Le
         root_by_name = prep.root_by_name
         # Write private calibrations without flipping the scene camera each time.
         active_root = properties.active_root(context)
-        for match_id, calibration in refine_result.calibrations.items():
+        selected_calibrations = candidate.calibrations if use_candidate else refine_result.calibrations
+        for match_id, calibration in selected_calibrations.items():
             root = root_by_name.get(match_id)
             if root is None:
                 continue
@@ -4234,7 +4245,7 @@ def apply_lens_refine_result(context: bpy.types.Context, refine_result, prep: Le
             )
 
         if point_focal:
-            sync_result = refine_result.sync_result
+            sync_result = candidate.sync_result if use_candidate else refine_result.sync_result
             _apply_sync_landmark_diagnostics(context, sync_result)
             # The fitted calibrations were just written above. Reusing the old
             # solve inputs here would overwrite their fx/fy with stale values.
@@ -4263,8 +4274,15 @@ def apply_lens_refine_result(context: bpy.types.Context, refine_result, prep: Le
             if image.users == 0:
                 bpy.data.images.remove(image)
 
-    space.sync_status = refine_result.message + " · " + sync_result.message
-    if point_focal:
+    if use_candidate:
+        space.sync_status = (
+            f"Provisional fit applied (point RMSE {candidate.initial_rmse_px:.2f} "
+            f"→ {candidate.fitted_rmse_px:.2f}px); "
+            f"calibration not validated. {candidate.reason}"
+        )
+    else:
+        space.sync_status = refine_result.message + " · " + sync_result.message
+    if point_focal and not use_candidate:
         interval_message = _point_focal_interval_message(refine_result, prep)
         if interval_message:
             space.sync_status += " · " + interval_message

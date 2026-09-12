@@ -18,7 +18,7 @@ from . import sync as sync_module
 from .focal_line_constraints import validate_line_relations
 from .focal_bundle import (
     DEFAULT_POINT_FOCAL_SPAN, MAX_CAMERAS, MAX_POINTS, MAX_LINES, MAX_LINE_STROKES,
-    fit_independent_focals,
+    fit_independent_focals, FocalFitCandidate,
 )
 
 
@@ -71,6 +71,7 @@ class LensRefineResult:
     # Absolute 95% local focal intervals in pixels at the stated pick sigma.
     focal_intervals: dict[str, tuple[float, float]] = field(default_factory=dict)
     refusal_reason: str = ""
+    candidate: FocalFitCandidate | None = None
 
 
 def estimate_refine_evaluation_count(
@@ -469,13 +470,13 @@ def refine_lenses_from_landmarks(
             success=False)
 
         def refusal(reason: str, *, initial=empty_sync, initial_rmse=float("inf"),
-                    cancelled=False) -> LensRefineResult:
+                    cancelled=False, candidate=None) -> LensRefineResult:
             return LensRefineResult(
                 calibrations=initial_cals, sync_result=initial,
                 initial_cost=initial_rmse, final_cost=initial_rmse,
                 initial_sync_rmse=initial_rmse, final_sync_rmse=initial_rmse,
                 message=reason, improved=False, cancelled=cancelled,
-                point_focal_mode=True, refusal_reason=reason)
+                point_focal_mode=True, refusal_reason=reason, candidate=candidate)
 
         if len(initial_cals) != len(matches):
             return refusal("Point focal estimation needs a saved private camera solve for every match")
@@ -588,7 +589,7 @@ def refine_lenses_from_landmarks(
             progress_callback=point_progress)
         if not outcome.accepted or outcome.sync_result is None:
             return refusal(outcome.reason, initial=initial, initial_rmse=initial_rmse,
-                           cancelled=outcome.reason == "Cancelled")
+                           cancelled=outcome.reason == "Cancelled", candidate=outcome.candidate)
         if progress_callback:
             progress_callback(101, 101, "Point focal estimation complete")
         return LensRefineResult(

@@ -1626,7 +1626,8 @@ class PMWorkspace(bpy.types.PropertyGroup):
         name="Estimate FOV from Landmarks",
         description=(
             "Estimate each still's FOV jointly from shared points and line strokes when "
-            "Same Lens is off; shared points are required for startup; uses no VP lines"
+            "Same Lens is off; shared points are required for startup; uses no VP lines. "
+            "Principal points stay fixed: check Manual PP Offsets before fitting"
         ),
         default=False,
         update=_redraw,

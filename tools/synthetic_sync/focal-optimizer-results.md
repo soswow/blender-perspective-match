@@ -2,6 +2,11 @@
 
 Checkpoint: 12 September 2026, following `7a2cc6c`.
 
+Current follow-up: **Use Best Fit** and the corrected-principal-point capture
+are described at the end. Earlier private measurements in this document used
+the calibration stored at those checkpoints; they are not current measurements
+of the later corrected input.
+
 ## Observed optimizer defect
 
 The joint LM step previously solved for every focal, pose and landmark and then
@@ -150,3 +155,43 @@ python -m tools.synthetic_sync.focal_constraint_saved_start \
 
 Use a new output directory for `--fixed-frame` or `--max-iterations 100` controls.
 Fixed-frame results are historical counterfactuals, not production candidates.
+
+## Provisional application and corrected intrinsics — 13 September 2026
+
+A subsequent user correction removed unintended Manual PP Offsets. Comparing
+the complete captures confirms identical picks, line strokes, constraints and
+starting focal lengths; principal points changed to the image centers and
+Assumed Pick Error changed from 2 to 3 px. The latter changes statistical gates,
+so this is not a controlled single-variable comparison.
+
+The corrected production bundle converges in 102 iterations, improving point
+RMSE from 6.395 to 1.823 px, with fitted per-camera RMSE about 0.95–2.60 px.
+It passes positive-depth, hard geometry and per-camera deterioration checks,
+but one focal reaches the +80% search bound. There is no independent truth for
+the real geometry. A complete provisional candidate is available, not validated
+calibration. The capture took about 210 seconds; replaying only the initialized
+bundle took about 6.9 seconds. No user blend was saved.
+
+Before that correction, a bounded four-fit diagnostic budget included a SciPy
+TRF comparison, continuation and endpoint sensitivity check on the older input,
+then one corrected-input production replay. Continuation beyond 200 SciPy
+evaluations reduced that older objective by only about 0.001%; no additional
+optimizer change was justified. The full corrected capture was a separate
+integration check, not part of those four agent trials. Do not count the old
+and new captures as independent geometry-validation evidence.
+
+`FocalBundleOutcome.candidate` and `LensRefineResult.candidate` now retain an
+improved completed fit only after physical and per-camera checks. Automatic
+acceptance remains separate. **Use Best Fit** applies that candidate through
+the same scene identity, input fingerprint and rollback boundary as accepted
+fits, keeps its calibration warning and reports before/after point RMSE. It
+does not publish local confidence intervals. Cancellation, time limits, invalid geometry,
+no improvement and failed startup do not produce this option. Actual Blender
+Undo needs an interactive check; the native headless regression exercises the
+registered operator, stale edits and rollback, with controlled numerical output.
+
+The diagnostic capture now preserves the entire fit as `.fit.json` alongside
+input/startup sidecars. `probe_focal_startup.py --joint` likewise serializes the
+candidate in its outcome. These private artifacts avoid another expensive
+registration and must remain outside the repository. Their reuse helps future
+investigations, but has not measured token savings or certified a real lens.

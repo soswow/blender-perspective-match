@@ -330,6 +330,7 @@ _lens_refine_cancel: threading.Event | None = None
 _lens_refine_running = False
 _lens_refine_progress = {"step": 0, "total": 1, "label": ""}
 _lens_refine_result_box: dict = {}
+_lens_best_fit: dict | None = None
 
 _diagnose_sync_lock = threading.Lock()
 _diagnose_sync_cancel: threading.Event | None = None
@@ -350,7 +351,7 @@ _vp_detect_result_box: dict = {}
 
 def reset_sync_background_jobs() -> None:
     """Cancel and retire background Sync jobs when their Blender scene is unloaded."""
-    global _lens_refine_cancel, _lens_refine_running, _lens_refine_result_box
+    global _lens_refine_cancel, _lens_refine_running, _lens_refine_result_box, _lens_best_fit
     global _diagnose_sync_cancel, _diagnose_sync_running, _diagnose_sync_result_box
     with _lens_refine_lock:
         if _lens_refine_cancel is not None:
@@ -358,6 +359,7 @@ def reset_sync_background_jobs() -> None:
         _lens_refine_running = False
         _lens_refine_cancel = None
         _lens_refine_result_box = {}
+        _lens_best_fit = None
     with _diagnose_sync_lock:
         if _diagnose_sync_cancel is not None:
             _diagnose_sync_cancel.set()
@@ -369,6 +371,23 @@ def reset_sync_background_jobs() -> None:
 def lens_refine_is_running() -> bool:
     """True while a Refine Lenses modal/worker is active."""
     return bool(_lens_refine_running)
+
+
+def lens_best_fit_is_available(context: bpy.types.Context) -> bool:
+    """A completed provisional fit belongs to the current loaded scene."""
+    pending = _lens_best_fit
+    return bool(pending is not None and not lens_refine_is_running() and
+                not diagnose_sync_is_running() and not pin_sync_is_running() and
+                int(context.scene.session_uid) == pending["prep"].source_scene_uid)
+
+
+def lens_best_fit_label() -> str:
+    """Expose the candidate's point error without implying certification."""
+    pending = _lens_best_fit
+    if pending is None:
+        return "Use Best Fit"
+    candidate = pending["result"].candidate
+    return f"Use Best Fit ({candidate.fitted_rmse_px:.2f} px)"
 
 
 def lens_refine_startup_label() -> str | None:
@@ -3722,7 +3741,7 @@ class PM_OT_refine_lenses(bpy.types.Operator):
 
     def invoke(self, context: bpy.types.Context, _event) -> set[str]:
         global _lens_refine_cancel, _lens_refine_running, _lens_refine_result_box
-        global _lens_refine_progress
+        global _lens_refine_progress, _lens_best_fit
 
         workspace = _workspace(context)
         try:
@@ -3758,6 +3777,7 @@ class PM_OT_refine_lenses(bpy.types.Operator):
             _lens_refine_running = True
             _lens_refine_result_box = result_box
             _lens_refine_progress = progress_state
+            _lens_best_fit = None
 
         self._prep = prep
         self._result_box = result_box
@@ -3802,7 +3822,7 @@ class PM_OT_refine_lenses(bpy.types.Operator):
         return {"RUNNING_MODAL"}
 
     def _finish_job(self, context: bpy.types.Context, *, cancelled: bool) -> set[str]:
-        global _lens_refine_cancel, _lens_refine_running, _lens_refine_result_box
+        global _lens_refine_cancel, _lens_refine_running, _lens_refine_result_box, _lens_best_fit
 
         window_manager = context.window_manager
         if self._timer is not None:
@@ -3859,6 +3879,10 @@ class PM_OT_refine_lenses(bpy.types.Operator):
             )
         except Exception as error:
             return _report_exception(self, error)
+
+        if (prep.estimate_focal_from_points and not refine_result.improved and
+                getattr(refine_result, "candidate", None) is not None):
+            _lens_best_fit = {"prep": prep, "result": refine_result}
 
         settings = properties.active_session(context)
         if settings is not None:
@@ -3924,13 +3948,20 @@ class PM_OT_refine_lenses(bpy.types.Operator):
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         # Scripting / redo: run blocking on the main thread.
+        global _lens_best_fit
+        _lens_best_fit = None
         workspace = _workspace(context)
         try:
-            refine_result, sync_result = scene.refine_lenses_and_sync(context)
+            prep = scene.prepare_lens_refine(context)
+            refine_result = scene.run_lens_refine(prep)
+            _, sync_result = scene.apply_lens_refine_result(context, refine_result, prep)
         except Exception as error:
             message = str(error)
             workspace.sync_status = message
             return _report_exception(self, error)
+        if (prep.estimate_focal_from_points and not refine_result.improved and
+                getattr(refine_result, "candidate", None) is not None):
+            _lens_best_fit = {"prep": prep, "result": refine_result}
         settings = properties.active_session(context)
         if settings is not None:
             settings.error = ""
@@ -3941,6 +3972,40 @@ class PM_OT_refine_lenses(bpy.types.Operator):
             {"INFO"} if success else {"WARNING"},
             workspace.sync_status or refine_result.message,
         )
+        return {"FINISHED"}
+
+
+class PM_OT_use_best_focal_fit(bpy.types.Operator):
+    """Apply a provisional point-FOV fit after reviewing its refusal reason."""
+
+    bl_idname = "perspective_match.use_best_focal_fit"
+    bl_label = "Use Best Fit"
+    bl_description = (
+        "Apply the best geometrically valid point FOV fit even though calibration "
+        "was not validated; this can be undone"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        return lens_best_fit_is_available(context)
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        global _lens_best_fit
+        pending = _lens_best_fit
+        if pending is None or not lens_best_fit_is_available(context):
+            return {"CANCELLED"}
+        try:
+            scene.apply_lens_refine_result(
+                context, pending["result"], pending["prep"], use_candidate=True)
+        except scene.StaleSyncResult as error:
+            _lens_best_fit = None
+            self.report({"WARNING"}, str(error))
+            return {"CANCELLED"}
+        except Exception as error:
+            return _report_exception(self, error)
+        _lens_best_fit = None
+        self.report({"WARNING"}, _workspace(context).sync_status)
         return {"FINISHED"}
 
 
@@ -4322,6 +4387,7 @@ CLASSES = (
     PM_OT_cancel_diagnose_sync,
     PM_OT_refine_lenses,
     PM_OT_cancel_refine_lenses,
+    PM_OT_use_best_focal_fit,
     PM_OT_iterate_known_3d_sync,
     PM_OT_cancel_iterate_known_3d_sync,
     PM_OT_clear_sync,

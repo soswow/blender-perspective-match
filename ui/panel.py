@@ -898,6 +898,11 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
                 "perspective_match.iterate_known_3d_sync",
                 icon="LOOP_FORWARDS",
             )
+            if operators.lens_best_fit_is_available(context):
+                sync_body.operator(
+                    "perspective_match.use_best_focal_fit",
+                    text=operators.lens_best_fit_label(),
+                )
         empties_row = sync_body.row(align=True)
         empties_row.use_property_split = False
         empties_row.prop(workspace, "show_landmark_empties", text="Landmark Empties")
