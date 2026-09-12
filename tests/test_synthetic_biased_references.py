@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 import json
+import math
 from pathlib import Path
 import unittest
 
@@ -79,12 +80,30 @@ class BiasedReferenceGeneratorTests(unittest.TestCase):
         ])
 
     def test_checked_exact_cases_match_the_generator(self):
+        def compare(saved, generated, path="case"):
+            self.assertIs(type(saved), type(generated), path)
+            if isinstance(saved, dict):
+                self.assertEqual(saved.keys(), generated.keys(), path)
+                for key in saved:
+                    compare(saved[key], generated[key], f"{path}.{key}")
+            elif isinstance(saved, list):
+                self.assertEqual(len(saved), len(generated), path)
+                for index, (left, right) in enumerate(zip(saved, generated)):
+                    compare(left, right, f"{path}[{index}]")
+            elif isinstance(saved, float):
+                # NumPy versions can differ at rounding precision; this is a
+                # generator check, not a change to the geometry oracle limits.
+                self.assertTrue(math.isclose(saved, generated, rel_tol=1e-14, abs_tol=1e-14),
+                                f"{path}: {saved!r} != {generated!r}")
+            else:
+                self.assertEqual(saved, generated, path)
+
         case_root = Path(__file__).resolve().parents[1] / "tools/synthetic_sync/cases"
         for condition in ("unbiased-hard", "unbiased-soft", "biased-hard", "biased-soft"):
             with self.subTest(condition=condition):
                 saved = read_case(case_root / f"biased-reference-exact-{condition}.json")
                 generated = biased_reference_case(condition)
-                self.assertEqual(json.dumps(saved), json.dumps(generated))
+                compare(saved, json.loads(json.dumps(generated)))
 
 
 class BiasedReferenceOracleTests(unittest.TestCase):
