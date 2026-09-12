@@ -336,7 +336,10 @@ def markdown_report(rows: list[dict], protocol: dict) -> str:
         "This is one seed, one local bias, one slack setting, exact picks and ideal calibrated pinhole cameras; it "
         "does not establish sensitivity over other geometries or noise. Known 3D slack softens every Known 3D "
         "point, including the two truthful references. The solver messages here report fit/constraints but do not "
-        "warn of the intentional reference conflict; this is no calibrated mismatch diagnostic or general defect claim.",
+        "warn of the intentional reference conflict. This numerical runner omits Blender preparation: "
+        "Diagnose already warns when a Known 3D Empty differs from its stored anchor pick by more than 5 px "
+        "(`scene.known_anchor_pick_warnings`). The experiment does not establish a gap in that existing check "
+        "or a calibrated mismatch diagnostic.",
         "",
     ]
     return "\n".join(lines)
