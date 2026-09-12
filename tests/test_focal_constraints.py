@@ -547,7 +547,7 @@ class PointFocalConstraintModelTests(TestCase):
             ("missing Mirror Empty", observations, {"mirror_plane": None}, "Mirror Empty"),
             ("unknown mirror member", observations,
              {"mirror_pairs": [("base_00", "absent")]}, "without two-view picks"),
-            ("line", observations, {"line_observations": [object()]}, "line landmarks"),
+            ("line", observations, {"line_observations": [object()]}, "Invalid line landmarks"),
             ("Known 3D", observations, {"known_world": {"base_00": np.zeros(3)}},
              "Known 3D"),
             ("ground", ground, {}, "On Ground"),

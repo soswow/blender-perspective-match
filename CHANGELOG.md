@@ -11,11 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Estimate FOV from Points supports up to 32 cameras in one joint fit; Assumed Pick Error explains its role in noise checks and FOV uncertainty.
 
 ### Added
+- Independent FOV estimation can jointly fit free and mirrored line landmarks alongside shared points; the option is now called Estimate FOV from Landmarks.
 - Mirror planes can follow a reconstructed point landmark, with a world-axis or object-supplied orientation.
 - Optional independent FOV estimation from shared point picks, with approximate uncertainty ranges and refusal of weak or unsupported setups.
 - Point-based FOV refinement supports Is in Plane and point mirror pairs with a supplied Mirror Empty.
 
 ### Fixed
+- Independent FOV estimation names cameras missing from initial registration.
 - Point-based FOV estimation identifies unsupported line landmarks instead of reporting their mirror relations as missing point picks.
 - Mirror landmark and mirror-partner dropdowns retain the chosen selection.
 - Landmark picking stays active when switching matches by dropdown or shortcut.

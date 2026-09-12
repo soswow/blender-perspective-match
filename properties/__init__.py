@@ -1593,10 +1593,10 @@ class PMWorkspace(bpy.types.PropertyGroup):
         update=_redraw,
     )
     estimate_focal_from_points: bpy.props.BoolProperty(
-        name="Estimate FOV from Points",
+        name="Estimate FOV from Landmarks",
         description=(
-            "Estimate each still's FOV jointly from shared point picks when "
-            "Same Lens is off; requires enough camera overlap and uses no VP lines"
+            "Estimate each still's FOV jointly from shared points and line strokes when "
+            "Same Lens is off; shared points are required for startup; uses no VP lines"
         ),
         default=False,
         update=_redraw,
@@ -1604,7 +1604,7 @@ class PMWorkspace(bpy.types.PropertyGroup):
     point_focal_span_percent: bpy.props.FloatProperty(
         name="Lens Search %",
         description=(
-            "Maximum focal change for Estimate FOV from Points as ± percent "
+            "Maximum focal change for Estimate FOV from Landmarks as ± percent "
             "of each still's current fx (40 = search 60%–140% of current focal)"
         ),
         default=40.0,

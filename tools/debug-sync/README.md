@@ -21,8 +21,12 @@ Prints the same report to stdout. `--out` is optional.
 For independent point-FOV eligibility, run `probe_lens_inputs.py` with the same
 `--blend` and optional `--out` arguments (add `--disable-autoexec` to Blender's
 arguments when inspecting an external file). It lists per-camera point counts,
-unsupported line landmarks, and named plane/mirror members with their point
-views. It only collects inputs: no numerical solve or file save.
+line landmarks, and named plane/mirror members with their point views. By
+default it only collects inputs. Optional `--fit-seconds 180` runs a cooperative
+time-bounded trial without applying it; with `--out report.json`, numerical
+inputs and startup state are retained in `report.json.inputs.json` and
+`report.json.startup.json`. These can contain private scene evidence: keep them
+outside the repository. No mode saves the source blend.
 
 The main solves in `dump_sync.py`, `probe_graph.py` and `probe_resected.py` use
 the same complete prepared request as Solve Sync and Diagnose, including live

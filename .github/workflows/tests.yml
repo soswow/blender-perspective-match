@@ -212,6 +212,15 @@ jobs:
               --python tools/synthetic_sync/verify_focal_constraints_blender.py -- \
               --case "$case" --out "${RUNNER_TEMP}/synthetic-blender/focal-constraints/$case" --reopen
           done
+      - name: Line FOV native integration
+        timeout-minutes: 2
+        env:
+          OPENBLAS_NUM_THREADS: "1"
+          OMP_NUM_THREADS: "1"
+        run: |
+          blender --factory-startup --disable-autoexec -b --python-exit-code 1 \
+            --python tools/synthetic_sync/verify_focal_lines_blender.py -- \
+            --fresh --out "${RUNNER_TEMP}/synthetic-blender/focal-lines"
       - name: Live landmark mirror plane
         timeout-minutes: 3
         env:

@@ -61,7 +61,23 @@ def _saved_initial(case, matches, label):
 
 
 class PointFocalBundleTests(TestCase):
-    def test_mirrored_line_reports_unsupported_lines_before_missing_point_picks(self):
+    def test_line_relations_refuse_before_expensive_registration(self):
+        _case, matches, observations = _inputs("four-view")
+        strokes = [sync.SyncLineObservation(key, "edge", 0., 0., 10., 10.)
+                   for key in ("view_0", "view_1")]
+        for extra, message in (
+            ({"plane_groups": [("edge", "FREE", 1)]}, "line Is in Plane"),
+            ({"mirror_pairs": [("edge", observations[0].landmark_id)],
+              "mirror_plane": (np.zeros(3), np.array([1., 0., 0.]))}, "mixed point/line"),
+        ):
+            with self.subTest(message=message), mock.patch.object(lens_refine, "_run_sync") as run:
+                result = lens_refine.refine_lenses_from_landmarks(
+                    matches, observations, anchor_id="view_0", estimate_focal_from_points=True,
+                    line_observations=strokes, **extra)
+                self.assertIn(message, result.refusal_reason)
+                run.assert_not_called()
+
+    def test_mirrored_line_requires_picks_for_both_members_before_registration(self):
         _case, matches, observations = _inputs("four-view")
         with mock.patch.object(lens_refine, "_run_sync") as run:
             outcome = lens_refine.refine_lenses_from_landmarks(
@@ -70,8 +86,7 @@ class PointFocalBundleTests(TestCase):
                 mirror_pairs=[("edge_a", "edge_b")],
                 mirror_plane=(np.zeros(3), np.array([1., 0., 0.])))
         self.assertFalse(outcome.improved)
-        self.assertIn("line landmarks", outcome.refusal_reason)
-        self.assertNotIn("two-view", outcome.refusal_reason)
+        self.assertIn("without two-view picks", outcome.refusal_reason)
         run.assert_not_called()
 
     def test_bad_two_view_correspondence_adds_tentative_pair_hint_on_refusal(self):

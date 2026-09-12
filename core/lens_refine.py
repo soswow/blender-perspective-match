@@ -16,7 +16,8 @@ import numpy as np
 from . import geometry as core
 from . import sync as sync_module
 from .focal_bundle import (
-    DEFAULT_POINT_FOCAL_SPAN, MAX_CAMERAS, MAX_POINTS, fit_independent_focals,
+    DEFAULT_POINT_FOCAL_SPAN, MAX_CAMERAS, MAX_POINTS, MAX_LINES, MAX_LINE_STROKES,
+    fit_independent_focals,
 )
 
 
@@ -479,8 +480,8 @@ def refine_lenses_from_landmarks(
             return refusal("Point focal estimation needs at least three cameras")
         if len(matches) > MAX_CAMERAS:
             return refusal(f"Point focal estimation currently supports up to {MAX_CAMERAS} cameras per joint fit (resource limit)")
-        if line_observations or known_lines or parallel_pairs:
-            return refusal("Estimate FOV from Points does not support line landmarks yet; disable line landmarks for this fit, or use the existing lens workflow")
+        if known_lines or parallel_pairs:
+            return refusal("Independent FOV fitting does not support Known 3D or parallel lines")
         point_count = len({item.landmark_id for item in observations})
         if not 8 <= point_count <= MAX_POINTS:
             return refusal(f"Point focal estimation needs 8–{MAX_POINTS} points")
@@ -509,13 +510,30 @@ def refine_lenses_from_landmarks(
             return refusal("Point mirror pairs need a mirror plane normal" if
                            mirror_landmark_id is not None else
                            "Point mirror pairs need a supplied Mirror Empty")
+        if any(not isinstance(item, sync_module.SyncLineObservation)
+               for item in (line_observations or ())):
+            return refusal("Invalid line landmarks: expected line strokes")
+        line_ids = {item.landmark_id for item in (line_observations or ())}
+        if len(line_ids) > MAX_LINES or len(line_observations or ()) > MAX_LINE_STROKES:
+            return refusal(f"Line fit supports up to {MAX_LINES} lines and {MAX_LINE_STROKES} strokes (resource limit)")
+        if any(item[0] in line_ids for item in (plane_groups or ())):
+            return refusal("Independent FOV fitting does not yet support line Is in Plane relations")
+        if any(set(pair) & line_ids and set(pair) & point_ids for pair in (mirror_pairs or ())):
+            return refusal("Mirror relation contains unsupported or mixed point/line members")
         relation_ids = {item[0] for item in (plane_groups or ())} | {
             point_id for pair in (mirror_pairs or ()) for point_id in pair}
-        if not relation_ids <= point_ids:
-            return refusal("Point plane or mirror relation contains a landmark without two-view picks")
+        if not relation_ids <= point_ids | line_ids:
+            return refusal("Plane or mirror relation contains a landmark without two-view picks")
+        line_views = {key: {item.match_id for item in (line_observations or ())
+                            if item.landmark_id == key} for key in line_ids}
+        if any(len(views) < 2 and not any(
+                key in pair and len(line_views.get(pair[0] if pair[1] == key else pair[1], ())) >= 2
+                for pair in (mirror_pairs or ()))
+               for key, views in line_views.items()):
+            return refusal("Line landmarks need two-view strokes or a reconstructed mirror partner")
 
         unsupported = (
-            share_lens or bool(known_world) or bool(line_observations) or
+            share_lens or bool(known_world) or
             bool(known_lines) or bool(parallel_pairs) or bool(fixed_similarities) or
             bool(readonly_match_ids) or lock_rotation or lock_translation or
             any(item.on_ground for item in observations) or
@@ -524,7 +542,7 @@ def refine_lenses_from_landmarks(
             (location_match_ids is not None and set(location_match_ids) != set(match_ids))
         )
         if unsupported:
-            return refusal("Point focal estimation supports point picks, Is in Plane and point mirrors only; remove camera roles, pose locks, lines, Known 3D and On Ground")
+            return refusal("Independent FOV fitting does not support camera roles, pose locks, VP lines, Known 3D or On Ground")
         if cancel_check and cancel_check():
             return refusal("Cancelled", cancelled=True)
         if progress_callback:
@@ -554,6 +572,7 @@ def refine_lenses_from_landmarks(
             plane_groups=plane_groups, plane_slack=plane_slack,
             mirror_pairs=mirror_pairs, mirror_plane=mirror_plane,
             mirror_slack=mirror_slack, mirror_landmark_id=mirror_landmark_id,
+            line_observations=line_observations, parallel_pairs=parallel_pairs,
             cancel_check=cancel_check,
             progress_callback=point_progress)
         if not outcome.accepted or outcome.sync_result is None:
@@ -568,7 +587,7 @@ def refine_lenses_from_landmarks(
             final_sync_rmse=outcome.fitted_rmse_px,
             fx_deltas={key: float(outcome.calibrations[key].intrinsics.fx -
                                   initial_cals[key].intrinsics.fx) for key in match_ids},
-            message=f"Point focal fit · {outcome.fitted_rmse_px:.2f}px · 95% intervals at σ={pick_sigma_px:g}px",
+            message=f"Landmark focal fit · point RMSE {outcome.fitted_rmse_px:.2f}px · 95% intervals at σ={pick_sigma_px:g}px",
             improved=True, point_focal_mode=True,
             focal_intervals=outcome.intervals_px)
 

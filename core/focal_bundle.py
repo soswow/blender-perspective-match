@@ -1,4 +1,4 @@
-"""Independent pinhole focal bundle adjustment for supported point graphs.
+"""Independent pinhole focal bundle adjustment for supported landmark graphs.
 
 The anchor camera fixes orientation and center. Free-scale graphs fix one camera
 baseline; an off-anchor supplied mirror plane instead fixes metric scale.
@@ -15,8 +15,13 @@ import numpy as np
 
 from . import geometry as core
 from .focal_constraints import PointFocalConstraints
-from .sync import SyncObservation, SyncSolveResult, SimilarityTransform
+from .focal_lines import LineChart, endpoint_distances
+from .sync import SyncObservation, SyncLineObservation, SyncSolveResult, SimilarityTransform, SyncMatchInput
 from .sync.constants import MIRROR_PAIR_HARD_GAP, PLANE_HARD_SLACK
+from .sync.lines import (_reconstruct_line_from_observations,
+                         _finite_segment_from_line_observations,
+                         _closest_point_on_line_to_ray)
+from .sync.mirrors import _dedupe_mirror_pairs
 from .sync.projection import _log_rodrigues, _rodrigues
 
 
@@ -24,6 +29,9 @@ DEFAULT_POINT_FOCAL_SPAN = 0.4
 # Resource guard for the dense joint fit, not an identifiability limit.
 MAX_CAMERAS = 32
 MAX_POINTS = 80
+MAX_LINES = 24
+MAX_LINE_STROKES = 96
+LINE_MIRROR_DIRECTION_HARD_SINE = 0.01
 MAX_ITERATIONS = 100
 MAX_SECONDS = 30.0
 MAX_LOG_METRIC_BASELINE_CHANGE = 10.0
@@ -330,6 +338,8 @@ def fit_independent_focals(
     mirror_plane: tuple[np.ndarray, np.ndarray] | None = None,
     mirror_slack: float = 0.0,
     mirror_landmark_id: str | None = None,
+    line_observations: list[SyncLineObservation] | None = None,
+    parallel_pairs: list[tuple[str, str]] | None = None,
     cancel_check=None,
     progress_callback=None,
 ) -> FocalBundleOutcome:
@@ -353,8 +363,25 @@ def fit_independent_focals(
     if not np.isfinite(fx_span) or not 0.0 < fx_span < 1.0:
         return refuse("Focal search span must lie between 0 and 100%")
     if not initial.success or set(initial.similarities) != set(ids):
-        return refuse("Initial Sync must support every camera")
+        missing = sorted(set(ids) - set(initial.similarities))
+        detail = ": " + ", ".join(missing) if missing else ""
+        return refuse("Initial Sync must support every camera" + detail)
     point_ids = sorted({item.landmark_id for item in observations})
+    line_observations = line_observations or []
+    if any(not isinstance(item, SyncLineObservation) for item in line_observations):
+        return refuse("Line landmarks contain an invalid stroke")
+    line_ids = sorted({item.landmark_id for item in line_observations})
+    if len(line_ids) > MAX_LINES or len(line_observations) > MAX_LINE_STROKES:
+        return refuse(f"Line fit supports up to {MAX_LINES} lines and {MAX_LINE_STROKES} strokes (resource limit)")
+    if set(line_ids) & set(point_ids):
+        return refuse("A landmark cannot be both a point and a line")
+    if len({(item.match_id, item.landmark_id) for item in line_observations}) != len(line_observations):
+        return refuse("A free line has duplicate strokes in one camera")
+    if any(item.match_id not in calibrations or
+           not np.isfinite((item.u1, item.v1, item.u2, item.v2, item.weight)).all() or
+           item.weight <= 0 or np.hypot(item.u2-item.u1, item.v2-item.v1) < 1.0
+           for item in line_observations):
+        return refuse("Line strokes must be finite, nonzero and from included cameras")
     if not (8 <= len(point_ids) <= MAX_POINTS) or set(initial.landmarks) != set(point_ids):
         return refuse(f"Point focal estimation needs 8–{MAX_POINTS} fully reconstructed points")
     if len({(item.match_id, item.landmark_id) for item in observations}) != len(observations):
@@ -425,14 +452,85 @@ def fit_independent_focals(
                           for key in point_ids])
     if not np.isfinite(points0).all():
         return refuse("Initial point geometry is invalid")
+    line_set = set(line_ids)
+    point_set = set(point_ids)
+    if mirror_pairs is not None and not isinstance(mirror_pairs, (tuple, list)):
+        return refuse("Mirror pairs contain malformed landmark links")
+    all_pairs = mirror_pairs or []
+    if any(not isinstance(pair, (tuple, list)) or len(pair) != 2 or
+           any(not isinstance(key, str) or not key for key in pair)
+           for pair in all_pairs):
+        return refuse("Mirror pairs contain malformed landmark links")
+    if len(_dedupe_mirror_pairs(all_pairs)) != len(all_pairs):
+        return refuse("Mirror pairs contain duplicate or self links")
+    point_mirrors = [pair for pair in all_pairs if set(pair) <= point_set]
+    line_mirrors = [pair for pair in all_pairs if set(pair) <= line_set]
+    if len(point_mirrors) + len(line_mirrors) != len(all_pairs):
+        return refuse("Mirror relation contains unsupported or mixed point/line members")
+    if line_mirrors and mirror_plane is None:
+        return refuse("Line mirrors need a supplied mirror plane normal")
+    if line_mirrors:
+        try:
+            supplied_normal = np.asarray(mirror_plane[1], float).reshape(3)
+            supplied_origin = np.asarray(mirror_plane[0], float).reshape(3)
+        except (ValueError, TypeError, IndexError):
+            return refuse("Supplied mirror plane is invalid")
+        if (not np.isfinite(supplied_normal).all() or
+            not np.isfinite(supplied_origin).all() or
+            np.linalg.norm(supplied_normal) < 1e-12):
+            return refuse("Supplied mirror plane is invalid")
+    point_groups = [item for item in (plane_groups or []) if item[0] in point_set]
+    line_groups = [item for item in (plane_groups or []) if item[0] in line_set]
+    if len(point_groups) + len(line_groups) != len(plane_groups or []):
+        return refuse("Plane relation contains an unsupported landmark")
+    if line_groups:
+        return refuse("Independent FOV fitting does not yet support line Is in Plane relations")
+    if parallel_pairs:
+        return refuse("Independent FOV fitting does not yet support line parallel relations")
+    line_seeds = {}
+    for line_id in line_ids:
+        strokes = [item for item in line_observations if item.landmark_id == line_id]
+        seed = _reconstruct_line_from_observations(
+            strokes, initial.similarities,
+            {key: SyncMatchInput(key, calibrations[key]) for key in ids})
+        if seed is None:
+            continue
+        seed_point = anchor_r @ (seed[0] - anchor_c) / baseline
+        seed_direction = anchor_r @ seed[1]
+        if not np.isfinite(seed_point).all() or not np.isfinite(seed_direction).all():
+            return refuse("Initial line geometry is invalid")
+        line_seeds[line_id] = (seed_point, seed_direction)
+    if line_mirrors and mirror_plane is not None:
+        normal = anchor_r @ supplied_normal
+        normal /= np.linalg.norm(normal)
+        householder = np.eye(3) - 2 * np.outer(normal, normal)
+        if mirror_landmark_id is not None:
+            reference = points0[point_ids.index(mirror_landmark_id)]
+            distance = float(normal @ reference)
+        else:
+            distance = float(normal @ (anchor_r @ (
+                np.asarray(mirror_plane[0], float) - anchor_c) / baseline))
+        for left, right in line_mirrors:
+            if left in line_seeds and right not in line_seeds:
+                point, direction = line_seeds[left]
+                line_seeds[right] = (householder @ point + 2*distance*normal,
+                                     householder @ direction)
+            elif right in line_seeds and left not in line_seeds:
+                point, direction = line_seeds[right]
+                line_seeds[left] = (householder @ point + 2*distance*normal,
+                                    householder @ direction)
+    if set(line_seeds) != line_set:
+        return refuse("Every free line needs two-view strokes or a reconstructed mirror partner")
+    line_charts = [LineChart(*line_seeds[key]) for key in line_ids]
     try:
         constraints = PointFocalConstraints.from_inputs(
             point_ids, anchor_rotation=anchor_r, anchor_center=anchor_c,
-            baseline_world=baseline, plane_groups=plane_groups,
+            baseline_world=baseline, plane_groups=point_groups,
             plane_slack=0.0 if plane_slack is None else plane_slack,
-            mirror_pairs=mirror_pairs, mirror_plane=mirror_plane,
+            mirror_pairs=point_mirrors, mirror_plane=mirror_plane,
             mirror_slack=0.0 if mirror_slack is None else mirror_slack,
-            mirror_landmark_id=mirror_landmark_id)
+            mirror_landmark_id=mirror_landmark_id,
+            extra_mirror_pairs=bool(line_mirrors))
     except (ValueError, TypeError, IndexError) as exc:
         return refuse(str(exc))
     direction = centers0[1] / np.linalg.norm(centers0[1])
@@ -446,12 +544,15 @@ def fit_independent_focals(
     scale_columns = int(constraints.free_baseline)
     point_offset = ncam + 5 + scale_columns + 6 * (ncam - 2)
     point_end = point_offset + 3 * npoint
-    mirror_offset_column = point_end if constraints.free_mirror_offset else None
+    line_offset = point_end
+    line_end = line_offset + 4 * len(line_ids)
+    mirror_offset_column = line_end if constraints.free_mirror_offset else None
     x = np.concatenate((np.zeros(ncam), _log_rodrigues(rotations0[1]),
                         np.zeros(2), *([np.zeros(1)] if scale_columns else []),
                         *[np.concatenate((_log_rodrigues(rotations0[i]),
                                           centers0[i])) for i in range(2, ncam)],
                         points0.ravel(),
+                        *[chart.initial for chart in line_charts],
                         *([np.zeros(1)] if constraints.free_mirror_offset else [])))
     camera_index = {key: index for index, key in enumerate(ids)}
     point_index = {key: index for index, key in enumerate(point_ids)}
@@ -459,6 +560,12 @@ def fit_independent_focals(
     pi = np.asarray([point_index[item.landmark_id] for item in observations], int)
     uv = np.asarray([(item.u, item.v) for item in observations], float)
     weights = np.sqrt(np.asarray([item.weight for item in observations], float))
+    line_index = {key: index for index, key in enumerate(line_ids)}
+    lci = np.asarray([camera_index[item.match_id] for item in line_observations], int)
+    lli = np.asarray([line_index[item.landmark_id] for item in line_observations], int)
+    luv = np.asarray([((item.u1, item.v1), (item.u2, item.v2))
+                      for item in line_observations], float).reshape(-1, 2, 2)
+    line_weights = np.sqrt(np.asarray([item.weight for item in line_observations], float))
     base_fx = np.asarray([calibrations[key].intrinsics.fx for key in ids], float)
     pp = np.asarray([(calibrations[key].intrinsics.cx, calibrations[key].intrinsics.cy)
                      for key in ids], float)
@@ -477,6 +584,45 @@ def fit_independent_focals(
             rotations.append(_rodrigues(params[offset:offset + 3]))
             centers.append(params[offset + 3:offset + 6])
         return focal, rotations, np.asarray(centers), params[point_offset:point_end].reshape(npoint, 3)
+
+    def line_geometry(params: np.ndarray):
+        return [chart.decode(params[line_offset + 4*i:line_offset + 4*i + 4])
+                for i, chart in enumerate(line_charts)]
+
+    def line_image_residual(params: np.ndarray, focal, rotations, centers, geometry):
+        result = np.empty((len(luv), 2))
+        for index in range(len(luv)):
+            camera = lci[index]
+            point, direction = geometry[lli[index]]
+            result[index] = line_weights[index] * endpoint_distances(
+                point, direction, rotations[camera], centers[camera],
+                focal[camera], pp[camera], luv[index])
+        return result.ravel()
+
+    def line_prior(params: np.ndarray, points: np.ndarray, geometry):
+        if not line_mirrors:
+            return np.empty(0)
+        normal = constraints.mirror_normal
+        assert normal is not None
+        householder = np.eye(3) - 2 * np.outer(normal, normal)
+        distance = (float(normal @ points[constraints.mirror_reference_index])
+                    if constraints.mirror_reference_index is not None else constraints.mirror_distance)
+        if mirror_offset_column is not None:
+            distance += float(params[mirror_offset_column])
+        result = []
+        for left_id, right_id in line_mirrors:
+            left_p, left_d = geometry[line_index[left_id]]
+            right_p, right_d = geometry[line_index[right_id]]
+            reflected_p = householder @ left_p + 2 * distance * normal
+            reflected_d = householder @ left_d
+            if reflected_d @ right_d < 0:
+                reflected_d = -reflected_d
+            # Two perpendicular position coordinates and two direction
+            # coordinates: translation along either line is no constraint.
+            result.extend((constraints.mirror_pair_spring *
+                           np.cross(right_d, reflected_p - right_p))[:].tolist())
+            result.extend((200.0 * np.cross(right_d, reflected_d)).tolist())
+        return np.asarray(result)
 
     def residual_and_jacobian(params: np.ndarray, *, jacobian: bool):
         focal, rotations, centers, points = decode(params)
@@ -531,21 +677,62 @@ def fit_independent_focals(
                     jac[rows, rotation_start + component] = np.einsum(
                         'nij,nj->ni', dq, derivative).ravel()
         pixel_residual = residual.ravel()
-        if not constraints.active:
+        geometry = line_geometry(params)
+        line_residual = line_image_residual(params, focal, rotations, centers, geometry)
+        if jacobian and len(line_residual):
+            line_jac = np.zeros((len(line_residual), len(params)))
+            relevant = set(range(ncam))
+            for camera in set(lci):
+                if camera == 1:
+                    relevant.update(range(ncam, ncam + 5 + scale_columns))
+                elif camera > 1:
+                    start = ncam + 5 + scale_columns + 6*(camera-2)
+                    relevant.update(range(start, start+6))
+            relevant.update(range(line_offset, line_end))
+            for column in sorted(relevant):
+                step = 1e-6 * max(1.0, abs(params[column]))
+                shifted = params.copy()
+                shifted[column] += step
+                f, r, c, _p = decode(shifted)
+                line_jac[:, column] = (
+                    line_image_residual(shifted, f, r, c, line_geometry(shifted)) - line_residual) / step
+            jac = np.vstack((jac, line_jac))
+        pixel_residual = np.concatenate((pixel_residual, line_residual))
+        if not constraints.active and not line_mirrors:
             return pixel_residual, jac, depths
         offset = float(params[mirror_offset_column]) if mirror_offset_column is not None else 0.0
         prior_residual, prior_jacobian = constraints.residual_and_jacobian(
             points, point_offset=point_offset, parameter_count=len(params),
             mirror_offset=offset, mirror_offset_column=mirror_offset_column,
             jacobian=jacobian)
-        return (np.concatenate((pixel_residual, prior_residual)),
-                np.vstack((jac, prior_jacobian)) if jacobian else None, depths)
+        mirror_line_residual = line_prior(params, points, geometry)
+        if jacobian and len(mirror_line_residual):
+            mirror_jac = np.zeros((len(mirror_line_residual), len(params)))
+            relevant = set(range(line_offset, line_end))
+            if constraints.mirror_reference_index is not None:
+                start = point_offset + 3 * constraints.mirror_reference_index
+                relevant.update(range(start, start + 3))
+            if mirror_offset_column is not None:
+                relevant.add(mirror_offset_column)
+            for column in sorted(relevant):
+                step = 1e-6 * max(1.0, abs(params[column]))
+                shifted = params.copy()
+                shifted[column] += step
+                shifted_points = shifted[point_offset:point_end].reshape(npoint, 3)
+                mirror_jac[:, column] = (
+                    line_prior(shifted, shifted_points, line_geometry(shifted)) - mirror_line_residual) / step
+        else:
+            mirror_jac = None
+        return (np.concatenate((pixel_residual, prior_residual, mirror_line_residual)),
+                np.vstack((jac, prior_jacobian, mirror_jac)) if jacobian and mirror_jac is not None
+                else np.vstack((jac, prior_jacobian)) if jacobian else None, depths)
 
     try:
         initial_residual, _, _ = residual_and_jacobian(x, jacobian=False)
-        pixel_rows = 2 * len(uv)
-        coordinate_weights = np.repeat(weights, 2)
-        initial_raw = initial_residual[:pixel_rows].reshape(-1, 2) / weights[:, None]
+        point_rows = 2 * len(uv)
+        pixel_rows = point_rows + 2 * len(luv)
+        coordinate_weights = np.concatenate((np.repeat(weights, 2), np.repeat(line_weights, 2)))
+        initial_raw = initial_residual[:point_rows].reshape(-1, 2) / weights[:, None]
         initial_rmse = float(np.sqrt(np.mean(np.sum(initial_raw**2, axis=1))))
         damping = 1.0e-3
         converged = False
@@ -556,7 +743,9 @@ def fit_independent_focals(
             if time.monotonic() - start_time > MAX_SECONDS:
                 return refuse("Point focal fit reached its time limit")
             if progress_callback:
-                progress_callback(iteration, MAX_ITERATIONS, "Estimating focal from points")
+                progress_callback(iteration, MAX_ITERATIONS,
+                                  "Estimating focal from landmarks" if line_ids else
+                                  "Estimating focal from points")
             residual, jac, _ = residual_and_jacobian(x, jacobian=True)
             cost = float(residual @ residual)
             column_scale = np.maximum(np.linalg.norm(jac, axis=0), 1.0e-8)
@@ -604,7 +793,8 @@ def fit_independent_focals(
                 return refuse("Cancelled")
             return refuse("Point focal fit did not converge." + hint)
         fitted_residual, jac, depths = residual_and_jacobian(x, jacobian=True)
-        end_raw = fitted_residual[:pixel_rows].reshape(-1, 2) / weights[:, None]
+        end_raw = fitted_residual[:point_rows].reshape(-1, 2) / weights[:, None]
+        all_raw = fitted_residual[:pixel_rows] / coordinate_weights
         fitted_rmse = float(np.sqrt(np.mean(np.sum(end_raw**2, axis=1))))
         if not np.isfinite(fitted_rmse) or np.any(depths <= 0):
             return refuse("Fitted scene has points behind a camera", fitted=fitted_rmse)
@@ -623,13 +813,48 @@ def fit_independent_focals(
                 return refuse("Fitted points violate a hard Is in Plane relation", fitted=fitted_rmse)
             if mirror_max > MIRROR_PAIR_HARD_GAP:
                 return refuse("Fitted points violate a supplied point mirror relation", fitted=fitted_rmse)
+            if line_mirrors:
+                final_geometry = line_geometry(x)
+                normal = constraints.mirror_normal
+                assert normal is not None
+                householder = np.eye(3) - 2 * np.outer(normal, normal)
+                distance = (float(normal @ final_points[constraints.mirror_reference_index])
+                            if constraints.mirror_reference_index is not None else constraints.mirror_distance)
+                if mirror_offset_column is not None:
+                    distance += float(x[mirror_offset_column])
+                for left_id, right_id in line_mirrors:
+                    left_p, left_d = final_geometry[line_index[left_id]]
+                    right_p, right_d = final_geometry[line_index[right_id]]
+                    reflected_p = householder @ left_p + 2 * distance * normal
+                    reflected_d = householder @ left_d
+                    position_gap = baseline * np.linalg.norm(
+                        np.cross(right_d, reflected_p - right_p))
+                    direction_gap = np.linalg.norm(np.cross(right_d, reflected_d))
+                    if (position_gap > MIRROR_PAIR_HARD_GAP or
+                            direction_gap > LINE_MIRROR_DIRECTION_HARD_SINE):
+                        return refuse("Fitted lines violate a supplied mirror relation", fitted=fitted_rmse)
+        if len(luv):
+            final_geometry = line_geometry(x)
+            focal_check, rotations_check, centers_check, _points = decode(x)
+            for index, endpoints in enumerate(luv):
+                camera = lci[index]
+                line_point, line_direction = final_geometry[lli[index]]
+                for endpoint in endpoints:
+                    ray_camera = np.array((
+                        (endpoint[0] - pp[camera, 0]) / focal_check[camera],
+                        (endpoint[1] - pp[camera, 1]) / focal_check[camera], 1.0))
+                    ray = rotations_check[camera].T @ ray_camera
+                    support = _closest_point_on_line_to_ray(
+                        line_point, line_direction, centers_check[camera], ray)
+                    if (rotations_check[camera] @ (support - centers_check[camera]))[2] <= 0:
+                        return refuse("Fitted line stroke has geometry behind a camera", fitted=fitted_rmse)
         # Residual count and model dimensions make this a noise-aware fit test.
-        if not constraints.active and not _fits_noise_model(end_raw, len(x), pick_sigma_px):
+        if not constraints.active and not _fits_noise_model(all_raw, len(x), pick_sigma_px):
             hint = _conflict_hint(ids, observations, pick_sigma_px,
                                   cancel_check=cancel_check)
             if cancel_check and cancel_check():
                 return refuse("Cancelled")
-            return refuse("Point fit is inconsistent with the stated pick noise." + hint,
+            return refuse("Landmark fit is inconsistent with the stated pick noise." + hint,
                           fitted=fitted_rmse)
         # Reject serious camera-specific regression even if total cost improves.
         start_per_camera = initial_raw
@@ -659,13 +884,13 @@ def fit_independent_focals(
         pixel_influence = ((vh[~null].T / singular[~null]) @
                            u[:pixel_rows, ~null].T) * coordinate_weights / column_scale[:, None]
         if constraints.active and not _fits_constrained_noise_model(
-                end_raw.ravel(), jac[:pixel_rows] / coordinate_weights[:, None],
+                all_raw, jac[:pixel_rows] / coordinate_weights[:, None],
                 pixel_influence, pick_sigma_px):
             hint = _conflict_hint(ids, observations, pick_sigma_px,
                                   cancel_check=cancel_check)
             if cancel_check and cancel_check():
                 return refuse("Cancelled")
-            return refuse("Point fit is inconsistent with the stated pick noise." + hint,
+            return refuse("Landmark fit is inconsistent with the stated pick noise." + hint,
                           fitted=fitted_rmse)
         focal, rotations, centers, points = decode(x)
         intervals = {}
@@ -708,6 +933,19 @@ def fit_independent_focals(
             result_sims[camera_id] = SimilarityTransform(
                 scale=old_scale, rotation=sim_rotation,
                 translation=global_center - old_scale * (sim_rotation @ source.camera_center))
+        result_lines = {}
+        geometry = line_geometry(x)
+        match_inputs = {key: SyncMatchInput(key, result_cals[key]) for key in ids}
+        for index, line_id in enumerate(line_ids):
+            local_point, local_direction = geometry[index]
+            world_point = anchor_r.T @ (local_point * baseline) + anchor_c
+            world_direction = anchor_r.T @ local_direction
+            segment = _finite_segment_from_line_observations(
+                world_point, world_direction,
+                [item for item in line_observations if item.landmark_id == line_id],
+                result_sims, match_inputs)
+            result_lines[line_id] = segment
+            result_points[line_id] = 0.5 * (segment[0] + segment[1])
         per_camera = {}
         for camera, camera_id in enumerate(ids):
             chosen = ci == camera
@@ -716,11 +954,17 @@ def fit_independent_focals(
         for point, point_id in enumerate(point_ids):
             chosen = pi == point
             per_point[point_id] = float(np.sqrt(np.mean(np.sum(end_per_camera[chosen]**2, axis=1))))
+        line_raw = fitted_residual[point_rows:pixel_rows].reshape(-1, 2) / line_weights[:, None]
+        for line_id, index in line_index.items():
+            chosen = lli == index
+            per_point[line_id] = float(np.sqrt(np.mean(np.sum(line_raw[chosen]**2, axis=1))))
         sync_result = SyncSolveResult(
             similarities=result_sims, landmarks=result_points,
+            line_segments=result_lines,
             mean_reprojection_px=fitted_rmse, per_match_rmse_px=per_camera,
             per_landmark_rmse_px=per_point,
-            message=f"Independent point focals fitted in {iterations} iterations",
+            message=f"Independent focals fitted from points and lines in {iterations} iterations"
+                    if line_ids else f"Independent point focals fitted in {iterations} iterations",
             bundle_adjusted=True)
         return FocalBundleOutcome(True, "", result_cals, sync_result, intervals,
                                   initial_rmse, fitted_rmse)

@@ -45,7 +45,7 @@ Keep this map accurate when you add a module, move a stage, or change a named co
 | VP / single-camera geometry | `core/geometry.py` |
 | Landmark-graph sync | `core/sync/` (package; import as `match_perspective.core.sync`) |
 | Focal search | `core/lens_refine.py` (supported-point reprojection score, successful-incumbent support retention and pose reuse; refused candidates restart registration while explicit pose locks remain active) |
-| Independent FOV from point picks | `core/focal_bundle.py` (NumPy joint focal/pose/point fit, bounded runtime and size, raw-pick depth screen, conditional sensitivity under explicit pixel noise; optional route in `core/lens_refine.py` initializes with point-only registration before enforcing plane/mirror relations in the final joint fit) |
+| Independent FOV from landmarks | `core/focal_bundle.py` (NumPy joint focal/pose/point/line fit; bounded runtime/size, point depth screen, conditional sensitivity); `core/focal_lines.py` (four-coordinate infinite lines, stroke residuals); `core/focal_constraints.py` (point plane and shared mirror plane constraints). Optional route in `core/lens_refine.py` initializes from points before the joint fit; line plane/parallel relations remain unsupported. |
 | Point-FOV plane and mirror constraints | `core/focal_constraints.py` (fixed-anchor coordinate conversion, axis/Free-plane and object/live-landmark point-mirror springs, normal-only Mirror Slack and appropriate baseline scale freedom (live reference keeps global scale free); geometric rows are not independent image picks) |
 | Lens job input and execution | `scene/__init__.py` (`LensRefinePrep.solver_kwargs`, `run_lens_refine`; `collect_lens_refine_inputs` reads without preparation; apply checks numerical inputs, scene identity and camera targets; `PinSyncSnapshot` also restores state after an application error) |
 | Sync input collection and Diagnose result ownership | `scene/__init__.py` (`collect_sync_request` reads without preparation; Diagnose checks its captured request hash and scene identity before applying diagnostics) |
@@ -85,7 +85,8 @@ Do not special-case a user `.blend` (filename, match names, landmark names, or t
 
 ## Debugging tools
 
-- `tools/debug-sync/probe_lens_inputs.py` — read-only lens eligibility report: per-camera point counts, line landmarks, and named plane/mirror members without two-view point support; no solve or save.
+- `tools/debug-sync/probe_lens_inputs.py` — lens eligibility report with named constraints; optional `--fit-seconds` performs a bounded numerical trial and preserves inputs/startup alongside `--out`. Never applies results or saves the source blend.
+- `tools/synthetic_sync/focal_lines.py` and `verify_focal_lines_blender.py` — independent varied/reversed line-stroke and mirrored-line fixtures; native preparation, one bundle from explicit oracle point/pose startup (or one real Sync with `--fresh`), apply and stale-stroke checks. No user file or saved blend.
 
 Headless helpers under `tools/` (and `scripts/validate_addon.py`) for investigating a `.blend` without clicking the sidebar. If you build a new dump, probe, or reproduction script while solving a problem, **check it in** and add a bullet here so the next agent can find it.
 

@@ -26,6 +26,7 @@ class PointFocalConstraints:
     axis_groups: list[tuple[np.ndarray, list[int]]]
     free_groups: list[list[int]]
     mirror_pairs: list[tuple[int, int]]
+    mirror_enabled: bool
     mirror_normal: np.ndarray | None
     mirror_distance: float
     mirror_reference_index: int | None
@@ -39,7 +40,7 @@ class PointFocalConstraints:
 
     @property
     def active(self) -> bool:
-        return bool(self.axis_groups or self.free_groups or self.mirror_pairs)
+        return bool(self.axis_groups or self.free_groups or self.mirror_enabled)
 
     @classmethod
     def from_inputs(
@@ -50,6 +51,7 @@ class PointFocalConstraints:
         mirror_plane: tuple[np.ndarray, np.ndarray] | None,
         mirror_slack: float,
         mirror_landmark_id: str | None = None,
+        extra_mirror_pairs: bool = False,
     ) -> "PointFocalConstraints":
         """Reject unsupported references rather than dropping relation members."""
         index = {key: value for value, key in enumerate(point_ids)}
@@ -109,13 +111,14 @@ class PointFocalConstraints:
                 mirror_distance = mirror_distance_world / baseline_world
                 mirror_scale_tolerance = MIRROR_ANCHOR_PLANE_RELATIVE_TOLERANCE * max(
                     baseline_world, float(np.linalg.norm(origin - anchor_center)), 1.0)
-        mirror_enabled = bool(pairs)
+        mirror_enabled = bool(pairs) or extra_mirror_pairs
         free_baseline = bool(mirror_enabled and mirror_landmark_id is None and
                              abs(mirror_distance_world) > mirror_scale_tolerance)
         hard_plane_slack = plane_slack if plane_slack > 1e-12 else PLANE_HARD_SLACK
         return cls(
             axis_groups=axis_groups, free_groups=free_groups,
             mirror_pairs=[(index[left], index[right]) for left, right in pairs],
+            mirror_enabled=mirror_enabled,
             mirror_normal=mirror_normal, mirror_distance=mirror_distance,
             mirror_reference_index=(index[mirror_landmark_id]
                                     if mirror_landmark_id is not None else None),
@@ -145,7 +148,7 @@ class PointFocalConstraints:
                 plane_max = max(plane_max, self.baseline_world *
                                 float(np.max(abs((local - centre) @ normal))))
         mirror_max = 0.0
-        if self.mirror_pairs:
+        if self.mirror_enabled:
             normal = self.mirror_normal
             assert normal is not None
             householder = np.eye(3) - 2.0 * np.outer(normal, normal)
@@ -200,7 +203,7 @@ class PointFocalConstraints:
                         changed = self.plane_spring * ((shifted - trial_centre) @ trial_normal)
                         block[:, point_offset + 3 * member + axis] = (changed - values) / step
                 rows.extend(block)
-        if self.mirror_pairs:
+        if self.mirror_enabled:
             normal = self.mirror_normal
             assert normal is not None
             householder = np.eye(3) - 2.0 * np.outer(normal, normal)

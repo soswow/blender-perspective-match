@@ -58,8 +58,8 @@ evidence that the geometry is correct.
 ### Independent FOV estimates from shared points (no VP lines)
 
 For different lenses or zoom settings, turn **Same Lens** off and enable
-**Estimate FOV from Points** before running **Refine Lenses**. This opt-in mode
-jointly fits each focal length, camera pose and reconstructed 3D point. Start with at
+**Estimate FOV from Landmarks** before running **Refine Lenses**. This opt-in mode
+jointly fits each focal length, camera pose, reconstructed 3D point and supported line. Start with at
 least three overlapping views taken from different positions and picks spread
 across the images and object depth. Use Manual FOV for approximate starting
 values; the **%** field bounds the focal search around those values (40% by
@@ -88,18 +88,27 @@ not a mathematical maximum. All participating views are fitted jointly; no
 overlapping batches are necessary within this limit. Larger sets may take
 longer to register, and the subsequent focal fit retains its time limit.
 It refuses unsupported constraints instead of ignoring them: Known 3D, On
-Ground, VP strokes, landmark lines,
-pose locks and Fit Only belong to the existing Sync/lens workflows. It does
-not treat mirrored lines as point pairs. To fit from points in a scene containing
-lines, turn off **Use in Sync** on those **line landmarks** for the operation; removing a camera
-does not remove this limitation. Their strokes then supply no evidence for that
-fit. Re-enable them afterward for ordinary Solve Sync with the fitted lenses.
-It does
+Ground, VP strokes, pose locks and Fit Only belong to the existing Sync/lens
+workflows. It does
 not estimate distortion or unknown crop offsets. If the shared picks can be
 explained by planar geometry or rotation without reliable depth evidence, the
 mode declines to change the cameras. A successful result applies the jointly
-fitted cameras and points together; a refusal leaves the existing scene intact.
+fitted cameras, points and lines together; a refusal leaves the existing scene intact.
 Without an external reference, scale remains arbitrary.
+
+Line strokes supplement the shared point picks; they do not replace the eight
+point picks required per camera for startup and the depth-evidence check. The
+fit uses distance to an infinite projected line: mark any clearly visible
+portion of the same straight edge, in either drawing direction. Endpoints do
+not need to identify the same physical locations across images. Assumed Pick
+Error also applies to the perpendicular error of each stroke endpoint.
+Ordinary free lines and line-to-line **Is Mirror Of** pairs are supported.
+This first implementation allows up to 24 lines and 96 strokes per fit.
+A line needs two-view strokes, or a reconstructed mirror partner to supply its
+geometry. Line **Is in Plane**, **Is Parallel To**, Known 3D lines and mixed
+point/line mirror pairs are currently refused; point plane groups remain
+supported alongside line strokes. Degenerate or inconsistent line evidence can
+cause a refusal even when the point-only fit would pass.
 
 Point landmarks may use **Is in Plane** (X/Y/Z or Free) and **Is Mirror Of**
 with a supplied **Mirror Empty** or an on-plane **Mirror Landmark**. Plane Slack and Mirror Slack keep their
@@ -254,7 +263,7 @@ Diagnose checks that its Sync inputs and active scene still match when the backg
 
 When error is high, Diagnose also runs leave-one-out checks on the worst landmarks. It runs in the background: the collapsed **Info** section under **Hide Origin Empty** shows the current solve stage, and **Esc** or **Cancel** stops it. Leave-one-out keeps the camera graph accepted by the base solve, so a rejected still is not globally re-registered five more times. HTML reports belong to **Diagnose** only; **Solve Sync** keeps its normal Blender status and does not create or open a report. **Clear** resets sync transforms and forgets the current report link. Diagnose and Solve Sync cache each still-pair pose so a second run skips the expensive pairwise search when those two cameras' shared picks, Known 3D, and private K/pose are unchanged; **Clear** drops that cache. Independent still pairs on the first run are solved in parallel.
 
-**Refine Lenses** searches focal length to lower reprojection error across supported point picks. The **Same Lens** checkbox and **%** field sit above the button. **Same Lens** (on by default) applies one scale to every still — use this when they share a physical camera / imported YAML; it does not need VP lines. Off normally uses a per-still VP search (re-orients from VP lines, skips 1-point / weak-VP stills). Coupled polish and Solve Sync follow, retaining the same plane groups, Plane Slack and other geometric constraints as Solve Sync. Alternatively, enable **Estimate FOV from Points** for the independent no-VP workflow above; that mode applies the joint camera/point fit directly and supports point plane/mirror relations, with the limits above. Both run in a background thread — watch the progress slider, press **Esc** or **Cancel** to stop. The % field is the ± search window around current fx (default 18 for the existing searches, 40 for point FOV estimation). Disable unrelated matches or landmarks before refining a subset. Matches in **Adjusted Camera** mode are skipped so the button stays available for the others.
+**Refine Lenses** searches focal length to lower reprojection error across supported point picks. The **Same Lens** checkbox and **%** field sit above the button. **Same Lens** (on by default) applies one scale to every still — use this when they share a physical camera / imported YAML; it does not need VP lines. Off normally uses a per-still VP search (re-orients from VP lines, skips 1-point / weak-VP stills). Coupled polish and Solve Sync follow, retaining the same plane groups, Plane Slack and other geometric constraints as Solve Sync. Alternatively, enable **Estimate FOV from Landmarks** for the independent no-VP workflow above; that mode applies the joint camera/point fit directly and supports point plane/mirror relations, with the limits above. Both run in a background thread — watch the progress slider, press **Esc** or **Cancel** to stop. The % field is the ± search window around current fx (default 18 for the existing searches, 40 for point FOV estimation). Disable unrelated matches or landmarks before refining a subset. Matches in **Adjusted Camera** mode are skipped so the button stays available for the others.
 
 For the existing shared/VP searches, the lens score includes recovered stills whose errors may be excluded from Solve Sync’s joint headline. Once a successful candidate exists, later candidates must keep its registered cameras and reconstructed points/lines and remain successful. An initially refused solve can still improve its lenses, even if Sync continues to refuse. Line-only searches retain their existing line score. Point FOV estimation instead requires an accepted joint result before applying any change.
 

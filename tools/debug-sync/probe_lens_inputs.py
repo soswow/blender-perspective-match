@@ -1,4 +1,4 @@
-"""Read-only lens-input eligibility report; never solve or save the blend.
+"""Lens-input report with optional bounded fit; never apply or save the blend.
 
 blender --factory-startup --disable-autoexec -b --python this.py -- --blend scene.blend
 """
@@ -9,6 +9,8 @@ from collections import Counter, defaultdict
 import json
 from pathlib import Path
 import sys
+import time
+from unittest.mock import patch
 
 import bpy
 
@@ -34,7 +36,10 @@ def report():
         points=len(views), known_points=len(prep.known_world),
         ground_picks=sum(p.on_ground for p in prep.observations),
         line_picks=len(prep.line_observations),
-        unsupported_line_landmarks=sorted({names.get(p.landmark_id, p.landmark_id)
+        plane_groups=[(names.get(p, p), axis, bucket) for p, axis, bucket in (prep.plane_groups or [])],
+        mirror_pairs=[(names.get(a, a), names.get(b, b)) for a, b in (prep.mirror_pairs or [])],
+        parallel_pairs=[(names.get(a, a), names.get(b, b)) for a, b in (prep.parallel_pairs or [])],
+        line_landmarks=sorted({names.get(p.landmark_id, p.landmark_id)
                                            for p in prep.line_observations}),
         constrained_landmarks=[dict(id=p, name=names.get(p, p), kind=kinds.get(p), views=sorted(views[p]))
                             for p in sorted(relations)],
@@ -47,13 +52,51 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--blend', required=True)
     parser.add_argument('--out')
+    parser.add_argument('--fit-seconds', type=float, default=0,
+                        help='Optionally run one fit, with cooperative timeout; never apply it')
     args = parser.parse_args(sys.argv[sys.argv.index('--') + 1:])
     _load_extension()
     bpy.ops.wm.open_mainfile(filepath=str(Path(args.blend).expanduser().resolve()))
-    text = json.dumps(report(), indent=2)
-    print(text)
-    if args.out:
-        Path(args.out).write_text(text + '\n', encoding='utf-8')
+    if not 0 <= args.fit_seconds <= 600:
+        parser.error('--fit-seconds must be between 0 and 600')
+    result = report()
+
+    def emit():
+        text = json.dumps(result, indent=2)
+        print(text, flush=True)
+        if args.out:
+            Path(args.out).write_text(text + '\n', encoding='utf-8')
+
+    emit()
+    if args.fit_seconds:
+        from match_perspective import scene
+        from match_perspective.core import lens_refine
+        from match_perspective.core.sync.request import json_values
+        prep = scene.collect_lens_refine_inputs(bpy.context)
+        started = time.monotonic()
+        result['fit'] = dict(status='started', budget_seconds=args.fit_seconds,
+                             input_sha256=prep.source_request_sha256)
+        emit()
+        if args.out:
+            Path(args.out + '.inputs.json').write_text(json.dumps(json_values(prep.solver_kwargs()), indent=2))
+        original_sync = lens_refine._run_sync
+
+        def capture_startup(*values, **options):
+            initial = original_sync(*values, **options)
+            result['fit']['registered_cameras'] = sorted(initial.similarities)
+            result['fit']['startup_message'] = initial.message
+            if args.out:
+                Path(args.out + '.startup.json').write_text(json.dumps(json_values(initial), indent=2))
+            emit()
+            return initial
+
+        with patch.object(lens_refine, '_run_sync', side_effect=capture_startup):
+            fitted = scene.run_lens_refine(
+                prep, cancel_check=lambda: time.monotonic() - started > args.fit_seconds)
+        result['fit'].update(status='completed', seconds=time.monotonic() - started,
+            accepted=fitted.improved, refusal=fitted.refusal_reason,
+            message=fitted.message, focal_intervals=fitted.focal_intervals)
+        emit()
 
 
 if __name__ == '__main__':

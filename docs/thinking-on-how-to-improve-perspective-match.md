@@ -9,7 +9,33 @@ The deeper product issue is that three different promises are currently close to
 
 ## Current frontier — 12 September 2026
 
-**Camera-count and eligibility follow-up:** independent point-FOV fitting now
+**Latest extension: lines in independent FOV fitting.** The option is now
+**Estimate FOV from Landmarks**. Free lines and line-to-line mirror pairs join
+the focal/camera/point fit using four coordinates per infinite line and two
+perpendicular endpoint residuals per stroke. Drawing direction and the visible
+interval are not endpoint correspondences. Stroke noise contributes to the
+conditional focal ranges. Point-based startup and its minimum support/depth
+requirements remain. Current added resource bounds are 24 lines / 96 strokes.
+Point plane groups remain supported alongside lines; line plane/parallel
+relations, Known 3D lines and mixed point/line mirrors are explicitly refused.
+
+`tools/synthetic_sync/focal_lines.py` supplies independent varied/reversed
+strokes and withheld truth. Exact oracle-start tests recover focal lengths to
+better than 0.01%, line geometry within 1e-4 world units, and withheld point/line
+projections within 0.01px. Contradictory mirror strokes and an unsupported
+one-view setup refuse. Native preparation/bundle/apply checks, including a four-camera fresh
+registration run, reached under 0.001px maximum withheld error; changed strokes invalidate pending application.
+These exact controls do not establish noisy real-data confidence coverage.
+
+**Current practical blocker:** point-only startup can still omit a camera at
+approximate initial FOVs, before joint lines/focals can help. A bounded real-data
+trial reproduced this, without applying or saving anything. The refusal now
+names missing cameras; the lens probe can retain numerical inputs and startup
+state for reuse. Next investigate recovering omitted cameras while allowing
+their lenses to change, using a generic regression and independent held-out
+checks. Do not classify picks as wrong solely from residuals at guessed FOVs.
+
+**Earlier camera-count and eligibility follow-up:** independent point-FOV fitting
 allows 3–32 cameras in one joint fit. Eight was an implementation cap, not a
 mathematical boundary. `tests/test_focal_camera_count.py` verifies a nine-camera
 fresh registration/fit with distinct lenses, partial picks and independent
@@ -26,13 +52,13 @@ checking point relations: mirrored line IDs previously caused a misleading
 missing-two-view-picks message. A synthetic regression reproduces that ordering
 error. `tools/debug-sync/probe_lens_inputs.py` exposes camera pick counts and
 named unsupported/under-supported landmarks without solving or saving a file.
-**Remaining product gap:** independent-FOV fitting still cannot use line
+**Product gap at that earlier checkpoint (free/mirror lines now addressed):** independent-FOV fitting could not use line
 strokes or mirrored lines. Temporarily excluding lines makes them absent
 evidence, not supported constraints; joint line/FOV support needs its own
 independent geometry and uncertainty checks. Assumed Pick Error is now labeled
 explicitly and documented as an input noise assumption, not a fitted score.
 
-**Latest outcome:** a shared mirror plane can now follow a reconstructed point
+**Live mirror-reference outcome:** a shared mirror plane can now follow a reconstructed point
 landmark in ordinary Sync and point-FOV fitting, with supplied world-axis or
 object orientation. The landmark is fitted jointly, not copied into a fixed
 Empty. The live-reference checkpoint below records scope and verification;
@@ -278,7 +304,7 @@ case-specific contracts or a claim that every geometry is now accurate.
 
 **Objective and scope:** improve Sync reliability through reproducible evidence and independent checks of the rest of the object, beyond fitted picks. Both visual alignment and metric accuracy matter. Synthetic scenes are the primary corpus; private projects are optional evidence. Images are optional. **Latest user steering:** reliable FOV estimation from shared landmarks without dependable VP lines is now a priority; both shared-lens sets and mixed lenses/zooms/crops are common. Image transformations and distortion are now in scope when they affect that workflow. Automatic AprilTag/VP detection remains optional, not a prerequisite. Earlier deferrals below are historical.
 
-**Newest result:** **Estimate FOV from Points** is an opt-in product mode under
+**Independent-FOV product baseline:** **Estimate FOV from Landmarks** is an opt-in product mode under
 Refine Lenses when Same Lens is off. It jointly fits independent focal lengths,
 camera poses and free 3D points without VP lines or Known 3D. The implemented
 scope is 3–32 cameras and 8–80 points, at least eight picks per camera and

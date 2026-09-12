@@ -88,7 +88,7 @@ View lighting applies display-only exposure/contrast to `post-processed/<stem>-p
 
 ## Limitations
 
-- Initial FOV is manual. Shared point picks across translated views can refine it without VP lines: use Same Lens for a shared correction, or the optional Estimate FOV from Points mode for independent lenses. Point estimates include conditional local uncertainty and can be refused for weak evidence; see [the Sync workflow](sync.md#independent-fov-estimates-from-shared-points-no-vp-lines). GeoCalib automatic FOV/gravity estimation is intentionally omitted.
+- Initial FOV is manual. Shared point picks across translated views can refine it without VP lines: use Same Lens for a shared correction, or the optional Estimate FOV from Landmarks mode for independent lenses. Point estimates include conditional local uncertainty and can be refused for weak evidence; see [the Sync workflow](sync.md#independent-fov-estimates-from-shared-points-no-vp-lines). GeoCalib automatic FOV/gravity estimation is intentionally omitted.
 - Automatic VP lines are 3-point only; 1- and 2-point still need hand-drawn strokes. Detection can mis-label axes on ambiguous stills.
 - Assumes square pixels and zero skew.
 - 1-point perspective cannot determine focal length from VP geometry alone.
