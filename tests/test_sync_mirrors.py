@@ -19,11 +19,99 @@ if "match_perspective" not in sys.modules:
 
 from match_perspective import core
 from match_perspective.core import sync
+from match_perspective.core.sync.ba import _ba_raw_residuals_and_jacobian
+from match_perspective.core.sync import solve as solve_module
 from sync_fixtures import _look_at_rotation, _project, _synthetic_scene
 
 
 class MirrorPairSyncTests(unittest.TestCase):
     """Is Mirror Of pairs in joint BA (pairwise still uses real correspondences)."""
+
+    def test_live_reference_jacobian_moves_plane_with_point(self) -> None:
+        normal = np.array((1.0, 0.3, -0.2), dtype=float)
+        params = np.array((-1.0, 0.4, 0.2, 1.1, 0.1, 0.3, 0.15, 0.2, 0.1, 0.02))
+        options = dict(
+            free_match_ids=[], free_landmark_ids=["left", "right", "center"],
+            fixed_landmarks={}, anchor_id="anchor", matches={}, observations=[],
+            line_constraints=[], lock_scale=True, fixed_scales={},
+            mirror_pairs=[("left", "right")],
+            mirror_plane=(np.array((8.0, 0.0, 0.0)), normal),
+            mirror_landmark_id="center", mirror_slack=0.1, free_plane_offset=True,
+        )
+        residual, jacobian, _protected = _ba_raw_residuals_and_jacobian(params, **options)
+        for column in range(6, 10):
+            shifted = params.copy()
+            shifted[column] += 1e-6
+            changed = _ba_raw_residuals_and_jacobian(shifted, **options)[0]
+            np.testing.assert_allclose(jacobian[:, column], (changed - residual) / 1e-6,
+                                       rtol=1e-6, atol=1e-4)
+
+    def test_live_reference_jacobian_moves_mirror_lines(self) -> None:
+        params = np.array((0.15, 0.2, 0.1, -1.0, 0.3, 0.2, 1.0, 0.2, 0.4))
+        options = dict(
+            free_match_ids=[], free_landmark_ids=["center"],
+            fixed_landmarks={}, anchor_id="anchor", matches={}, observations=[],
+            line_constraints=[], lock_scale=True, fixed_scales={},
+            free_line_ids=["edge_left", "edge_right"],
+            fixed_line_directions={"edge_right": np.array((0.0, 1.0, 0.2))},
+            mirror_pairs=[("edge_left", "edge_right")],
+            mirror_plane=(np.array((9.0, 0.0, 0.0)), np.array((1.0, 0.3, -0.2))),
+            mirror_landmark_id="center",
+        )
+        residual, jacobian, _protected = _ba_raw_residuals_and_jacobian(params, **options)
+        for column in range(3):
+            shifted = params.copy()
+            shifted[column] += 1e-6
+            changed = _ba_raw_residuals_and_jacobian(shifted, **options)[0]
+            np.testing.assert_allclose(jacobian[:, column], (changed - residual) / 1e-6,
+                                       rtol=1e-6, atol=1e-4)
+
+    def test_unpicked_partner_refreshes_from_current_reference_and_fitted_offset(self) -> None:
+        anchor_match = _synthetic_scene(with_ground=False)[0][0]
+        line_a = np.array((-1.0, -0.2, 0.3))
+        line_b = np.array((-1.0, 0.8, 0.3))
+        uv_a = _project(line_a, anchor_match.calibration)
+        uv_b = _project(line_b, anchor_match.calibration)
+        state = object.__new__(solve_module._SolveState)
+        state.__dict__.update(
+            mirror_plane=(np.array((8.0, 0.0, 0.0)), np.array((1.0, 0.0, 0.0))),
+            mirror_landmark_id="center", mirror_offset=0.12,
+            mirror_pairs=[("left", "right"), ("line_left", "line_right")],
+            landmarks={"center": np.array((-0.12, 0.0, 0.0)),
+                       "left": np.array((-1.0, 0.2, 0.3)),
+                       "right": np.array((0.76, 0.2, 0.3))},
+            observations_by_landmark_all={"left": [sync.SyncObservation("anchor", "left", 10, 20)]},
+            line_observations_by_landmark={"line_left": [
+                sync.SyncLineObservation("anchor", "line_left", *uv_a, *uv_b)
+            ]}, similarities={"anchor": sync.SimilarityTransform()},
+            match_map={"anchor": anchor_match}, location_match_ids=None,
+            line_segments={"line_left": (line_a, line_b)}, known_lines={},
+            known_world={}, fixed_match_ids=set(), valid_observations=[], plane_groups=[],
+            plane_slack=0.0, plane_seeded_ids=set(), parallel_pairs=None,
+            usable_observations=[], observations_by_landmark={}, landmark_ids=[],
+        )
+        solve_module._attach_mirror_landmarks(state)
+        np.testing.assert_allclose(state.landmarks["right"], (1.0, 0.2, 0.3), atol=1e-12)
+        self.assertAlmostEqual(float(np.mean([end[0] for end in state.line_segments["line_right"]])),
+                               1.0, delta=0.02)
+        state.landmarks["center"][0] = -0.20
+        solve_module._attach_mirror_landmarks(state)
+        np.testing.assert_allclose(state.landmarks["right"], (0.84, 0.2, 0.3), atol=1e-12)
+        self.assertAlmostEqual(float(np.mean([end[0] for end in state.line_segments["line_right"]])),
+                               0.84, delta=0.02)
+
+    def test_dropping_a_camera_clears_live_offset_before_reconstruction(self) -> None:
+        state = object.__new__(solve_module._SolveState)
+        state.__dict__.update(
+            mirror_landmark_id="center", mirror_offset=0.14,
+            fixed_match_ids=set(), skipped_unregistered=[], free_match_ids=["other"],
+            similarities={"other": sync.SimilarityTransform()}, peeled_similarities={},
+            usable_observations=[], observations_by_landmark={}, landmark_ids=[],
+            line_observations_by_landmark={},
+        )
+        state.drop_matches(["other"])
+        self.assertEqual(state.mirror_offset, 0.0)
+        self.assertNotIn("other", state.similarities)
 
     def test_reflect_point_round_trip(self) -> None:
         """Reflecting twice returns the original point."""
@@ -264,6 +352,85 @@ class MirrorPairSyncTests(unittest.TestCase):
             for name, point in pairs_true.items()
         )
         self.assertLess(dist_eased, dist_frozen - 0.02)
+
+    def _live_reference_case(self):
+        """Independent point picks define a plane omitted by the stored origin."""
+        matches, observations, _pairs_true, plane, known_world = (
+            self._scene_with_two_view_mirrors()
+        )
+        true_sim = _synthetic_scene(with_ground=False)[2]
+        reference = np.array((0.0, 0.35, 1.0), dtype=np.float64)
+        anchor_uv = _project(reference, matches[0].calibration)
+        other_uv = _project(true_sim.inverse_point(reference), matches[1].calibration)
+        observations.extend((
+            sync.SyncObservation("anchor", "center", anchor_uv[0] + 2.0, anchor_uv[1] - 1.0),
+            sync.SyncObservation("other", "center", other_uv[0] - 1.5, other_uv[1] + 0.5),
+        ))
+        options = dict(
+            matches=matches, observations=observations, anchor_id="anchor",
+            known_world=known_world,
+            mirror_pairs=[("left", "right"), ("left_b", "right_b")],
+            mirror_plane=(np.array((0.22, 0.0, 0.0)), plane[1]),
+        )
+        return options
+
+    def test_live_reference_follows_noisy_two_view_point_and_ignores_stored_origin(self):
+        """A stale fixed plane misses the same pair midpoint that a live point fits."""
+        options = self._live_reference_case()
+        live = sync.solve_landmark_sync(**options, mirror_landmark_id="center", mirror_slack=0.0)
+        shifted = dict(options, mirror_plane=(np.array((-1.7, 2.4, 0.5)), options["mirror_plane"][1]))
+        moved_origin = sync.solve_landmark_sync(**shifted, mirror_landmark_id="center", mirror_slack=0.0)
+        stale = sync.solve_landmark_sync(**options, mirror_slack=0.0)
+        for result in (live, moved_origin, stale):
+            self.assertTrue(result.success, result.message)
+        self.assertIn("mirror plane follows point", live.message)
+        self.assertLess(abs(float(live.landmarks["center"][0])), 0.04)
+        for left, right in options["mirror_pairs"]:
+            midpoint = 0.5 * (live.landmarks[left] + live.landmarks[right])
+            self.assertLess(abs(float(midpoint[0] - live.landmarks["center"][0])), 0.015)
+            stale_midpoint = 0.5 * (stale.landmarks[left] + stale.landmarks[right])
+            self.assertGreater(abs(float(stale_midpoint[0] - stale.landmarks["center"][0])), 0.10)
+        np.testing.assert_allclose(live.landmarks["center"], moved_origin.landmarks["center"], atol=1e-7)
+        np.testing.assert_allclose(live.landmarks["left"], moved_origin.landmarks["left"], atol=1e-7)
+
+    def test_live_reference_soft_slack_keeps_plane_offset_relative_to_current_point(self):
+        options = self._live_reference_case()
+        reference = np.array((-0.11, 0.35, 1.0))
+        true_sim = _synthetic_scene(with_ground=False)[2]
+        anchor_uv = _project(reference, options["matches"][0].calibration)
+        other_uv = _project(true_sim.inverse_point(reference), options["matches"][1].calibration)
+        options["observations"] = [
+            item for item in options["observations"] if item.landmark_id != "center"
+        ] + [
+            sync.SyncObservation("anchor", "center", anchor_uv[0] + 2.0, anchor_uv[1] - 1.0),
+            sync.SyncObservation("other", "center", other_uv[0] - 1.5, other_uv[1] + 0.5),
+        ]
+        result = sync.solve_landmark_sync(**options, mirror_landmark_id="center", mirror_slack=0.2)
+        self.assertTrue(result.success, result.message)
+        point = result.landmarks["center"]
+        midpoint_x = np.mean([
+            0.5 * (result.landmarks[left][0] + result.landmarks[right][0])
+            for left, right in options["mirror_pairs"]
+        ])
+        self.assertLess(abs(float(point[0] + 0.11)), 0.04)
+        self.assertGreater(float(midpoint_x - point[0]), 0.05)
+        self.assertLess(float(midpoint_x - point[0]), 0.2)
+        self.assertLess(abs(float(midpoint_x)), 0.04)
+
+    def test_live_reference_rejects_missing_line_pair_member_and_fit_only_source(self):
+        options = self._live_reference_case()
+        for change, message in (
+            ({"mirror_landmark_id": "absent"}, "missing"),
+            ({"mirror_landmark_id": "left"}, "member"),
+            ({"mirror_landmark_id": "center", "line_observations": [
+                sync.SyncLineObservation("anchor", "center", 1, 2, 3, 4)
+            ]}, "not a line"),
+            ({"mirror_landmark_id": "center", "location_match_ids": {"anchor"}}, "two location-enabled"),
+            ({"mirror_landmark_id": "center", "readonly_match_ids": {"other"}}, "two location-enabled"),
+        ):
+            result = sync.solve_landmark_sync(**(options | change))
+            self.assertFalse(result.success)
+            self.assertIn(message, result.message)
 
     def test_mirror_line_pair_seeds_one_sided_edges(self) -> None:
         """A left-only / right-only line pair reconstructs across the plane."""

@@ -1,4 +1,4 @@
-"""Point-only plane and supplied-mirror residuals for independent FOV fitting."""
+"""Point-only plane and mirror residuals for independent FOV fitting."""
 
 from __future__ import annotations
 
@@ -28,6 +28,7 @@ class PointFocalConstraints:
     mirror_pairs: list[tuple[int, int]]
     mirror_normal: np.ndarray | None
     mirror_distance: float
+    mirror_reference_index: int | None
     baseline_world: float
     plane_spring: float
     mirror_pair_spring: float
@@ -48,6 +49,7 @@ class PointFocalConstraints:
         plane_slack: float, mirror_pairs: list[tuple[str, str]] | None,
         mirror_plane: tuple[np.ndarray, np.ndarray] | None,
         mirror_slack: float,
+        mirror_landmark_id: str | None = None,
     ) -> "PointFocalConstraints":
         """Reject unsupported references rather than dropping relation members."""
         index = {key: value for value, key in enumerate(point_ids)}
@@ -76,33 +78,47 @@ class PointFocalConstraints:
         if len(pairs) != len(mirror_pairs or ()):
             raise ValueError("Point mirror pairs contain invalid or duplicate links")
         if pairs and mirror_plane is None:
-            raise ValueError("Point mirror pairs need a supplied Mirror Empty")
+            raise ValueError("Point mirror pairs need a mirror plane normal" if
+                             mirror_landmark_id is not None else
+                             "Point mirror pairs need a supplied Mirror Empty")
         if any(left not in index or right not in index for left, right in pairs):
             raise ValueError("Point mirror pair contains a landmark without two-view picks")
+        if mirror_landmark_id is not None:
+            if not isinstance(mirror_landmark_id, str) or not mirror_landmark_id:
+                raise ValueError("Mirror reference landmark ID is invalid")
+            if mirror_landmark_id not in index:
+                raise ValueError("Mirror reference landmark needs two-view picks")
+            if any(mirror_landmark_id in pair for pair in pairs):
+                raise ValueError("Mirror reference landmark cannot be a mirror pair member")
         mirror_normal = None
         mirror_distance = 0.0
         mirror_distance_world = 0.0
         mirror_scale_tolerance = 0.0
         if mirror_plane is not None:
-            origin = np.asarray(mirror_plane[0], float).reshape(3)
             normal_world = np.array(mirror_plane[1], dtype=float, copy=True).reshape(3)
             length = float(np.linalg.norm(normal_world))
-            if not np.isfinite(origin).all() or not np.isfinite(normal_world).all() or length < 1e-12:
+            if not np.isfinite(normal_world).all() or length < 1e-12:
                 raise ValueError("Supplied mirror plane is invalid")
             normal_world /= length
             mirror_normal = anchor_rotation @ normal_world
-            mirror_distance_world = float(normal_world @ (origin - anchor_center))
-            mirror_distance = mirror_distance_world / baseline_world
-            mirror_scale_tolerance = MIRROR_ANCHOR_PLANE_RELATIVE_TOLERANCE * max(
-                baseline_world, float(np.linalg.norm(origin - anchor_center)), 1.0)
+            if mirror_landmark_id is None:
+                origin = np.asarray(mirror_plane[0], float).reshape(3)
+                if not np.isfinite(origin).all():
+                    raise ValueError("Supplied mirror plane is invalid")
+                mirror_distance_world = float(normal_world @ (origin - anchor_center))
+                mirror_distance = mirror_distance_world / baseline_world
+                mirror_scale_tolerance = MIRROR_ANCHOR_PLANE_RELATIVE_TOLERANCE * max(
+                    baseline_world, float(np.linalg.norm(origin - anchor_center)), 1.0)
         mirror_enabled = bool(pairs)
-        free_baseline = bool(mirror_enabled and
+        free_baseline = bool(mirror_enabled and mirror_landmark_id is None and
                              abs(mirror_distance_world) > mirror_scale_tolerance)
         hard_plane_slack = plane_slack if plane_slack > 1e-12 else PLANE_HARD_SLACK
         return cls(
             axis_groups=axis_groups, free_groups=free_groups,
             mirror_pairs=[(index[left], index[right]) for left, right in pairs],
             mirror_normal=mirror_normal, mirror_distance=mirror_distance,
+            mirror_reference_index=(index[mirror_landmark_id]
+                                    if mirror_landmark_id is not None else None),
             baseline_world=baseline_world,
             plane_spring=PLANE_RESIDUAL_PX * baseline_world / hard_plane_slack,
             mirror_pair_spring=MIRROR_PAIR_RESIDUAL_PX * baseline_world / MIRROR_PAIR_HARD_GAP,
@@ -133,7 +149,9 @@ class PointFocalConstraints:
             normal = self.mirror_normal
             assert normal is not None
             householder = np.eye(3) - 2.0 * np.outer(normal, normal)
-            shift = 2.0 * (self.mirror_distance + mirror_offset) * normal
+            distance = (float(normal @ points[self.mirror_reference_index])
+                        if self.mirror_reference_index is not None else self.mirror_distance)
+            shift = 2.0 * (distance + mirror_offset) * normal
             for left, right in self.mirror_pairs:
                 gap = points[right] - (householder @ points[left] + shift)
                 mirror_max = max(mirror_max, self.baseline_world * float(np.linalg.norm(gap)))
@@ -186,7 +204,9 @@ class PointFocalConstraints:
             normal = self.mirror_normal
             assert normal is not None
             householder = np.eye(3) - 2.0 * np.outer(normal, normal)
-            reflected_offset = 2.0 * (self.mirror_distance + mirror_offset) * normal
+            distance = (float(normal @ points[self.mirror_reference_index])
+                        if self.mirror_reference_index is not None else self.mirror_distance)
+            reflected_offset = 2.0 * (distance + mirror_offset) * normal
             for left, right in self.mirror_pairs:
                 gap = points[right] - (householder @ points[left] + reflected_offset)
                 residuals.extend((self.mirror_pair_spring * gap).tolist())
@@ -194,6 +214,10 @@ class PointFocalConstraints:
                     block = np.zeros((3, parameter_count))
                     block[:, point_offset + 3 * left:point_offset + 3 * left + 3] = -self.mirror_pair_spring * householder
                     block[:, point_offset + 3 * right:point_offset + 3 * right + 3] = self.mirror_pair_spring * np.eye(3)
+                    if self.mirror_reference_index is not None:
+                        reference_column = point_offset + 3 * self.mirror_reference_index
+                        block[:, reference_column:reference_column + 3] -= (
+                            2.0 * self.mirror_pair_spring * np.outer(normal, normal))
                     if mirror_offset_column is not None:
                         block[:, mirror_offset_column] = -2.0 * self.mirror_pair_spring * normal
                     rows.extend(block)

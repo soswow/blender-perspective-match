@@ -49,6 +49,7 @@ from .mirrors import (
     enforce_mirror_line_segments,
     frozen_mirror_line_segments,
     mirror_plane_offset,
+    reflect_point,
     seed_mirror_landmarks,
     seed_mirror_line_segments,
 )
@@ -395,6 +396,7 @@ class _SolveState:
     mirror_pairs: list[tuple[str, str]] | None
     mirror_plane: tuple[np.ndarray, np.ndarray] | None
     mirror_slack: float
+    mirror_landmark_id: str | None
     plane_groups: list[tuple[str, str, int]]
     plane_slack: float
     lock_rotation: bool
@@ -419,6 +421,7 @@ class _SolveState:
     connected: set[str]
     location_match_ids: set[str] | None = None
     readonly_match_ids: set[str] = field(default_factory=set)
+    mirror_offset: float = 0.0
     landmarks: dict[str, np.ndarray] = field(default_factory=dict)
     consistent_metric: dict[str, np.ndarray] = field(default_factory=dict)
     line_segments: dict[str, tuple[np.ndarray, np.ndarray]] = field(
@@ -443,6 +446,8 @@ class _SolveState:
         ]
         if not match_ids:
             return
+        if self.mirror_landmark_id:
+            self.mirror_offset = 0.0
         skip = set(match_ids)
         self.skipped_unregistered.extend(
             match_id
@@ -484,11 +489,30 @@ class _SolveState:
             mirror_pairs=self.mirror_pairs,
             mirror_plane=self.mirror_plane,
             mirror_slack=self.mirror_slack,
+            mirror_landmark_id=self.mirror_landmark_id,
             plane_groups=self.plane_groups,
             plane_slack=self.plane_slack,
         )
 
-    def rebuild_landmarks(self) -> None:
+    def effective_mirror_plane(
+        self, landmarks: dict[str, np.ndarray] | None = None,
+    ) -> tuple[np.ndarray, np.ndarray] | None:
+        """Use the current reference point with the supplied plane normal."""
+        if self.mirror_plane is None:
+            return None
+        if self.mirror_landmark_id is None:
+            return self.mirror_plane
+        points = self.landmarks if landmarks is None else landmarks
+        point = points.get(self.mirror_landmark_id)
+        if point is None:
+            raise ValueError("Mirror reference point lost its two-view reconstruction; add supporting picks")
+        normal = self.mirror_plane[1]
+        unit = normal / max(float(np.linalg.norm(normal)), 1.0e-12)
+        return point + self.mirror_offset * unit, normal
+
+    def rebuild_landmarks(
+        self, retained_landmarks: dict[str, np.ndarray] | None = None,
+    ) -> None:
         """Triangulate points/lines; pin Known 3D and consistent On Ground."""
         self.plane_seeded_ids.clear()
         rebuilt = _triangulate_landmarks(
@@ -522,6 +546,7 @@ class _SolveState:
         # location view could triangulate.
         for landmark_id, point in metric_points.items():
             rebuilt.setdefault(landmark_id, point)
+        rebuilt.update(retained_landmarks or {})
         self.landmarks = rebuilt
         self.consistent_metric = consistent
         _rebuild_free_line_segments(self)
@@ -554,10 +579,10 @@ class _SolveState:
 
 
 def _snap_mirror_landmarks(state: _SolveState) -> None:
-    """Project reconstructed two-sided pairs onto the Mirror Empty."""
+    """Project reconstructed two-sided pairs onto the current mirror plane."""
     if state.mirror_plane is None or not state.mirror_pairs:
         return
-    plane_point, plane_normal = state.mirror_plane
+    plane_point, plane_normal = state.effective_mirror_plane()
     apply_mirror_seed(
         state.landmarks,
         state.mirror_pairs,
@@ -597,7 +622,7 @@ def _attach_mirror_landmarks(state: _SolveState) -> None:
     """Seed mirror geometry from location-enabled views; retain all posed picks."""
     if state.mirror_plane is None or not state.mirror_pairs:
         return
-    plane_point, plane_normal = state.mirror_plane
+    plane_point, plane_normal = state.effective_mirror_plane()
     location_ids = getattr(state, "location_match_ids", None)
     point_support = {
         key: observations_for_location(items, location_ids)
@@ -616,6 +641,33 @@ def _attach_mirror_landmarks(state: _SolveState) -> None:
         plane_point,
         plane_normal,
     )
+    # An unpicked partner may have been seeded before BA fitted a soft plane
+    # offset. Keep that dependent point on the accepted effective plane.
+    if state.mirror_landmark_id:
+        for landmark_a, landmark_b in _dedupe_mirror_pairs(state.mirror_pairs):
+            for source_id, partner_id in ((landmark_a, landmark_b), (landmark_b, landmark_a)):
+                if (
+                    source_id in state.landmarks
+                    and partner_id in state.landmarks
+                    and point_support.get(source_id)
+                    and not state.observations_by_landmark_all.get(partner_id)
+                    and partner_id not in state.known_world
+                    and partner_id not in state.line_segments
+                ):
+                    state.landmarks[partner_id] = reflect_point(
+                        state.landmarks[source_id], plane_point, plane_normal,
+                    )
+        for landmark_a, landmark_b in _dedupe_mirror_pairs(state.mirror_pairs):
+            for source_id, partner_id in ((landmark_a, landmark_b), (landmark_b, landmark_a)):
+                if (
+                    source_id in state.line_segments
+                    and line_support.get(source_id)
+                    and not state.line_observations_by_landmark.get(partner_id)
+                    and not state.observations_by_landmark_all.get(partner_id)
+                    and partner_id not in state.known_lines
+                ):
+                    state.line_segments.pop(partner_id, None)
+                    state.landmarks.pop(partner_id, None)
     seed_mirror_line_segments(
         state.line_segments,
         state.landmarks,
@@ -929,7 +981,11 @@ def _rebuild_free_line_segments(state: _SolveState) -> None:
             ground_landmark_ids=ground_ids,
             excluded_support_ids=getattr(state,"plane_seeded_ids",set()),
         )
-    mirror_plane = getattr(state, "mirror_plane", None)
+    mirror_plane = (
+        state.effective_mirror_plane()
+        if isinstance(state, _SolveState)
+        else getattr(state, "mirror_plane", None)
+    )
     mirror_pairs = getattr(state, "mirror_pairs", None)
     if mirror_plane is not None and mirror_pairs:
         enforce_mirror_line_segments(
@@ -1186,8 +1242,11 @@ def _refine_recovered_location(state: _SolveState) -> None:
         key: point.copy() for key, point in state.landmarks.items()
         if key in state.known_world and state.known_3d_slack > 1.0e-12
     }
-    state.rebuild_landmarks()
-    state.landmarks.update(previous_known)
+    if state.mirror_landmark_id:
+        state.rebuild_landmarks(retained_landmarks=previous_known)
+    else:
+        state.rebuild_landmarks()
+        state.landmarks.update(previous_known)
     _rebuild_usable_observations(state)
     free_match_ids = [
         match_id
@@ -1217,6 +1276,7 @@ def _refine_recovered_location(state: _SolveState) -> None:
         for landmark_id, point in state.landmarks.items()
         if landmark_id not in set(free_landmark_ids)
     }
+    plane_offset_out: list[float] = []
     similarities, landmarks, line_segments, ran = _bundle_adjust_registration(
         free_match_ids,
         free_landmark_ids,
@@ -1240,12 +1300,17 @@ def _refine_recovered_location(state: _SolveState) -> None:
         location_match_ids=state.location_match_ids,
         **state.ba_constraint_kwargs(),
         free_plane_offset=(state.mirror_slack > 1.0e-12 and bool(state.mirror_pairs) and state.mirror_plane is not None),
+        plane_offset_start=state.mirror_offset if state.mirror_landmark_id else 0.0,
+        plane_offset_out=plane_offset_out,
     )
     if not ran:
         return
     state.similarities = similarities
     state.landmarks = landmarks
     state.line_segments = line_segments
+    if state.mirror_landmark_id:
+        state.mirror_offset = plane_offset_out[0]
+        _attach_mirror_landmarks(state)
 
 
 def _resect_skipped_matches(state: _SolveState) -> None:
@@ -1357,6 +1422,7 @@ def solve_landmark_sync(
     mirror_pairs: list[tuple[str, str]] | None = None,
     mirror_plane: tuple[np.ndarray, np.ndarray] | None = None,
     mirror_slack: float | None = None,
+    mirror_landmark_id: str | None = None,
     plane_groups: list[tuple[str, str, int]] | None = None,
     plane_slack: float | None = None,
     location_match_ids: set[str] | None = None,
@@ -1386,7 +1452,8 @@ def solve_landmark_sync(
     when a set is given. ``readonly_match_ids`` skip pairwise and are
     resected against the frozen cloud. ``mirror_plane`` is ``(point, normal)``;
     ``mirror_slack`` is how far that plane may slide along the normal (the
-    Empty is not moved). ``plane_groups`` is ``(landmark_id, axis, bucket)``
+    Empty is not moved). ``mirror_landmark_id`` uses the current solved point
+    as the plane origin. ``plane_groups`` is ``(landmark_id, axis, bucket)``
     with axis X/Y/Z/FREE and bucket 1..10; ``plane_slack`` is how far those
     members may leave the shared plane.
     """
@@ -1413,6 +1480,10 @@ def solve_landmark_sync(
         )
         if float(np.linalg.norm(mirror_plane[1])) < 1.0e-12:
             mirror_plane = None
+    if mirror_landmark_id is not None and (
+        not isinstance(mirror_landmark_id, str) or not mirror_landmark_id
+    ):
+        raise ValueError("Mirror reference must identify a point landmark")
     ignored_mirror_pairs = 0
     if mirror_pairs and mirror_plane is None:
         ignored_mirror_pairs = len(mirror_pairs)
@@ -1432,6 +1503,15 @@ def solve_landmark_sync(
     for item in matches:
         _square_pixel_intrinsics_if_stretched(item.calibration)
     identity_result = {item.match_id: SimilarityTransform() for item in matches}
+    def _mirror_failure(reason: str) -> SyncSolveResult:
+        return SyncSolveResult(
+            similarities=identity_result, landmarks={}, mean_reprojection_px=0.0,
+            per_match_rmse_px={}, per_landmark_rmse_px={},
+            message=f"Mirror reference unavailable: {reason}", success=False,
+        )
+
+    if mirror_landmark_id is not None and mirror_plane is None:
+        return _mirror_failure("choose a mirror plane normal")
     if anchor_id not in match_map:
         return SyncSolveResult(
             similarities=identity_result,
@@ -1484,6 +1564,20 @@ def solve_landmark_sync(
         landmark_id: list(items)
         for landmark_id, items in line_observations_by_landmark.items()
     }
+    if mirror_landmark_id is not None:
+        if mirror_landmark_id in known_lines or mirror_landmark_id in line_observations_by_landmark:
+            return _mirror_failure("select a point landmark, not a line")
+        if mirror_landmark_id not in observations_by_landmark and mirror_landmark_id not in known_world:
+            return _mirror_failure("the selected point is missing")
+        if any(mirror_landmark_id in pair for pair in mirror_pairs):
+            return _mirror_failure("the plane point cannot be a member of an active mirror pair")
+        location_ids = set(match_map) if location_match_ids is None else set(location_match_ids) | {anchor_id}
+        supporting_views = {
+            item.match_id for item in observations_by_landmark.get(mirror_landmark_id, ())
+            if item.match_id in location_ids and item.match_id not in (readonly_match_ids or ())
+        }
+        if mirror_landmark_id not in known_world and len(supporting_views) < 2:
+            return _mirror_failure("add picks in two location-enabled cameras")
 
     multi_ids = {
         landmark_id
@@ -1692,6 +1786,7 @@ def solve_landmark_sync(
         mirror_pairs=mirror_pairs,
         mirror_plane=mirror_plane,
         mirror_slack=mirror_slack,
+        mirror_landmark_id=mirror_landmark_id,
         plane_groups=plane_groups,
         plane_slack=plane_slack,
         lock_rotation=lock_rotation,
@@ -1720,8 +1815,13 @@ def solve_landmark_sync(
     # 1. register (done)  2. peel weak cameras  3. BA  4. peel  5. resect
     _check_cancelled(cancel_check)
     _report_progress(progress_callback, "Triangulating landmarks")
-    state.rebuild_landmarks()
-    peeled = _peel_cameras_above_rmse(state)
+    try:
+        state.rebuild_landmarks()
+        peeled = _peel_cameras_above_rmse(state)
+    except ValueError as error:
+        if mirror_landmark_id is None or not str(error).startswith("Mirror reference point lost"):
+            raise
+        return _mirror_failure("supporting cameras could not be retained; add reliable picks")
     if peeled is not None:
         return peeled
     free_match_ids = state.free_match_ids
@@ -1923,7 +2023,8 @@ def solve_landmark_sync(
             ground_landmark_ids=ground_landmark_ids,
             excluded_support_ids=state.plane_seeded_ids,
         )
-        if mirror_plane is not None and mirror_pairs:
+        current_mirror_plane = state.effective_mirror_plane(landmarks)
+        if current_mirror_plane is not None and mirror_pairs:
             seed_mirror_line_segments(
                 line_segments,
                 landmarks,
@@ -1931,8 +2032,8 @@ def solve_landmark_sync(
                 similarities,
                 match_map,
                 mirror_pairs,
-                mirror_plane[0],
-                mirror_plane[1],
+                current_mirror_plane[0],
+                current_mirror_plane[1],
                 known_lines,
                 state.fixed_match_ids,
             )
@@ -1940,8 +2041,8 @@ def solve_landmark_sync(
                 line_segments,
                 landmarks,
                 mirror_pairs,
-                mirror_plane[0],
-                mirror_plane[1],
+                current_mirror_plane[0],
+                current_mirror_plane[1],
                 line_support,
                 similarities,
                 match_map,
@@ -1963,6 +2064,7 @@ def solve_landmark_sync(
     ) -> bool:
         nonlocal similarities, landmarks, line_segments
         _check_cancelled(cancel_check)
+        plane_offset_out: list[float] = []
         similarities, landmarks, line_segments, ran = (
             _bundle_adjust_registration(
                 free_match_ids,
@@ -1986,10 +2088,14 @@ def solve_landmark_sync(
                 max_iterations=iterations,
                 **state.ba_constraint_kwargs(),
                 free_plane_offset=free_plane_offset,
+                plane_offset_start=state.mirror_offset if mirror_landmark_id else 0.0,
+                plane_offset_out=plane_offset_out,
                 location_match_ids=state.location_match_ids,
             )
         )
         if ran:
+            if mirror_landmark_id:
+                state.mirror_offset = plane_offset_out[0]
             _refresh_free_lines()
         return ran
 
@@ -2025,6 +2131,7 @@ def solve_landmark_sync(
         similarities = pre_ba_similarities
         landmarks = pre_ba_landmarks
         line_segments = pre_ba_segments
+        state.mirror_offset = 0.0
         did_bundle_adjust = False
         post_ba_match_rmse = pre_ba_match_rmse
     elif did_bundle_adjust and froze_structure:
@@ -2032,6 +2139,7 @@ def solve_landmark_sync(
         pass_a_similarities = _copy_similarities()
         pass_a_landmarks = _copy_landmarks()
         pass_a_segments = _copy_segments()
+        pass_a_offset = state.mirror_offset
         if _run_ba(
             list(free_landmark_ids),
             12,
@@ -2052,6 +2160,7 @@ def solve_landmark_sync(
                 pass_b_similarities = _copy_similarities()
                 pass_b_landmarks = _copy_landmarks()
                 pass_b_segments = _copy_segments()
+                pass_b_offset = state.mirror_offset
                 if _run_ba([], 8, free_plane_offset=use_plane_offset):
                     rmse_c = _mean_rmse(
                         _per_match_rmse_snapshot(
@@ -2068,6 +2177,7 @@ def solve_landmark_sync(
                         similarities = pass_b_similarities
                         landmarks = pass_b_landmarks
                         line_segments = pass_b_segments
+                        state.mirror_offset = pass_b_offset
                 post_ba_match_rmse = _per_match_rmse_snapshot(
                     free_match_ids,
                     landmark_ids,
@@ -2081,6 +2191,7 @@ def solve_landmark_sync(
                 similarities = pass_a_similarities
                 landmarks = pass_a_landmarks
                 line_segments = pass_a_segments
+                state.mirror_offset = pass_a_offset
                 post_ba_match_rmse = {
                     match_id: rmse_a for match_id in post_ba_match_rmse
                 }
@@ -2107,6 +2218,7 @@ def solve_landmark_sync(
         thaw_similarities = _copy_similarities()
         thaw_landmarks = _copy_landmarks()
         thaw_segments = _copy_segments()
+        thaw_offset = state.mirror_offset
         if _run_ba(
             mirror_free_ids,
             12,
@@ -2127,6 +2239,7 @@ def solve_landmark_sync(
                 similarities = thaw_similarities
                 landmarks = thaw_landmarks
                 line_segments = thaw_segments
+                state.mirror_offset = thaw_offset
             else:
                 post_ba_match_rmse = _per_match_rmse_snapshot(
                     free_match_ids,
@@ -2147,6 +2260,8 @@ def solve_landmark_sync(
     state.line_observations_by_landmark = line_observations_by_landmark
     state.landmark_ids = landmark_ids
     state.did_bundle_adjust = bool(did_bundle_adjust)
+    if mirror_landmark_id and did_bundle_adjust:
+        _attach_mirror_landmarks(state)
 
     weak_after = [
         match_id
@@ -2178,11 +2293,21 @@ def solve_landmark_sync(
                 ),
                 success=False,
             )
-        state.rebuild_landmarks()
+        try:
+            state.rebuild_landmarks()
+        except ValueError as error:
+            if mirror_landmark_id is None or not str(error).startswith("Mirror reference point lost"):
+                raise
+            return _mirror_failure("supporting cameras could not be retained; add reliable picks")
 
     _check_cancelled(cancel_check)
     _report_progress(progress_callback, "Retrying skipped cameras")
-    _resect_skipped_matches(state)
+    try:
+        _resect_skipped_matches(state)
+    except ValueError as error:
+        if mirror_landmark_id is None or not str(error).startswith("Mirror reference point lost"):
+            raise
+        return _mirror_failure("supporting cameras could not be retained; add reliable picks")
     similarities = state.similarities
     landmarks = state.landmarks
     line_segments = state.line_segments
@@ -2459,6 +2584,8 @@ def solve_landmark_sync(
         constraint_bits.append(f"{plane_count} plane")
     if constraint_bits:
         message += " · constraints: " + " + ".join(constraint_bits)
+    if mirror_pairs and mirror_landmark_id:
+        message += " · mirror plane follows point"
     if did_bundle_adjust:
         message += " · joint BA"
         if froze_structure:
@@ -2523,12 +2650,12 @@ def solve_landmark_sync(
         and mirror_plane is not None
         and mirror_pairs
     ):
-        offset = mirror_plane_offset(
-            landmarks,
-            mirror_pairs,
-            mirror_plane[0],
-            mirror_plane[1],
-        )
+        if mirror_landmark_id:
+            offset = state.mirror_offset
+        else:
+            offset = mirror_plane_offset(
+                landmarks, mirror_pairs, mirror_plane[0], mirror_plane[1],
+            )
         if offset is not None and abs(offset) > mirror_slack:
             message += (
                 f" · mirror slack {mirror_slack:g} exceeded: "

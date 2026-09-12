@@ -83,6 +83,7 @@ _PARALLEL_TO_STATIC = (
     *WORLD_AXIS_PARALLEL_ITEMS,
 )
 _MIRROR_OF_ITEMS: dict[tuple, tuple] = {}
+_MIRROR_LANDMARK_ITEMS: dict[tuple, tuple] = {}
 _PARALLEL_TO_ITEMS: dict[tuple, tuple] = {}
 _ACTIVE_MATCH_ITEMS: dict[tuple[tuple[str, str], ...], tuple] = {}
 _ANCHOR_MATCH_ITEMS: dict[tuple[tuple[str, str], ...], tuple] = {}
@@ -111,6 +112,7 @@ def bump_sync_ui_cache() -> None:
     _landmark_enum_candidates_cache = None
     _landmark_enum_candidates_key = None
     _MIRROR_OF_ITEMS.clear()
+    _MIRROR_LANDMARK_ITEMS.clear()
     _PARALLEL_TO_ITEMS.clear()
     _ACTIVE_MATCH_ITEMS.clear()
     _ANCHOR_MATCH_ITEMS.clear()
@@ -482,6 +484,35 @@ def _mirror_of_items(self, context):
     )
     _MIRROR_OF_ITEMS[key] = packed
     return packed
+
+
+def _mirror_landmark_items(self, context):
+    """Point IDs for a live plane origin, including a visibly missing selection."""
+    selected = str(self.mirror_landmark_id or "NONE")
+    key = (_sync_ui_generation, self.as_pointer(), selected)
+    cached = _MIRROR_LANDMARK_ITEMS.get(key)
+    if cached is not None:
+        return cached
+    entries = tuple((item.item_id, item.name or item.item_id,
+                     "Keep the mirror plane through this reconstructed point")
+                    for item in landmark_enum_candidates(self)
+                    if item.kind == "POINT" and item.item_id)
+    if selected != "NONE" and selected not in {item[0] for item in entries}:
+        entries += ((selected, "Missing or non-point landmark", "Choose an existing point landmark"),)
+    # Retain callback strings in the same cache used by the other landmark enums.
+    packed = (("NONE", "Choose landmark", "Point on the symmetry plane", 0, 0),) + _pack_mirror_enum_items(entries)
+    _MIRROR_LANDMARK_ITEMS[key] = packed
+    return packed
+
+
+def _get_mirror_landmark(self):
+    return next((item[-1] for item in _mirror_landmark_items(self, bpy.context)
+                 if item[0] == self.mirror_landmark_id), 0)
+
+
+def _set_mirror_landmark(self, value):
+    self.mirror_landmark_id = next((item[0] for item in _mirror_landmark_items(self, bpy.context)
+                                    if item[-1] == value), "NONE")
 
 
 def is_match_root(obj: bpy.types.Object | None) -> bool:
@@ -1017,7 +1048,7 @@ class PMLandmark(bpy.types.PropertyGroup):
         name="Is Mirror Of",
         description=(
             "Another point landmark that is this feature reflected across the "
-            "scene Mirror Empty. Each side can be picked in different stills"
+            "shared mirror plane. Each side can be picked in different stills"
         ),
         items=_mirror_of_items,
         get=_get_mirror_of,
@@ -1648,12 +1679,29 @@ class PMWorkspace(bpy.types.PropertyGroup):
         unit="LENGTH",
         update=_redraw,
     )
+    mirror_origin: bpy.props.EnumProperty(
+        name="Mirror Position",
+        description="What defines the shared mirror plane's position",
+        items=(("OBJECT", "Object", "Use the Mirror Empty's position and orientation"),
+               ("LANDMARK", "Landmark", "Keep the plane through a reconstructed point; supply its direction separately")),
+        default="OBJECT",
+        update=_touch_sync_ui,
+    )
+    mirror_landmark_id: bpy.props.StringProperty(
+        name="Mirror Landmark Id", default="NONE", options={"HIDDEN"},
+        update=_touch_sync_ui,
+    )
+    mirror_landmark: bpy.props.EnumProperty(
+        name="Mirror Landmark",
+        description="A point on the symmetry plane; its position is fitted jointly, not copied or treated as exact Known 3D",
+        items=_mirror_landmark_items, get=_get_mirror_landmark, set=_set_mirror_landmark,
+    )
     mirror_object: bpy.props.PointerProperty(
         name="Mirror Empty",
         description=(
             "One object whose chosen local plane is the shared mirror for "
             "every Is Mirror Of pair. Place it on the object's midline. "
-            "The Empty is not moved by Solve Sync"
+            "In Landmark mode only its orientation is used. The object is not moved by Solve Sync"
         ),
         type=bpy.types.Object,
         update=_redraw,
@@ -1662,7 +1710,7 @@ class PMWorkspace(bpy.types.PropertyGroup):
         name="Plane",
         description=(
             "Which local face of the Mirror Empty is the mirror plane. "
-            "YZ (default) means local X is the normal"
+            "YZ (default) means X is the normal. In Landmark mode without an object, use world axes"
         ),
         items=MIRROR_PLANE_ITEMS,
         default="YZ",
@@ -1672,7 +1720,7 @@ class PMWorkspace(bpy.types.PropertyGroup):
         name="Mirror Slack",
         description=(
             "How far the shared mirror plane may slide along its normal "
-            "(scene units) during Solve Sync. 0 pins it to the Empty. "
+            "(scene units) during Solve Sync. 0 keeps it through the selected object or live landmark. "
             "A small value lets a slightly misplaced Empty ease toward "
             "the 2D picks. Does not move the Empty"
         ),

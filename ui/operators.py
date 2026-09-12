@@ -3130,7 +3130,7 @@ class PM_OT_use_selected_mirror(bpy.types.Operator):
     bl_label = "Use Selected as Mirror Empty"
     bl_description = (
         "Use the active object as the shared mirror plane for every "
-        "Is Mirror Of pair"
+        "Is Mirror Of pair; in Landmark mode only its orientation is used"
     )
     bl_options = {"REGISTER", "UNDO"}
 
@@ -3154,7 +3154,7 @@ class PM_OT_clear_mirror(bpy.types.Operator):
 
     bl_idname = "perspective_match.clear_mirror"
     bl_label = "Clear Mirror Empty"
-    bl_description = "Remove the shared mirror plane Empty"
+    bl_description = "Remove the mirror object; Landmark mode then uses world axes for orientation"
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod

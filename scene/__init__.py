@@ -3391,15 +3391,20 @@ def collect_sync_mirror_pairs(context: bpy.types.Context) -> list[tuple[str, str
 def sync_mirror_plane_from_workspace(
     context: bpy.types.Context,
 ) -> tuple[tuple[float, float, float], tuple[float, float, float]] | None:
-    """Shared-world ``(point, unit_normal)`` from the scene Mirror Empty, or None."""
+    """Shared-world plane; a live landmark supplies its point inside the solve."""
     import numpy as np
 
     space = properties.workspace(context)
     obj = getattr(space, "mirror_object", None)
+    live = getattr(space, "mirror_origin", "OBJECT") == "LANDMARK"
     if obj is None or obj.name not in bpy.data.objects:
-        return None
-    matrix = np.array(obj.matrix_world, dtype=np.float64)
-    point = (float(matrix[0, 3]), float(matrix[1, 3]), float(matrix[2, 3]))
+        if not live:
+            return None
+        matrix = np.eye(4)
+    else:
+        matrix = np.array(obj.matrix_world, dtype=np.float64)
+    point = ((0.0, 0.0, 0.0) if live else
+             (float(matrix[0, 3]), float(matrix[1, 3]), float(matrix[2, 3])))
     face = getattr(space, "mirror_plane", "YZ")
     if face == "XZ":
         axis = matrix[:3, 1]
@@ -3422,8 +3427,20 @@ def _sync_mirror_kwargs(context: bpy.types.Context) -> dict:
     """Solver kwargs for the scene-level mirror plane and pairs."""
     space = properties.workspace(context)
     plane = sync_mirror_plane_from_workspace(context)
+    pairs = collect_sync_mirror_pairs(context)
+    reference_id = None
+    if getattr(space, "mirror_origin", "OBJECT") == "LANDMARK":
+        reference_id = str(space.mirror_landmark_id or "NONE")
+        reference = next((item for item in space.landmarks if item.item_id == reference_id), None)
+        if reference is None or reference.kind != "POINT":
+            raise ValueError("Choose an existing point landmark for Mirror Position")
+        if any(reference_id in pair for pair in pairs):
+            raise ValueError("The mirror reference must lie on the plane, not belong to a mirror pair")
+        if plane is None or not np.isfinite(np.asarray(plane)).all():
+            raise ValueError("Choose a valid orientation for the landmark mirror plane")
     return {
-        "mirror_pairs": collect_sync_mirror_pairs(context),
+        "mirror_pairs": pairs,
+        "mirror_landmark_id": reference_id,
         "mirror_plane": None if plane is None else (plane[0], plane[1]),
         "mirror_slack": float(getattr(space, "mirror_slack", 0.0)),
     }
@@ -3939,6 +3956,7 @@ class LensRefinePrep:
     location_match_ids: set | None = None
     readonly_match_ids: set | None = None
     mirror_pairs: list | None = None
+    mirror_landmark_id: str | None = None
     mirror_plane: tuple | None = None
     mirror_slack: float | None = None
     plane_groups: list | None = None

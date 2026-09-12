@@ -32,6 +32,7 @@ class SyncSolveRequest:
     mirror_pairs: list[tuple[str, str]] | None = None
     mirror_plane: tuple[np.ndarray, np.ndarray] | None = None
     mirror_slack: float | None = None
+    mirror_landmark_id: str | None = None
     plane_groups: list[tuple[str, str, int]] | None = None
     plane_slack: float | None = None
     location_match_ids: set[str] | None = None
@@ -67,14 +68,14 @@ class SyncSolveRequest:
                 inputs[key] = {name: _array(value, shape).tolist() for name, value in inputs[key].items()}
         if inputs["mirror_plane"] is not None:
             inputs["mirror_plane"] = _array(inputs["mirror_plane"], (2, 3)).tolist()
-        return {"format": "perspective-match-sync-request", "version": 3,
+        return {"format": "perspective-match-sync-request", "version": 4,
                 "inputs": inputs, "sha256": request_fingerprint(inputs)}
 
     @classmethod
     def from_record(cls, record: dict) -> SyncSolveRequest:
         """Decode a complete snapshot; reject missing fields and unknown versions."""
         version = record.get("version")
-        if record.get("format") != "perspective-match-sync-request" or type(version) is not int or version not in {1, 2, 3}:
+        if record.get("format") != "perspective-match-sync-request" or type(version) is not int or version not in {1, 2, 3, 4}:
             raise ValueError("Unsupported Sync request format/version")
         inputs = record["inputs"]
         if record.get("sha256") != request_fingerprint(inputs):
@@ -89,7 +90,16 @@ class SyncSolveRequest:
             if "plane_groups" in values or "plane_slack" in values:
                 raise ValueError("Plane fields require Sync request version 3")
             values.update(plane_groups=None, plane_slack=None)
+        if version in {1, 2, 3}:
+            if "mirror_landmark_id" in values:
+                raise ValueError("Mirror landmark field requires Sync request version 4")
+            values["mirror_landmark_id"] = None
         _check_fields(values, SyncSolveRequest)
+        if values["mirror_landmark_id"] is not None and (
+            not isinstance(values["mirror_landmark_id"], str)
+            or not values["mirror_landmark_id"]
+        ):
+            raise ValueError("Invalid mirror_landmark_id")
         for key in ("location_match_ids", "readonly_match_ids"):
             members = values[key]
             if members is not None:

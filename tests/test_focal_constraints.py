@@ -257,6 +257,92 @@ def _compiled(case):
 
 
 class PointFocalConstraintModelTests(TestCase):
+    def test_live_mirror_reference_has_joint_jacobian_and_no_metric_scale_prior(self):
+        case = fixtures.generate("mirror-hard-offcenter-exact")
+        old, old_points = _compiled(case)
+        reference_id = "reference"
+        ids = sorted(case["truth"]["points"]) + [reference_id]
+        left, right = old.mirror_pairs[0]
+        points = np.vstack((old_points, (old_points[left] + old_points[right]) / 2))
+        anchor = case["truth"]["cameras"][0]
+        normal = np.asarray(case["request"]["mirror_plane"][1])
+        model = PointFocalConstraints.from_inputs(
+            ids, anchor_rotation=np.asarray(anchor["rotation"]),
+            anchor_center=np.asarray(anchor["center"]), baseline_world=8.0,
+            plane_groups=[], plane_slack=0.0,
+            mirror_pairs=case["request"]["mirror_pairs"],
+            mirror_plane=(np.full(3, np.nan), normal), mirror_slack=0.15,
+            mirror_landmark_id=reference_id)
+        self.assertEqual(model.mirror_reference_index, len(ids) - 1)
+        self.assertFalse(model.free_baseline)
+        self.assertLess(model.world_gaps(points)[1], 1e-9)
+        self.assertLess(model.world_gaps(points * 2.3)[1], 1e-9)
+        parameter_count = points.size + 1
+        offset_column = points.size
+        residual, jac = model.residual_and_jacobian(
+            points, point_offset=0, parameter_count=parameter_count,
+            mirror_offset_column=offset_column, jacobian=True)
+        self.assertLess(np.max(abs(residual)), 1e-8)
+        for column in range(points.size - 3, parameter_count):
+            shifted = points.copy()
+            offset = 0.0
+            step = 1e-7
+            if column == offset_column:
+                offset = step
+            else:
+                shifted.reshape(-1)[column] += step
+            changed, _ = model.residual_and_jacobian(
+                shifted, point_offset=0, parameter_count=parameter_count,
+                mirror_offset=offset, mirror_offset_column=offset_column,
+                jacobian=False)
+            np.testing.assert_allclose(jac[:, column], (changed - residual) / step,
+                                       rtol=2e-6, atol=1e-4)
+        moved = points.copy()
+        moved[-1] += 0.1 * model.mirror_normal
+        self.assertGreater(model.world_gaps(moved)[1], 0.1)
+
+    def test_live_mirror_reference_is_covariant_under_world_translation(self):
+        case = fixtures.generate("mirror-hard-offcenter-exact")
+        anchor = case["truth"]["cameras"][0]
+        normal = np.asarray(case["request"]["mirror_plane"][1])
+        ids = sorted(case["truth"]["points"]) + ["reference"]
+        shift = np.asarray((2500.0, -3100.0, 750.0))
+        common = dict(point_ids=ids, anchor_rotation=np.asarray(anchor["rotation"]),
+                      baseline_world=8.0, plane_groups=[], plane_slack=0.0,
+                      mirror_pairs=case["request"]["mirror_pairs"],
+                      mirror_slack=0.0, mirror_landmark_id="reference")
+        first = PointFocalConstraints.from_inputs(
+            **common, anchor_center=np.asarray(anchor["center"]),
+            mirror_plane=(np.zeros(3), normal))
+        shifted = PointFocalConstraints.from_inputs(
+            **common, anchor_center=np.asarray(anchor["center"]) + shift,
+            mirror_plane=(np.full(3, 1e9), normal))
+        self.assertFalse(first.free_baseline)
+        self.assertFalse(shifted.free_baseline)
+        points = np.random.default_rng(19).normal(size=(len(ids), 3))
+        np.testing.assert_allclose(
+            first.residual_and_jacobian(points, point_offset=0,
+                                        parameter_count=points.size, jacobian=False)[0],
+            shifted.residual_and_jacobian(points, point_offset=0,
+                                          parameter_count=points.size, jacobian=False)[0])
+
+    def test_live_mirror_reference_rejects_missing_and_paired_landmarks(self):
+        case = fixtures.generate("mirror-hard-offcenter")
+        anchor = case["truth"]["cameras"][0]
+        common = dict(point_ids=sorted(case["truth"]["points"]),
+                      anchor_rotation=np.asarray(anchor["rotation"]),
+                      anchor_center=np.asarray(anchor["center"]), baseline_world=8.0,
+                      plane_groups=[], plane_slack=0.0,
+                      mirror_pairs=case["request"]["mirror_pairs"],
+                      mirror_plane=case["request"]["mirror_plane"], mirror_slack=0.0)
+        with self.assertRaisesRegex(ValueError, "reference landmark needs two-view picks"):
+            PointFocalConstraints.from_inputs(**common, mirror_landmark_id="missing")
+        with self.assertRaisesRegex(ValueError, "reference landmark ID is invalid"):
+            PointFocalConstraints.from_inputs(**common, mirror_landmark_id=[])
+        with self.assertRaisesRegex(ValueError, "cannot be a mirror pair member"):
+            PointFocalConstraints.from_inputs(
+                **common, mirror_landmark_id=case["request"]["mirror_pairs"][0][0])
+
     def test_conditional_pixel_noise_operator_excludes_prior_rows_as_clicks(self):
         # Two raw pixels determine one scalar; a hard geometric prior shrinks
         # the pixel influence without becoming a third independent click.

@@ -328,6 +328,7 @@ def fit_independent_focals(
     mirror_pairs: list[tuple[str, str]] | None = None,
     mirror_plane: tuple[np.ndarray, np.ndarray] | None = None,
     mirror_slack: float = 0.0,
+    mirror_landmark_id: str | None = None,
     cancel_check=None,
     progress_callback=None,
 ) -> FocalBundleOutcome:
@@ -367,6 +368,11 @@ def fit_independent_focals(
     if any(len({item.match_id for item in observations if item.landmark_id == point_id}) < 2
            for point_id in point_ids):
         return refuse("Every point needs at least two picks")
+    if mirror_landmark_id is not None:
+        if not isinstance(mirror_landmark_id, str) or not mirror_landmark_id:
+            return refuse("Mirror reference landmark ID is invalid")
+        if mirror_landmark_id not in point_ids:
+            return refuse("Mirror reference landmark needs two-view picks")
     for camera_id in ids:
         count = sum(item.match_id == camera_id for item in observations)
         if count < 8:
@@ -422,7 +428,8 @@ def fit_independent_focals(
             baseline_world=baseline, plane_groups=plane_groups,
             plane_slack=0.0 if plane_slack is None else plane_slack,
             mirror_pairs=mirror_pairs, mirror_plane=mirror_plane,
-            mirror_slack=0.0 if mirror_slack is None else mirror_slack)
+            mirror_slack=0.0 if mirror_slack is None else mirror_slack,
+            mirror_landmark_id=mirror_landmark_id)
     except (ValueError, TypeError, IndexError) as exc:
         return refuse(str(exc))
     direction = centers0[1] / np.linalg.norm(centers0[1])

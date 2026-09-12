@@ -806,9 +806,18 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
         plane_slack_row.use_property_split = False
         plane_slack_row.prop(workspace, "plane_slack", text="Plane Slack")
         plane_slack_row.prop(workspace, "mirror_slack", text="Mirror Slack")
+        origin_row = sync_body.row(align=True)
+        origin_row.use_property_split = False
+        origin_row.prop(workspace, "mirror_origin", text="Mirror Position")
+        live_mirror = workspace.mirror_origin == "LANDMARK"
+        if live_mirror:
+            landmark_row = sync_body.row(align=True)
+            landmark_row.use_property_split = False
+            landmark_row.prop(workspace, "mirror_landmark", text="On-plane Point")
         mirror_row = sync_body.row(align=True)
         mirror_row.use_property_split = False
-        mirror_row.prop(workspace, "mirror_object", text="Mirror Empty")
+        mirror_row.prop(workspace, "mirror_object",
+                        text="Orientation (optional)" if live_mirror else "Mirror Empty")
         mirror_row.operator(
             "perspective_match.use_selected_mirror",
             text="",
@@ -821,7 +830,8 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
         )
         mirror_opts = sync_body.row(align=True)
         mirror_opts.use_property_split = False
-        mirror_opts.prop(workspace, "mirror_plane", text="Plane")
+        mirror_opts.prop(workspace, "mirror_plane",
+                         text="World Plane" if live_mirror and workspace.mirror_object is None else "Local Plane")
         opts_row = sync_body.row(align=True)
         opts_row.use_property_split = False
         opts_row.prop(workspace, "share_lens", text="Same Lens")

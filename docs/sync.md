@@ -88,9 +88,9 @@ fitted cameras and points together; a refusal leaves the existing scene intact.
 Without an external reference, scale remains arbitrary.
 
 Point landmarks may use **Is in Plane** (X/Y/Z or Free) and **Is Mirror Of**
-with a supplied **Mirror Empty**. Plane Slack and Mirror Slack keep their
+with a supplied **Mirror Empty** or an on-plane **Mirror Landmark**. Plane Slack and Mirror Slack keep their
 existing meanings: plane membership can be softened, and Mirror Slack lets
-the effective mirror plane slide along its normal without moving the Empty.
+the effective mirror plane slide along its normal relative to the selected object or live landmark.
 Each member still needs picks in at least two cameras; the one-view constrained
 reconstruction available in ordinary Sync is not part of this FOV mode.
 Free groups need four members to constrain coplanarity; axis groups need two.
@@ -106,8 +106,9 @@ the anchor frame and constraints, not a check that those references are true.
 A Mirror Empty can fix scale relative to the stored anchor placement, but
 that establishes real dimensions only if that placement is trustworthy.
 An incorrect mirror offset can change reconstructed scale without worsening
-image alignment. Inferring a shared symmetry plane without an Empty remains
-an open workflow question.
+image alignment. A landmark can supply the plane position, but its orientation must still be
+supplied. Inferring that orientation from mirror pairs remains a separate
+workflow question.
 
 The eight-pick minimum is an eligibility rule, not an accuracy guarantee.
 Frozen tests include successful exact and noisy 12- and 16-landmark sets with
@@ -156,9 +157,38 @@ Model or place Empties in the anchor world → select them → Sync list **Landm
 
 A point or line landmark can name another of the same kind as **Is Mirror Of** — the same feature on the opposite side of a symmetric object. The pair is stored on both landmarks; selecting either side shows the other, and clearing **None** on one side clears the other. Each side is picked only where it is visible. The magic-wand button next to the dropdown fills the partner when this landmark's name ends with **left** or **right** and another landmark of the same kind uses the swapped name. Pairwise registration still needs ordinary shared points. The mirror constraint is used in joint BA, and a line picked in only a recovered still is mixed against the partner's reflected 3D when Solve Sync places that camera.
 
-One scene **Mirror Empty** (below the slack rows) is the plane for every pair. Place it on the midline. **Plane** chooses which local face is the mirror (YZ by default: local X is the normal). **Mirror Slack** sits beside **Plane Slack** (0 pins the plane) and lets that plane slide along its normal if the Empty was slightly off. The Empty is not moved.
+One scene **Mirror Empty** (below the slack rows) is the plane for every pair. Place it on the midline. **Local Plane** chooses which local face is the mirror (YZ by default: local X is the normal). **Mirror Slack** sits beside **Plane Slack** (0 pins the plane) and lets that plane slide along its normal if the Empty was slightly off. The Empty is not moved.
 
-If Is Mirror Of is set but Mirror Empty is empty, Solve Sync ignores those pairs and says so in the status line.
+For a plane that should follow a reconstructed point, set **Mirror Position**
+to **Landmark**, then choose the **On-plane Point**. It must lie on the symmetry
+plane, but need not be the object's center. Keep it separate from the paired
+left/right landmarks. **World Plane** chooses YZ, XZ or XY when no orientation
+object is assigned. For another direction, choose an **Orientation (optional)**
+object and its **Local Plane**; only that object's orientation is used.
+
+The reference is an ordinary reconstructed point. Its current estimate and the
+mirror relations are fitted together, so better picks and additional views can
+change the plane position during later solves. Its cached position and any
+visible landmark Empty are not treated as exact Known 3D. **Mirror Slack = 0**
+keeps the plane through the fitted reference; positive slack allows a normal
+offset from it. Moving an orientation object does not move the plane; rotating
+it changes the supplied normal. The solve never moves that object.
+
+Ordinary Sync needs the reference picked in at least two cameras allowed to
+contribute 3D, or explicitly linked as Known 3D. Point-FOV fitting needs at least
+two picked views and retains its existing point-only restrictions. Missing,
+excluded, line or paired references are refused rather than replaced with a
+static plane. Rename/reorder keeps the selection by landmark identity; after
+deleting it, choose a replacement. Diagnose keeps the reference in place during
+leave-one-out checks because removing it would change the mirror model.
+
+A free reconstructed landmark supplies position, not orientation or measured scale. The normal
+must be meaningful in the anchor frame, and weak picks can still produce weak
+geometry. Check features outside your fitted picks. Existing files keep
+**Mirror Position = Object** and their previous behavior.
+
+In Object mode, if Is Mirror Of is set but Mirror Empty is empty, Solve Sync
+ignores those pairs and says so in the status line.
 
 ### Shared planes
 

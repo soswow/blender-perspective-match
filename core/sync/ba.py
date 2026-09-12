@@ -700,7 +700,9 @@ def _ba_raw_residuals_and_jacobian(
     mirror_pairs: list[tuple[str, str]] | None = None,
     mirror_plane: tuple[np.ndarray, np.ndarray] | None = None,
     mirror_slack: float = 0.0,
+    mirror_landmark_id: str | None = None,
     free_plane_offset: bool = False,
+    plane_offset_start: float = 0.0,
     plane_groups: list[tuple[str, str, int]] | None = None,
     plane_slack: float = 0.0,
     location_match_ids: set[str] | None = None,
@@ -768,7 +770,7 @@ def _ba_raw_residuals_and_jacobian(
     jacobian_rows: list[np.ndarray] = []
     column_count = int(params.size)
     plane_col: int | None = None
-    plane_offset = 0.0
+    plane_offset = float(plane_offset_start)
     if free_plane_offset and column_count > 0:
         plane_col = column_count - 1
         plane_offset = float(params[plane_col])
@@ -874,6 +876,13 @@ def _ba_raw_residuals_and_jacobian(
 
     if mirror_pairs and mirror_plane is not None:
         plane_point, normal = _normalize_plane(mirror_plane[0], mirror_plane[1])
+        reference_col = None
+        if mirror_landmark_id is not None:
+            reference = landmarks.get(mirror_landmark_id)
+            if reference is None:
+                raise ValueError("Mirror reference point is missing from the current solve")
+            plane_point = reference
+            reference_col = landmark_offset.get(mirror_landmark_id)
         householder = _householder(normal)
         two_nc_n = 2.0 * float(np.dot(normal, plane_point)) * normal
         pair_spring = MIRROR_PAIR_RESIDUAL_PX / max(MIRROR_PAIR_HARD_GAP, 1.0e-12)
@@ -906,6 +915,10 @@ def _ba_raw_residuals_and_jacobian(
                         row_axis[start_b : start_b + 3] = pair_spring * jac_b[axis]
                     if plane_col is not None:
                         row_axis[plane_col] = pair_spring * float(jac_plane[axis])
+                    if reference_col is not None:
+                        row_axis[reference_col : reference_col + 3] = (
+                            pair_spring * jac_gap_u[axis] @ (2.0 * np.outer(normal, normal))
+                        )
                     jacobian_rows.append(row_axis)
                 continue
             if landmark_a in line_ids or landmark_b in line_ids:
@@ -930,6 +943,10 @@ def _ba_raw_residuals_and_jacobian(
                 if plane_col is not None:
                     row_axis[plane_col] = pair_spring * (
                         -2.0 * float(normal[axis])
+                    )
+                if reference_col is not None:
+                    row_axis[reference_col : reference_col + 3] = (
+                        -2.0 * pair_spring * float(normal[axis]) * normal
                     )
                 jacobian_rows.append(row_axis)
         slack = max(float(mirror_slack), 0.0)
@@ -1058,7 +1075,9 @@ def _ba_residual_vector(
     mirror_pairs: list[tuple[str, str]] | None = None,
     mirror_plane: tuple[np.ndarray, np.ndarray] | None = None,
     mirror_slack: float = 0.0,
+    mirror_landmark_id: str | None = None,
     free_plane_offset: bool = False,
+    plane_offset_start: float = 0.0,
     plane_groups: list[tuple[str, str, int]] | None = None,
     plane_slack: float = 0.0,
     location_match_ids: set[str] | None = None,
@@ -1090,7 +1109,9 @@ def _ba_residual_vector(
         mirror_pairs=mirror_pairs,
         mirror_plane=mirror_plane,
         mirror_slack=mirror_slack,
+        mirror_landmark_id=mirror_landmark_id,
         free_plane_offset=free_plane_offset,
+        plane_offset_start=plane_offset_start,
         plane_groups=plane_groups,
         plane_slack=plane_slack,
         location_match_ids=location_match_ids,
@@ -1228,7 +1249,10 @@ def _bundle_adjust_registration(
     mirror_pairs: list[tuple[str, str]] | None = None,
     mirror_plane: tuple[np.ndarray, np.ndarray] | None = None,
     mirror_slack: float = 0.0,
+    mirror_landmark_id: str | None = None,
     free_plane_offset: bool = False,
+    plane_offset_start: float = 0.0,
+    plane_offset_out: list[float] | None = None,
     plane_groups: list[tuple[str, str, int]] | None = None,
     plane_slack: float = 0.0,
     location_match_ids: set[str] | None = None,
@@ -1258,8 +1282,12 @@ def _bundle_adjust_registration(
         for landmark_id, segment in (line_segments or {}).items()
     }
     if not free_match_ids and not free_landmark_ids and not line_constraints:
+        if plane_offset_out is not None:
+            plane_offset_out[:] = [float(plane_offset_start)]
         return similarities, landmarks, line_segments, False
     if not observations and not line_constraints:
+        if plane_offset_out is not None:
+            plane_offset_out[:] = [float(plane_offset_start)]
         return similarities, landmarks, line_segments, False
 
     pose_match_ids = [
@@ -1345,7 +1373,7 @@ def _bundle_adjust_registration(
         lock_translation=lock_translation,
         free_line_ids=free_line_ids,
         free_line_points=free_line_points,
-        plane_offset=0.0 if free_plane_offset else None,
+        plane_offset=float(plane_offset_start) if free_plane_offset else None,
     )
     residual_kwargs = {
         "free_match_ids": pose_match_ids,
@@ -1373,7 +1401,9 @@ def _bundle_adjust_registration(
         "mirror_pairs": list(mirror_pairs or ()),
         "mirror_plane": mirror_plane,
         "mirror_slack": float(mirror_slack),
+        "mirror_landmark_id": mirror_landmark_id,
         "free_plane_offset": bool(free_plane_offset),
+        "plane_offset_start": float(plane_offset_start),
         "plane_groups": list(plane_groups or ()),
         "plane_slack": float(plane_slack),
         "location_match_ids": location_match_ids,
@@ -1418,6 +1448,8 @@ def _bundle_adjust_registration(
         if not step_accepted:
             break
 
+    if plane_offset_out is not None:
+        plane_offset_out[:] = [float(params[-1]) if free_plane_offset else float(plane_offset_start)]
     refined_similarities, refined_free, refined_lines = _unpack_ba_params(
         params,
         pose_match_ids,
@@ -1585,6 +1617,7 @@ def leave_one_out_landmark_report(
     mirror_pairs: list[tuple[str, str]] | None = None,
     mirror_plane: tuple[np.ndarray, np.ndarray] | None = None,
     mirror_slack: float | None = None,
+    mirror_landmark_id: str | None = None,
     plane_groups: list[tuple[str, str, int]] | None = None,
     plane_slack: float | None = None,
     location_match_ids: set[str] | None = None,
@@ -1619,6 +1652,7 @@ def leave_one_out_landmark_report(
             mirror_pairs=mirror_pairs,
             mirror_plane=mirror_plane,
             mirror_slack=mirror_slack,
+            mirror_landmark_id=mirror_landmark_id,
             plane_groups=plane_groups,
             plane_slack=plane_slack,
             location_match_ids=location_match_ids,
@@ -1634,7 +1668,8 @@ def leave_one_out_landmark_report(
         if observation.landmark_name
     }
     ranked = sorted(
-        baseline.per_landmark_rmse_px.items(),
+        ((key, value) for key, value in baseline.per_landmark_rmse_px.items()
+         if key != mirror_landmark_id),
         key=lambda item: -item[1],
     )[: max(1, int(top_k))]
     accepted_match_ids = set(baseline.similarities)
@@ -1721,6 +1756,7 @@ def leave_one_out_landmark_report(
             mirror_pairs=filtered_mirror,
             mirror_plane=mirror_plane,
             mirror_slack=mirror_slack,
+            mirror_landmark_id=mirror_landmark_id,
             plane_groups=filtered_planes,
             plane_slack=plane_slack,
             location_match_ids=location_match_ids,

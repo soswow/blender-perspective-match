@@ -350,6 +350,7 @@ def _run_sync(
     mirror_pairs: list | None = None,
     mirror_plane: tuple | None = None,
     mirror_slack: float | None = None,
+    mirror_landmark_id: str | None = None,
     plane_groups: list | None = None,
     plane_slack: float | None = None,
     location_match_ids: set[str] | None = None,
@@ -377,6 +378,8 @@ def _run_sync(
         mirror_pairs=mirror_pairs,
         mirror_plane=mirror_plane,
         mirror_slack=mirror_slack,
+        **({"mirror_landmark_id": mirror_landmark_id}
+           if mirror_landmark_id is not None else {}),
         plane_groups=plane_groups,
         plane_slack=plane_slack,
         location_match_ids=location_match_ids,
@@ -414,6 +417,7 @@ def refine_lenses_from_landmarks(
     mirror_pairs: list | None = None,
     mirror_plane: tuple | None = None,
     mirror_slack: float | None = None,
+    mirror_landmark_id: str | None = None,
     plane_groups: list | None = None,
     plane_slack: float | None = None,
     location_match_ids: set[str] | None = None,
@@ -490,8 +494,17 @@ def refine_lenses_from_landmarks(
                         for point_id in point_ids}
         if any(len(views) < 2 for views in picked_views.values()):
             return refusal("Point focal estimation needs at least two camera picks per point; one-view plane and mirror members are not supported yet")
+        if mirror_landmark_id is not None:
+            if not isinstance(mirror_landmark_id, str) or not mirror_landmark_id:
+                return refusal("Mirror reference landmark ID is invalid")
+            if mirror_landmark_id not in picked_views:
+                return refusal("Mirror reference landmark needs two-view picks")
+            if any(mirror_landmark_id in pair for pair in (mirror_pairs or ())):
+                return refusal("Mirror reference landmark cannot be a mirror pair member")
         if mirror_pairs and mirror_plane is None:
-            return refusal("Point mirror pairs need a supplied Mirror Empty")
+            return refusal("Point mirror pairs need a mirror plane normal" if
+                           mirror_landmark_id is not None else
+                           "Point mirror pairs need a supplied Mirror Empty")
         relation_ids = {item[0] for item in (plane_groups or ())} | {
             point_id for pair in (mirror_pairs or ()) for point_id in pair}
         if not relation_ids <= point_ids:
@@ -507,7 +520,7 @@ def refine_lenses_from_landmarks(
             (location_match_ids is not None and set(location_match_ids) != set(match_ids))
         )
         if unsupported:
-            return refusal("Point focal estimation supports point picks, Is in Plane and supplied point mirrors only; remove camera roles, pose locks, lines, Known 3D and On Ground")
+            return refusal("Point focal estimation supports point picks, Is in Plane and point mirrors only; remove camera roles, pose locks, lines, Known 3D and On Ground")
         if cancel_check and cancel_check():
             return refusal("Cancelled", cancelled=True)
         if progress_callback:
@@ -536,7 +549,7 @@ def refine_lenses_from_landmarks(
             pick_sigma_px=pick_sigma_px, fx_span=fx_span,
             plane_groups=plane_groups, plane_slack=plane_slack,
             mirror_pairs=mirror_pairs, mirror_plane=mirror_plane,
-            mirror_slack=mirror_slack,
+            mirror_slack=mirror_slack, mirror_landmark_id=mirror_landmark_id,
             cancel_check=cancel_check,
             progress_callback=point_progress)
         if not outcome.accepted or outcome.sync_result is None:
@@ -622,6 +635,7 @@ def refine_lenses_from_landmarks(
             mirror_pairs=mirror_pairs,
             mirror_plane=mirror_plane,
             mirror_slack=mirror_slack,
+            mirror_landmark_id=mirror_landmark_id,
             plane_groups=plane_groups,
             plane_slack=plane_slack,
             location_match_ids=location_match_ids,

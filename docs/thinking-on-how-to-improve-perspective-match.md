@@ -1,5 +1,5 @@
 **Perspective Match: reliability and AI development proposal**
-Investigation baseline: commit `5d876f6` / extension 0.5.0, 10 September 2026. Latest product checkpoint: point-FOV plane/mirror startup reliability, 12 September 2026, described under **Current frontier**. Read that section first; the dated checkpoints preserve history, and the original proposal is retained for rationale rather than as an implementation checklist.
+Investigation baseline: commit `5d876f6` / extension 0.5.0, 10 September 2026. Latest product checkpoint: live landmark mirror-plane positioning, 12 September 2026, described under **Current frontier**. Read that section first; the dated checkpoints preserve history, and the original proposal is retained for rationale rather than as an implementation checklist.
 
 **My recommendation is to make every solver decision reproducible from a complete, versioned input, and judge it with checks independent of the implementation.** Build that foundation around the existing fixtures, Blender smoke test, and diagnostics. Then use it to improve calibration ownership, quality reporting, and selected solver decisions. This would turn a debugging session into an addition to a reusable capability.
 
@@ -9,7 +9,13 @@ The deeper product issue is that three different promises are currently close to
 
 ## Current frontier — 12 September 2026
 
-**Completed implementation scope:** investigate practical point-FOV reliability
+**Latest outcome:** a shared mirror plane can now follow a reconstructed point
+landmark in ordinary Sync and point-FOV fitting, with supplied world-axis or
+object orientation. The landmark is fitted jointly, not copied into a fixed
+Empty. The live-reference checkpoint below records scope and verification;
+unknown plane orientation remains a separate proposal.
+
+**Initial implementation scope (completed):** investigate practical point-FOV reliability
 with incomplete/imperfect picks and alternative initial FOVs, carrying findings
 through to actionable diagnostics; then support Is in Plane and supplied point
 symmetry in focal fitting. The two sequential phases below retain bounded
@@ -132,51 +138,68 @@ Generated scenes and logs are under `.local/focal-reliability-validation/`.
 The existing CI constraint checks exercise the changed startup path too; hosted
 CI was not run in this session. No private project was modified.
 
-**Open question for later — symmetry without a supplied plane:** the user may
-know several pairs of corresponding mirror landmarks and that all pairs share
-one symmetry plane, without knowing its position/orientation or having an Empty
-to represent it. Investigate estimating that common plane jointly with cameras
-and structure, including partial visibility and approximate symmetry. Establish
-when the observations determine it, which freedoms remain, and how to report
-ambiguity. Existing Mirror Slack only adjusts an already supplied plane along
-its normal; it does not establish this missing-plane workflow. This question
-is retained separately, not added to the current implementation scope.
+**Open question for later — infer the symmetry plane orientation:** the user
+may know several corresponding mirror pairs and that all share a plane,
+without knowing its orientation or having an object to represent it. A landmark
+can now supply the plane's position as described below, but joint inference of
+its normal from pairs/cameras remains unimplemented. Establish when the
+observations determine it, which freedoms remain, and how to report ambiguity,
+including partial visibility and approximate symmetry.
 
-**Candidate intermediate step — a live landmark on the mirror plane:** allow
-selecting a reconstructed landmark as the plane's positional reference, instead
-of copying its current estimate into a static Mirror Empty. Keep the reference
-by landmark identity so subsequent reconstruction updates also update the plane.
-The landmark must actually lie on the symmetry plane; an arbitrary off-plane
-point is not a valid origin. It need not be the object's geometric center.
-Alternatively, the midpoint of a declared mirror pair lies on the plane, but
-that is derived from the existing symmetry relation, not independent evidence.
+**Live landmark mirror position — implemented:** the user's intermediate idea
+is now a product option. Choose Mirror Position → Landmark, select an on-plane
+point, and supply a world plane or optional orientation object. Selection uses
+landmark identity, so rename/reorder/reopen do not substitute another point.
+The selected point need not be the object's center and remains a reconstructed
+landmark; it is not promoted to exact Known 3D. Its cached position and the
+orientation object's translation are excluded from the numerical plane input.
+Deleting/excluding the point or changing it to a line produces a clear refusal,
+not a fallback to a static Empty.
 
-This is a plausible smaller extension than estimating a completely unknown
-plane. With a supplied normal (world axis or an orientation reference), a live
-on-plane landmark defines the plane's offset. A point alone does not define
-orientation; without a supplied normal, the shared pairs and observations must
-still determine it. Its advantage is extra geometric information and avoiding
-a stale copied position, not a guarantee of improved accuracy when the
-landmark itself is weakly reconstructed.
+The numerical input `mirror_landmark_id` reaches ordinary Sync, Diagnose,
+ordinary lens searches and independent point-FOV fitting. Sync snapshot v4
+stores it and accepts v1–3 with a None default. Reflection residuals use the
+current point with analytic derivatives; positive Mirror Slack permits a normal
+offset relative to that point. Ordinary Sync carries the accepted offset into
+later reconstruction/recovery and restores it when an attempted BA update is
+rejected. The new reference supplies no metric scale; point-FOV retains its
+free baseline gauge. The normal remains fixed in the anchor frame.
 
-Represent this as a relation within the solve: the plane passes through the
-current estimated landmark, and mirror pairs constrain that same reconstruction.
-Do not promote the estimate to exact Known 3D or treat it as an independent
-measurement. Merely moving an Empty after a solve would leave the fit based on
-the previous plane and could create feedback between successive solves. Decide
-how positional slack combines with this relation, how uncertainty is reported,
-and what happens if the reference is deleted, unobserved or underconstrained.
-The current implementation reads the Mirror Empty's world position and selected
-axis in `scene/__init__.py::sync_mirror_plane_from_workspace`; it has no such
-landmark dependency.
+Ordinary Sync requires two location-enabled picked views of the reference or
+an explicit Known 3D reference. Point-FOV retains its two-view point rule and
+other eligibility limits. The reference cannot itself be a mirror-pair member.
+One-view reference support and estimating a missing normal are separate work.
+Diagnose excludes the model-defining point from leave-one-out removal, while
+retaining its picks and ordinary residual reporting.
 
-A first experiment should use a supplied normal and a well-observed on-plane
-landmark, then add views that improve its initial estimate. Compare live joint
-fitting against a frozen copied Empty using withheld object alignment and plane
-error. Include a noisy/weak reference and an intentionally off-plane selection
-to expose sensitivity and overconfidence. Leave joint unknown-orientation
-estimation and any one-view extension as separate follow-ups. This remains a
-proposal, not implemented behavior.
+The independent [live-reference fixture](../tools/synthetic_sync/focal_live_reference.py)
+has 19 points and 76 exact picks, including a separately picked on-plane point;
+the unused supplied plane position is deliberately wrong. Focal tests compare
+clean/stale initial reference coordinates and verify the reference Jacobian,
+normal offset and free-scale behavior. Sync regressions cover a noisy reference,
+a stale fixed-plane control, soft offset, missing/invalid sources, point/line
+Jacobian checks and dependent one-view geometry using an updated point/offset.
+Worker verification used eight full Sync regression calls in the ordinary lane
+and three public Sync attempts (two successful) plus seven bundle fits in the
+focal lane; these were test runs, not an exploratory benchmark.
+
+Integrated Blender 5.1.0 runs passed ordinary Sync and point-FOV with **no Mirror
+Empty**, source/identity validation, stale-job rejection, direct application,
+and read-only save/reopen. Exact native withheld RMS was 0.000100 px and
+0.000175 px respectively. Preparation and reopening used zero solves; fresh
+native verification used two Sync calls and one bundle. Source captures,
+generated scenes and logs are in `.local/landmark-mirror-validation/`. The
+addon smoke test passed. The combined numerical suite passed **440 tests in
+456.626 seconds with two skips for absent optional local YAML files**.
+
+The new CI step repeats both native modes and their reopens; hosted CI is not
+yet verified. Remaining coverage limits: the new live-reference one-view line
+logic has deterministic stage/Jacobian checks but no new full recovered-camera
+line scenario, and outer BA rollback branches were reviewed rather than forced
+through a new end-to-end rejection case. Exact synthetic success does not prove
+reference accuracy or orientation correctness in a real project. Blender must
+be restarted after this update because workspace RNA properties were added.
+No private project was opened or saved.
 
 ### Finding disposition — keep fixes and unresolved evidence distinct
 
