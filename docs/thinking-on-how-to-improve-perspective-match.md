@@ -1,5 +1,5 @@
 **Perspective Match: reliability and AI development proposal**
-Investigation baseline: commit `5d876f6` / extension 0.5.0, 10 September 2026. Latest product checkpoint: live landmark mirror-plane positioning, 12 September 2026, described under **Current frontier**. Read that section first; the dated checkpoints preserve history, and the original proposal is retained for rationale rather than as an implementation checklist.
+Investigation baseline: commit `5d876f6` / extension 0.5.0, 10 September 2026. Latest product checkpoint: bound-aware focal optimization and progress correction, 12 September 2026, described under **Current frontier**. Read that section first; the dated checkpoints preserve history, and the original proposal is retained for rationale rather than as an implementation checklist.
 
 **My recommendation is to make every solver decision reproducible from a complete, versioned input, and judge it with checks independent of the implementation.** Build that foundation around the existing fixtures, Blender smoke test, and diagnostics. Then use it to improve calibration ownership, quality reporting, and selected solver decisions. This would turn a debugging session into an addition to a reusable capability.
 
@@ -8,6 +8,43 @@ Your clarification is that both metric accuracy and visual alignment matter, dep
 The deeper product issue is that three different promises are currently close together: “these measurements fit,” “this reconstruction is well determined,” and “the Blender viewport represents that reconstruction.” The code has made substantial progress on each, but failures still occur at their boundaries. Another recurring issue is that a geometric model can be wrong for the evidence: uncertain calibration, approximate CAD, imperfect symmetry, or images of different versions of an object can make precise simultaneous agreement impossible.
 
 ## Current frontier — 12 September 2026
+
+**Latest follow-up: focal limits and honest progress.** The old joint optimizer
+clipped a focal step at its bound without recalculating the coupled pose/geometry
+step. `core/focal_optimizer.py` now solves feasible active-set steps and checks
+cancellation between re-solves. A small coupled linear regression exposes the
+old error independently of camera geometry. On a preserved private objective,
+the new NumPy fit reached the same lower objective as SciPy's bounded TRF;
+the remaining focal-bound refusal persisted. No new SciPy runtime dependency,
+relaxed acceptance gates or automatic application of failed fits were added.
+Bounds/non-convergence now retain and report candidate point RMSE. Optional
+endpoint diagnostics preserve rejected camera/point states for inspection.
+
+The previous progress correction covered only the sidebar's startup phase.
+Blender's progress range and callback scale still disagreed, and an iteration
+budget is not a completion percentage. Independent FOV fitting now stays textual
+throughout, with activity, elapsed time and iteration count; ordinary lens-search
+progress is normalized to its declared range. Native callback/RNA regressions
+cover both modes and the existing application lifecycle.
+
+**Next unresolved calibration question:** an off-center crop moves the principal
+point, which the current fit holds fixed. `tools/synthetic_sync/focal_crop.py`
+provides a paired exact crop control: correct shifted intrinsics recover withheld
+geometry, whereas identical picks with deliberately centered intrinsics do not.
+This demonstrates a failure mechanism, not a diagnosis of an arbitrary image set.
+Recover original frame/crop metadata before considering joint unknown crop-offset
+estimation. Unknown offsets add two parameters per camera and need independent
+withheld checks and weak-evidence controls. The existing Manual PP Offset UI
+also clamps to the image, while a crop's true optical center can lie outside it.
+World-axis constraints combined with a fixed, approximate anchor orientation
+are another untested model limitation; do not infer a fix from constraint removal
+alone. See `tools/synthetic_sync/focal-optimizer-results.md` for evidence and limits.
+
+**Still open:** an explicit review/preview of a rejected candidate may help visual
+modeling, but must retain its refusal, before/after residuals, and reversible state.
+Numerical endpoint capture is implemented; a user-facing preview/apply workflow
+is not. Lower fitting error alone does not establish that a candidate is closer
+to reality. Wider focal bounds alone did not establish a usable real-data result.
 
 **Latest extension: lines in independent FOV fitting.** The option is now
 **Estimate FOV from Landmarks**. Free lines and line-to-line mirror pairs join
@@ -36,8 +73,9 @@ stroke control still refuses. The negative fixture now moves the stroke
 perpendicular to its direction, since an image-axis shift can mostly slide
 along the same infinite line. Native partial-startup/apply checks pass.
 
-Initial registration now reports actual stage/pair activity and elapsed time;
-the sidebar hides the misleading zero slider until numerical iterations begin.
+At that checkpoint initial registration reported actual stage/pair activity and
+elapsed time, hiding the sidebar's zero slider until numerical iterations began.
+The later follow-up above supersedes this incomplete progress correction.
 Focal-bound diagnostics run even before convergence and name both the camera
 and wider/narrower FOV direction, retaining independent raw-pair conflict hints.
 `probe_focal_startup.py --joint` reuses preserved startup for bounded lens trials

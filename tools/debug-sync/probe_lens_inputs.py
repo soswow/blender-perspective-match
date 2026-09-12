@@ -30,7 +30,17 @@ def report():
     relations = {p[0] for p in (prep.plane_groups or [])}
     relations.update(p for pair in (prep.mirror_pairs or []) for p in pair)
     counts = Counter(p.match_id for p in prep.observations)
+    images = []
+    for root in properties.iter_match_roots():
+        settings = root.pm_session
+        images.append(dict(match_id=root.name,
+            source_path=bpy.path.abspath(settings.image_path) if settings.image_path else None,
+            stored_size=[settings.image_width, settings.image_height],
+            source_width=settings.source_image_width,
+            principal_point=[settings.cx, settings.cy],
+            undistorted=bool(settings.view_undistorted)))
     return dict(same_lens=prep.share_lens, point_focal=prep.estimate_focal_from_points,
+        images=images,
         cameras=[dict(name=m.match_id, picks=counts[m.match_id], focal=m.intrinsics.fx,
                       vp_lines=sum(len(v) for v in m.line_bundles.values())) for m in prep.lens_inputs],
         points=len(views), known_points=len(prep.known_world),

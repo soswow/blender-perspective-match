@@ -372,10 +372,15 @@ def lens_refine_is_running() -> bool:
 
 
 def lens_refine_startup_label() -> str | None:
-    """Return the current activity while point-FOV progress is indeterminate."""
+    """Return point-FOV activity without implying a completion percentage."""
     if not _lens_refine_running or not _lens_refine_progress.get("indeterminate"):
         return None
-    return str(_lens_refine_progress.get("label") or "Preparing point focal fit")
+    label = str(_lens_refine_progress.get("label") or "Preparing point focal fit")
+    step = int(_lens_refine_progress.get("step", 0))
+    if step > 1 and step < int(_lens_refine_progress.get("total", 1)):
+        count = step - 1
+        return f"{label} · {count} {'iteration' if count == 1 else 'iterations'}"
+    return label
 
 
 def diagnose_sync_is_running() -> bool:
@@ -3768,8 +3773,6 @@ class PM_OT_refine_lenses(bpy.types.Operator):
             progress_state["step"] = int(step)
             progress_state["total"] = max(int(total_steps), 1)
             progress_state["label"] = str(label)
-            if int(step) > 0:
-                progress_state["indeterminate"] = False
 
         def _worker() -> None:
             try:
@@ -3792,7 +3795,8 @@ class PM_OT_refine_lenses(bpy.types.Operator):
         thread.start()
 
         window_manager = context.window_manager
-        window_manager.progress_begin(0, self._progress_max)
+        if not self._point_focal_startup:
+            window_manager.progress_begin(0, self._progress_max)
         self._timer = window_manager.event_timer_add(0.1, window=context.window)
         window_manager.modal_handler_add(self)
         return {"RUNNING_MODAL"}
@@ -3809,10 +3813,11 @@ class PM_OT_refine_lenses(bpy.types.Operator):
             self._timer = None
         if self._result_box is not _lens_refine_result_box:
             return {"CANCELLED"}
-        try:
-            window_manager.progress_end()
-        except Exception:
-            pass
+        if not self._point_focal_startup:
+            try:
+                window_manager.progress_end()
+            except Exception:
+                pass
 
         workspace = _workspace(context)
         result_box = self._result_box
@@ -3884,17 +3889,22 @@ class PM_OT_refine_lenses(bpy.types.Operator):
         total = max(int(progress.get("total", 1)), 1)
         step = int(progress.get("step", 0))
         label = str(progress.get("label", ""))
-        workspace.lens_refine_progress = min(max(step / total, 0.0), 1.0)
+        if not self._point_focal_startup:
+            workspace.lens_refine_progress = min(max(step / total, 0.0), 1.0)
         if label:
             elapsed = int(time.monotonic() - self._started_at)
-            if self._point_focal_startup and step == 0:
-                workspace.sync_status = f"Refine Lenses · {label} · {elapsed}s elapsed"
+            if self._point_focal_startup:
+                activity = lens_refine_startup_label() or label
+                workspace.sync_status = f"Refine Lenses · {activity} · {elapsed}s elapsed"
             else:
                 workspace.sync_status = f"Refine Lenses {step}/{total} · {label} · {elapsed}s elapsed"
-        try:
-            context.window_manager.progress_update(min(step, total))
-        except Exception:
-            pass
+        if not self._point_focal_startup:
+            try:
+                context.window_manager.progress_update(
+                    min(max(step / total, 0.0), 1.0) * self._progress_max
+                )
+            except Exception:
+                pass
         properties.tag_viewport_redraw(context)
 
         if not _lens_refine_result_box.get("done"):

@@ -229,7 +229,10 @@ def check(out):
         assert 'Registering camera pair' in space.sync_status and 'elapsed' in space.sync_status
         assert '0/101' not in space.sync_status
         callbacks[0](2, 101, 'Fitting landmarks')
-        assert operators.lens_refine_startup_label() is None
+        assert operators.lens_refine_startup_label() == 'Fitting landmarks · 1 iteration'
+        operators.PM_OT_refine_lenses.modal(operator, context, SimpleNamespace(type='TIMER'))
+        assert 'Fitting landmarks · 1 iteration' in space.sync_status
+        assert '2/101' not in space.sync_status
         operator._result_box['done'] = True
         status = operators.PM_OT_refine_lenses._finish_job(operator, context, cancelled=False)
         assert status == {"FINISHED"}

@@ -185,6 +185,8 @@ jobs:
           blender --factory-startup --disable-autoexec -b --python-exit-code 1 \
             --python tools/synthetic_sync/verify_point_focal_apply.py -- \
             --out "${RUNNER_TEMP}/synthetic-blender/point-focal-apply"
+          blender --factory-startup --disable-autoexec -b --python-exit-code 1 \
+            --python tools/synthetic_sync/verify_lens_progress.py
           # Fixed verification budget: one inner Sync and one bundle per case.
           for case in no-vp-mixed-guessedK no-vp-shared-guessedK no-vp-weak-baseline-guessedK no-vp-pure-rotation-guessedK; do
             blender --factory-startup --disable-autoexec -b --python-exit-code 1 \

@@ -62,9 +62,11 @@ For different lenses or zoom settings, turn **Same Lens** off and enable
 jointly fits each focal length, camera pose, reconstructed 3D point and supported line. Start with at
 least three overlapping views taken from different positions and picks spread
 across the images and object depth. Use Manual FOV for approximate starting
-values; the **%** field bounds the focal search around those values (40% by
-default in this mode, separate from the existing 18% lens search). A result
-at the search boundary is refused with a suggestion to widen the range.
+values; the **%** field bounds the focal length around those values (40% by
+default in this mode, separate from the existing 18% lens search). It is not
+a range in FOV degrees: 75% allows 0.25–1.75 times the starting focal length.
+For a 50° starting FOV, that is approximately 123.6°–29.8°. A result at the
+search boundary is refused; it does not establish where the true lens lies.
 
 If initial Sync omits a camera despite enough picks, this mode can now try a
 provisional pose against the reconstructed point cloud and then fit all cameras,
@@ -80,9 +82,21 @@ inconsistent picks, incorrect geometric constraints or unsupported image
 calibration can also push fitting to a boundary. Do not reduce Assumed Pick
 Error or delete picks just to force an accepted result.
 
-During initial registration the sidebar shows the active stage/camera pair and
-elapsed time. It shows numerical progress once joint fitting begins; that
-fraction describes iterations, not a prediction of time remaining.
+Throughout independent FOV estimation the sidebar shows activity, elapsed time
+and completed fitting iterations. There is no completion percentage: registration
+and numerical fitting have variable workloads. The other lens-search modes
+retain their trial progress bar.
+
+An off-center crop also moves the **principal point**, the pixel where the optical
+axis meets the image. This mode keeps that point fixed; changing FOV alone cannot
+generally compensate for a wrong crop offset. If the original principal point
+was `(cx, cy)` and a crop removes `left` and `top` pixels, the cropped point is
+`(cx - left, cy - top)`. Uniform resizing then multiplies both these coordinates
+and focal length by the resize scale. The original frame or known crop rectangle
+supplies this information without adding unknowns to the fit. **Manual PP Offset**
+can enter an offset within the image; a crop's true principal point can also lie
+outside it. Guessing the offset from the object's position is not a calibration.
+Unknown crop offsets are still not estimated by this mode.
 
 **Assumed Pick Error (px)** is your assumed standard deviation of error in each picked
 image coordinate. It is used to assess weak evidence and estimate local focal

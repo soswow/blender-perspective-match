@@ -44,13 +44,16 @@ def joint_report(inputs, startup):
     fields = ('anchor_id', 'fx_span', 'pick_sigma_px', 'plane_groups', 'plane_slack',
               'mirror_pairs', 'mirror_plane', 'mirror_slack', 'mirror_landmark_id', 'parallel_pairs')
     started = time.monotonic()
+    endpoints = []
     result = fit_independent_focals(
         calibrations, [sync.SyncObservation(**p) for p in inputs['observations']], initial,
         line_observations=[sync.SyncLineObservation(**p) for p in inputs['line_observations']],
         **{k: inputs[k] for k in fields if k in inputs},
-        cancel_check=lambda: time.monotonic() - started > 45.)
+        cancel_check=lambda: time.monotonic() - started > 45.,
+        diagnostic_callback=endpoints.append)
     return dict(seconds=time.monotonic() - started, outcome=json_values(result),
                 focal_span=inputs.get('fx_span'),
+                endpoint=endpoints[-1] if endpoints else None,
                 full_sync_calls=0, bundle_calls=1, applied=False)
 
 

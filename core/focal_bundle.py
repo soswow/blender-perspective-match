@@ -16,6 +16,7 @@ import numpy as np
 from . import geometry as core
 from .focal_constraints import PointFocalConstraints
 from .focal_lines import LineChart, endpoint_distances
+from .focal_optimizer import bounded_lm_step
 from .focal_startup import provisional_poses
 from .sync import SyncObservation, SyncLineObservation, SyncSolveResult, SimilarityTransform, SyncMatchInput
 from .sync.constants import MIRROR_PAIR_HARD_GAP, PLANE_HARD_SLACK
@@ -344,8 +345,9 @@ def fit_independent_focals(
     parallel_pairs: list[tuple[str, str]] | None = None,
     cancel_check=None,
     progress_callback=None,
+    diagnostic_callback=None,
 ) -> FocalBundleOutcome:
-    """Refine all free point focals, poses and 3D in one fixed anchor gauge."""
+    """Fit focal/pose/geometry; optional diagnostics capture an unvalidated endpoint."""
     def refuse(reason: str, *, fitted: float = float("inf")) -> FocalBundleOutcome:
         return FocalBundleOutcome(False, reason, initial_rmse_px=initial_rmse,
                                   fitted_rmse_px=fitted)
@@ -578,6 +580,12 @@ def fit_independent_focals(
     pp = np.asarray([(calibrations[key].intrinsics.cx, calibrations[key].intrinsics.cy)
                      for key in ids], float)
     lower, upper = np.log((1.0 - fx_span, 1.0 + fx_span))
+    parameter_lower = np.full(len(x), -np.inf)
+    parameter_upper = np.full(len(x), np.inf)
+    parameter_lower[:ncam], parameter_upper[:ncam] = lower, upper
+    if scale_columns:
+        parameter_lower[ncam + 5] = -MAX_LOG_METRIC_BASELINE_CHANGE
+        parameter_upper[ncam + 5] = MAX_LOG_METRIC_BASELINE_CHANGE
     start_time = time.monotonic()
 
     def decode(params: np.ndarray):
@@ -769,16 +777,15 @@ def fit_independent_focals(
                     return refuse("Cancelled")
                 if time.monotonic() - start_time > MAX_SECONDS:
                     return refuse("Point focal fit reached its time limit")
-                # Augmented least squares is better conditioned than normal equations.
-                system = np.vstack((scaled, math.sqrt(damping) * np.eye(len(x))))
-                target = np.concatenate((-residual, np.zeros(len(x))))
-                step_scaled = np.linalg.lstsq(system, target, rcond=None)[0]
-                trial_x = x + step_scaled / column_scale
-                trial_x[:ncam] = np.clip(trial_x[:ncam], lower, upper)
-                if scale_columns:
-                    trial_x[ncam + 5] = np.clip(
-                        trial_x[ncam + 5], -MAX_LOG_METRIC_BASELINE_CHANGE,
-                        MAX_LOG_METRIC_BASELINE_CHANGE)
+                try:
+                    step = bounded_lm_step(
+                        jac, residual, x, parameter_lower, parameter_upper, damping,
+                        cancel_check=lambda: (bool(cancel_check and cancel_check()) or
+                                              time.monotonic() - start_time > MAX_SECONDS))
+                except InterruptedError:
+                    return refuse("Cancelled" if cancel_check and cancel_check() else
+                                  "Point focal fit reached its time limit")
+                trial_x = np.clip(x + step, parameter_lower, parameter_upper)
                 trial_residual, _, _ = residual_and_jacobian(trial_x, jacobian=False)
                 trial_cost = float(trial_residual @ trial_residual)
                 if np.isfinite(trial_cost) and trial_cost < cost:
@@ -794,6 +801,45 @@ def fit_independent_focals(
             if converged or not accepted_step:
                 converged = converged or not accepted_step and np.linalg.norm(gradient, ord=np.inf) < 1.0e-5
                 break
+        endpoint_residual, _, endpoint_depths = residual_and_jacobian(x, jacobian=False)
+        point_raw = endpoint_residual[:point_rows].reshape(-1, 2) / weights[:, None]
+        endpoint_rmse = float(np.sqrt(np.mean(np.sum(point_raw**2, axis=1))))
+        if diagnostic_callback is not None:
+            # Capture the numerical endpoint even when a later acceptance gate
+            # refuses it. This is diagnostic data, never an applicable result.
+            endpoint_focal, endpoint_rotations, endpoint_centers, endpoint_points = decode(x)
+            line_raw = (endpoint_residual[point_rows:pixel_rows].reshape(-1, 2) /
+                        line_weights[:, None])
+            prior_rows = endpoint_residual[pixel_rows:]
+
+            def rms(rows: np.ndarray) -> float | None:
+                return float(np.sqrt(np.mean(rows * rows))) if rows.size and np.isfinite(rows).all() else None
+
+            diagnostic_callback({
+                "iterations": iterations,
+                "converged": bool(converged),
+                "focal_bound_hits": {
+                    camera_id: ("wider_fov" if x[i] <= lower + FOCAL_BOUND_MARGIN else
+                                "narrower_fov" if x[i] >= upper - FOCAL_BOUND_MARGIN else None)
+                    for i, camera_id in enumerate(ids)},
+                "focal_px": {camera_id: float(endpoint_focal[i])
+                             for i, camera_id in enumerate(ids)},
+                "cameras": {
+                    camera_id: {
+                        "rotation_w2c": (endpoint_rotations[i] @ anchor_r).tolist(),
+                        "center": (anchor_r.T @ (endpoint_centers[i] * baseline) + anchor_c).tolist(),
+                    } for i, camera_id in enumerate(ids)},
+                "points": {
+                    point_id: (anchor_r.T @ (endpoint_points[i] * baseline) + anchor_c).tolist()
+                    for i, point_id in enumerate(point_ids)},
+                "point_rmse_px": rms(np.linalg.norm(point_raw, axis=1)),
+                "line_rmse_px": rms(np.linalg.norm(line_raw, axis=1)),
+                "weighted_point_residual_norm": float(np.linalg.norm(endpoint_residual[:point_rows])),
+                "weighted_line_residual_norm": float(np.linalg.norm(endpoint_residual[point_rows:pixel_rows])),
+                "prior_residual_norm": float(np.linalg.norm(prior_rows)),
+                "depth_valid": bool(np.isfinite(endpoint_depths).all() and
+                                    np.all(endpoint_depths > 0)),
+            })
         bounded = [ids[i] + (" (wider FOV)" if x[i] <= lower + FOCAL_BOUND_MARGIN else " (narrower FOV)")
                    for i in range(ncam)
                    if x[i] <= lower + FOCAL_BOUND_MARGIN or x[i] >= upper - FOCAL_BOUND_MARGIN]
@@ -803,13 +849,16 @@ def fit_independent_focals(
             if cancel_check and cancel_check():
                 return refuse("Cancelled")
             return refuse("Fitted focal reached the search bound for " + ", ".join(bounded) +
-                          "; widen Lens Search % or revise starting FOVs." + hint)
+                          f"; candidate point RMSE {endpoint_rmse:.2f}px. "
+                          "Check starting FOVs and image calibration before widening Lens Search %." + hint,
+                          fitted=endpoint_rmse)
         if not converged:
             hint = _conflict_hint(ids, observations, pick_sigma_px,
                                   cancel_check=cancel_check)
             if cancel_check and cancel_check():
                 return refuse("Cancelled")
-            return refuse("Point focal fit did not converge." + hint)
+            return refuse(f"Point focal fit did not converge; candidate point RMSE {endpoint_rmse:.2f}px." + hint,
+                          fitted=endpoint_rmse)
         fitted_residual, jac, depths = residual_and_jacobian(x, jacobian=True)
         end_raw = fitted_residual[:point_rows].reshape(-1, 2) / weights[:, None]
         all_raw = fitted_residual[:pixel_rows] / coordinate_weights

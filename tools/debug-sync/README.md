@@ -111,6 +111,29 @@ and result parity checks; they do not establish accuracy under arbitrary slack.
 
 ## Additional probes
 
+`probe_lens_inputs.py --blend scene.blend --out /tmp/lens.json` includes source
+image paths, stored dimensions and principal points. Its optional `--fit-seconds`
+captures numerical inputs and startup without applying or saving the scene.
+`probe_focal_startup.py INPUTS STARTUP --joint --out /tmp/joint.json` reuses those
+sidecars for one bundle and preserves a rejected numerical endpoint when fitting
+reaches its bounds or fails to converge.
+
+To compare numerical methods on that same initialized problem, use ordinary
+Python with NumPy, OpenCV and SciPy:
+
+```sh
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 \
+  python tools/debug-sync/compare_focal_optimizers.py INPUTS STARTUP \
+  --method trf --bounds span --seconds 45 --out /tmp/focal-trf.json
+```
+
+`--method projected` uses the NumPy active-set step; `--bounds broad` tries
+absolute 5°–130° FOV bounds for diagnosis only. The tool captures production
+closures via guarded source-local names and records core source/input hashes;
+review it after parameterization changes. Deadline endpoints can be the last
+evaluated trial, not an accepted iterate. None of these reports certify geometry
+or apply camera changes. Keep private image paths and captured data out of commits.
+
 Recovered-still overlay (ground vs off-plane RMSE after `solve_landmark_sync`):
 
 ```sh

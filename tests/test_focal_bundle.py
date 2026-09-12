@@ -61,6 +61,33 @@ def _saved_initial(case, matches, label):
 
 
 class PointFocalBundleTests(TestCase):
+    def test_diagnostic_endpoint_is_retained_on_numerical_refusal(self):
+        case, matches, observations = _inputs("four-view")
+        initial = _saved_initial(case, matches, "four-view")
+        captured = []
+        with mock.patch("match_perspective.core.focal_bundle.MAX_ITERATIONS", 0), \
+             mock.patch("match_perspective.core.focal_bundle.FOCAL_BOUND_MARGIN", 1.0), \
+             mock.patch("match_perspective.core.focal_bundle._conflict_hint", return_value=""):
+            result = fit_independent_focals(
+                {item.match_id: item.base_calibration for item in matches},
+                observations, initial, anchor_id="view_0",
+                diagnostic_callback=captured.append)
+        self.assertFalse(result.accepted)
+        self.assertIn("search bound", result.reason)
+        self.assertEqual(len(captured), 1)
+        endpoint = json.loads(json.dumps(captured[0], allow_nan=False))
+        self.assertEqual(endpoint["iterations"], 0)
+        self.assertFalse(endpoint["converged"])
+        self.assertTrue(all(endpoint["focal_bound_hits"].values()))
+        self.assertEqual(set(endpoint["cameras"]), {item.match_id for item in matches})
+        self.assertEqual(set(endpoint["points"]), set(initial.landmarks))
+        self.assertGreater(endpoint["point_rmse_px"], 0)
+        self.assertTrue(endpoint["depth_valid"])
+        self.assertAlmostEqual(result.fitted_rmse_px, endpoint["point_rmse_px"])
+        self.assertIn("candidate point RMSE", result.reason)
+        self.assertFalse(result.calibrations)
+        self.assertIsNone(result.sync_result)
+
     def test_sync_wrapper_forwards_registration_callback(self):
         _case, matches, observations = _inputs("four-view")
         received = []
