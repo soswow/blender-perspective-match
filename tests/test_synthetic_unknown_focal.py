@@ -5,17 +5,21 @@ import hashlib
 import json
 import math
 from pathlib import Path
+import sys
 import unittest
 
 from tools.synthetic_sync.no_vp_bootstrap import assess
 from tools.synthetic_sync.scenarios import read_case
 from tools.synthetic_sync.solver import fingerprint
-from tools.synthetic_sync.unknown_focal import METADATA
+from tools.synthetic_sync.unknown_focal import METADATA, trial_request
 
 
 ROOT = Path(__file__).resolve().parents[1]
 ARTIFACTS = ROOT / "tools" / "synthetic_sync" / "cases" / "unknown-focal-continuation"
 FROZEN = ROOT / "tools" / "synthetic_sync" / "cases"
+# acos(trace(R)) loses angular precision near identity. A few double-precision
+# ulps in the trace can move a reported near-zero angle by sqrt(epsilon) rad.
+ROTATION_ROUNDOFF_DEG = math.degrees(math.sqrt(16 * sys.float_info.epsilon))
 
 
 class UnknownFocalEvidenceTests(unittest.TestCase):
@@ -25,19 +29,21 @@ class UnknownFocalEvidenceTests(unittest.TestCase):
         self.starts = [row for row in rows[1:] if row["kind"] == "started"]
         self.completed = [row for row in rows[1:] if row["kind"] == "completed"]
 
-    def assertPortableEqual(self, left, right, path="root"):
-        """Match structure exactly and numerical derivatives to roundoff."""
+    def assertAssessmentEqual(self, left, right, path="root"):
+        """Match derived assessments with field-specific numerical roundoff."""
         self.assertIs(type(left), type(right), path)
         if isinstance(left, dict):
             self.assertEqual(left.keys(), right.keys(), path)
             for key in left:
-                self.assertPortableEqual(left[key], right[key], f"{path}.{key}")
+                self.assertAssessmentEqual(left[key], right[key], f"{path}.{key}")
         elif isinstance(left, list):
             self.assertEqual(len(left), len(right), path)
             for index, (item_a, item_b) in enumerate(zip(left, right)):
-                self.assertPortableEqual(item_a, item_b, f"{path}[{index}]")
+                self.assertAssessmentEqual(item_a, item_b, f"{path}[{index}]")
         elif isinstance(left, float):
-            self.assertTrue(math.isclose(left, right, rel_tol=2e-13, abs_tol=1e-12),
+            angular = path.startswith("root.independent_geometry.cameras.") and path.endswith(".rotation_deg")
+            abs_tol = ROTATION_ROUNDOFF_DEG if angular else 1e-12
+            self.assertTrue(math.isclose(left, right, rel_tol=2e-13, abs_tol=abs_tol),
                             f"{path}: {left!r} != {right!r}")
         else:
             self.assertEqual(left, right, path)
@@ -82,11 +88,12 @@ class UnknownFocalEvidenceTests(unittest.TestCase):
                 start, completed = attempts[artifact["label"]]
                 request = start["request"]["request"]
                 self.assertEqual(fingerprint(request), artifact["request_sha256"])
-                self.assertPortableEqual(artifact["record"], completed["result"])
+                self.assertEqual(artifact["record"], completed["result"])
                 case = read_case(ROOT / artifact["case_file"])
+                self.assertEqual(request, trial_request(case, artifact["scale"]))
                 case["request"] = request
-                self.assertPortableEqual(artifact["assessment"],
-                                         assess(case, artifact["record"]))
+                self.assertAssessmentEqual(artifact["assessment"],
+                                           assess(case, artifact["record"]))
         for intrinsics in ("trueK", "guessedK"):
             saved = json.loads((ARTIFACTS / f"no-vp-pure-rotation-{intrinsics}-scale-1.json").read_text())
             self.assertEqual(saved["assessment"]["classification"],
@@ -109,16 +116,16 @@ class UnknownFocalEvidenceTests(unittest.TestCase):
                 self.assertEqual(start["label"], f"actual-shared-search-{trial['index']}")
                 request = start["request"]["request"]
                 self.assertEqual(fingerprint(request), trial["request_sha256"])
-                self.assertPortableEqual(trial["record"], completed["result"])
+                self.assertEqual(trial["record"], completed["result"])
                 self.assertEqual(trial["warm_start"], bool(start["request"]["initial_similarities"]))
                 for camera in request["cameras"]:
                     recovered = trial["record"]["cameras"][camera["id"]]
-                    self.assertPortableEqual([camera["fx"], camera["fy"]],
-                                             [recovered["fx"], recovered["fy"]])
+                    self.assertEqual([camera["fx"], camera["fy"]],
+                                     [recovered["fx"], recovered["fy"]])
                 evaluation_case = deepcopy(case)
                 evaluation_case["request"] = request
-                self.assertPortableEqual(trial["assessment"],
-                                         assess(evaluation_case, trial["record"]))
+                self.assertAssessmentEqual(trial["assessment"],
+                                           assess(evaluation_case, trial["record"]))
         selected = trials[selected_index]
         self.assertEqual(selected_index, min(range(len(trials)),
                          key=lambda i: trials[i]["record"]["reported_rmse_px"]))
