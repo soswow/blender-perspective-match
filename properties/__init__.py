@@ -360,11 +360,14 @@ def _update_landmark_kind(self, context: bpy.types.Context) -> None:
     tag_sync_ui_redraw(context)
 
 
+_MIRROR_ENUM_MAX = 0xFFFFFF  # Every menu value must survive float32 storage.
+
+
 def _mirror_enum_number(item_id: str) -> int:
     """Stable EnumProperty number so partners survive list-order changes."""
     if not item_id or item_id == "NONE":
         return 0
-    value = zlib.crc32(item_id.encode("utf-8")) & 0x7FFFFFFF
+    value = zlib.crc32(item_id.encode("utf-8")) & _MIRROR_ENUM_MAX
     return value if value else 1
 
 
@@ -373,8 +376,8 @@ def _pack_mirror_enum_items(entries: tuple[tuple[str, str, str], ...]) -> tuple:
     packed = []
     for identifier, name, description in entries:
         number = 0 if identifier == "NONE" else _mirror_enum_number(identifier)
-        while number in used:
-            number = (number + 1) & 0x7FFFFFFF
+        while identifier != "NONE" and number in used:
+            number = (number + 1) & _MIRROR_ENUM_MAX
             if number == 0:
                 number = 1
         used.add(number)

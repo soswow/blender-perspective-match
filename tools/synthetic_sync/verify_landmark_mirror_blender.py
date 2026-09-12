@@ -72,6 +72,25 @@ def prepare_checks(case):
     workspace = properties.workspace(bpy.context)
     reference = next(p for p in workspace.landmarks if p.item_id == workspace.mirror_landmark_id)
     assert workspace.mirror_landmark == reference.item_id
+    # Blender's enum menu transports item values through float32 hardmin.
+    # Python enum assignment alone bypasses that UI boundary.
+    items = properties._mirror_landmark_items(workspace, bpy.context)
+    value = next(item[-1] for item in items if item[0] == reference.item_id)
+    properties._set_mirror_landmark(workspace, 0)
+    properties._set_mirror_landmark(workspace, int(np.float32(value)))
+    assert workspace.mirror_landmark_id == reference.item_id, 'Menu selection lost its reference'
+    partner = next(p for p in workspace.landmarks if p.mirror_of_id not in {'', 'NONE'})
+    partner_id = partner.mirror_of_id
+    items = properties._mirror_of_items(partner, bpy.context)
+    assert next(item[-1] for item in items if item[0] == 'NONE') == 0
+    value = next(item[-1] for item in items if item[0] == partner_id)
+    properties._set_mirror_of(partner, int(np.float32(value)))
+    assert partner.mirror_of_id == partner_id, 'Menu selection lost its mirror partner'
+    with patch.object(properties, '_mirror_enum_number', return_value=0xFFFFFF):
+        packed = properties._pack_mirror_enum_items((
+            ('NONE', 'None', ''), ('a', 'A', ''), ('b', 'B', '')))
+    assert [item[-1] for item in packed] == [0, 0xFFFFFF, 1]
+    assert all(int(np.float32(item[-1])) == item[-1] for item in packed)
     before = scene.collect_sync_request(bpy.context).to_record()
     assert before['inputs']['mirror_landmark_id'] == reference.item_id
     np.testing.assert_allclose(before['inputs']['mirror_plane'], [[0, 0, 0], [1, 0, 0]])
@@ -124,7 +143,8 @@ def fresh(case, out, mode, prepare_only):
         bpy.data.objects.remove(orientation, do_unlink=True)
     workspace.mirror_origin = 'LANDMARK'
     workspace.mirror_plane = 'YZ'
-    workspace.mirror_landmark_id = case['request']['mirror_landmark_id']
+    workspace.mirror_landmark = case['request']['mirror_landmark_id']
+    assert workspace.mirror_landmark_id == case['request']['mirror_landmark_id'], workspace.mirror_landmark_id
     write_json(out / 'request.json', prepare_checks(case))
     prep = scene.prepare_lens_refine(bpy.context) if mode == 'focal' else scene.prepare_diagnose_sync(bpy.context)
     assert prep.mirror_landmark_id == workspace.mirror_landmark_id

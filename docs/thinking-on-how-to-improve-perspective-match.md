@@ -15,6 +15,17 @@ object orientation. The landmark is fitted jointly, not copied into a fixed
 Empty. The live-reference checkpoint below records scope and verification;
 unknown plane orientation remains a separate proposal.
 
+**Dropdown follow-up:** real use exposed a UI boundary missed by direct RNA
+assignment: Blender's menu stores enum values as float32, rounding the previous
+31-bit hashed IDs so the setter could silently clear a selection. Both mirror
+selectors now use exactly representable 24-bit values; persistent landmark IDs
+remain strings. The native live-reference verifier reproduces the menu conversion
+(failed before the fix), checks both selectors and the None sentinel, and forces
+a hash collision at the numeric limit. This is a menu-boundary regression, not an
+automated mouse-click test. See
+`tools/synthetic_sync/verify_landmark_mirror_blender.py` and Blender's
+[enum-menu implementation](https://github.com/blender/blender/blob/blender-v5.1-release/source/blender/editors/interface/interface.cc).
+
 **Initial implementation scope (completed):** investigate practical point-FOV reliability
 with incomplete/imperfect picks and alternative initial FOVs, carrying findings
 through to actionable diagnostics; then support Is in Plane and supplied point
