@@ -42,7 +42,7 @@ class ExperimentBudget:
         self.header = dict(kind="budget", version=1, metadata=metadata,
                            max_calls=max_calls, wall_seconds=wall_seconds,
                            per_call_seconds=per_call_seconds)
-        _json(self.header)
+        self.header = json.loads(_json(self.header))
         self.file = None
         self.rows = []
         self.active = False
@@ -86,8 +86,9 @@ class ExperimentBudget:
     def cached(self, label, request):
         """Return a matching completed JSON record, never a live solver object."""
         key = self._key(label, request)
-        return next((row["result"] for row in reversed(self.rows)
-                     if row.get("kind") == "completed" and row["key"] == key), None)
+        result = next((row["result"] for row in reversed(self.rows)
+                       if row.get("kind") == "completed" and row["key"] == key), None)
+        return json.loads(_json(result))
 
     @contextmanager
     def attempt(self, label, request):

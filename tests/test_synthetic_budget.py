@@ -34,6 +34,9 @@ class ExperimentBudgetTests(unittest.TestCase):
                     raise ValueError("failure")
         with self.budget() as budget:
             self.assertEqual(budget.cached("one", {"focal": 700}), {"success": True})
+            reused = budget.cached("one", {"focal": 700})
+            reused["success"] = False
+            self.assertEqual(budget.cached("one", {"focal": 700}), {"success": True})
             self.assertIsNone(budget.cached("one", {"focal": 701}))
             self.assertIsNone(budget.cached("two", {}))
             with self.assertRaises(BudgetExceeded):
