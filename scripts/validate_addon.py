@@ -342,6 +342,88 @@ def main() -> None:
             assert bpy.context.scene.camera == settings_a.camera_object
             assert bpy.context.scene.render.resolution_x == 800
 
+            # Landmark picking survives both dropdown and modal-owned shortcuts.
+            ui_operators = sys.modules["match_perspective.ui.operators"]
+            space = properties.workspace(bpy.context)
+
+            class LivePick:
+                mode = "LANDMARK"
+                _hover_cursor = "DOT"
+                _drag_kind = "LANDMARK_LINE"
+                finished = False
+                cancelled_drags = 0
+
+                def _cancel_drag(self, _context):
+                    self.cancelled_drags += 1
+                    self._drag_kind = ""
+                    return True
+
+                def _status_prompt(self):
+                    return "Pick the selected landmark"
+
+                def _finish(self, _context, *, cancelled=False):
+                    self.finished = True
+                    ui_operators._active_interact = None
+                    space.is_modal = False
+                    space.work_mode = "NONE"
+                    return {"CANCELLED"}
+
+                def report(self, *_args):
+                    pass
+
+            live_pick = LivePick()
+            ui_operators._active_interact = live_pick
+            space.is_modal = True
+            space.work_mode = "LANDMARK"
+            space.active_match = root_b.name
+            assert properties.active_root(bpy.context) == root_b
+            assert ui_operators._active_interact is live_pick
+            assert space.is_modal and space.work_mode == "LANDMARK"
+            assert live_pick.cancelled_drags == 1 and not live_pick.finished
+            assert settings_b.status == "Pick the selected landmark"
+
+            slot_a = properties.iter_match_roots().index(root_a) + 1
+            shortcut = SimpleNamespace(
+                type=f"NUMPAD_{slot_a}", value="PRESS",
+                ctrl=True, alt=True, shift=False,
+            )
+            assert ui_operators.PM_OT_interact.modal(
+                live_pick, bpy.context, shortcut
+            ) == {"RUNNING_MODAL"}
+            assert properties.active_root(bpy.context) == root_a
+            assert ui_operators._active_interact is live_pick
+            assert space.is_modal and space.work_mode == "LANDMARK"
+            assert not live_pick.finished
+
+            cycle = SimpleNamespace(
+                type="RIGHT_ARROW", value="PRESS",
+                ctrl=True, alt=True, shift=False,
+            )
+            assert ui_operators.PM_OT_interact.modal(
+                live_pick, bpy.context, cycle
+            ) == {"RUNNING_MODAL"}
+            assert properties.active_root(bpy.context) == root_b
+            assert ui_operators._active_interact is live_pick
+
+            history_back = SimpleNamespace(
+                type="LEFT_ARROW", value="PRESS",
+                ctrl=True, alt=True, shift=True,
+            )
+            assert ui_operators.PM_OT_interact.modal(
+                live_pick, bpy.context, history_back
+            ) == {"RUNNING_MODAL"}
+            assert properties.active_root(bpy.context) == root_a
+            assert ui_operators._active_interact is live_pick
+            assert space.is_modal and space.work_mode == "LANDMARK"
+
+            # Session-specific tools still end when the dropdown changes matches.
+            live_pick.mode = "LINE"
+            space.active_match = root_b.name
+            assert properties.active_root(bpy.context) == root_b
+            assert live_pick.finished and not space.is_modal
+            assert space.work_mode == "NONE"
+            scene.set_active_match(bpy.context, root_a)
+
             prefix_a = scene.match_prefix(root_a)
             prefix_b = scene.match_prefix(root_b)
             properties.iter_match_roots()

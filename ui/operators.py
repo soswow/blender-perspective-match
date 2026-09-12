@@ -721,13 +721,28 @@ def cancel_active_interact(context: bpy.types.Context) -> bool:
     return True
 
 
+def prepare_interact_for_match_switch(
+    context: bpy.types.Context,
+) -> "PM_OT_interact | None":
+    """Keep Landmark picking live across matches; end other active tools."""
+    active = _active_interact
+    if active is not None and active.mode == "LANDMARK":
+        # A partly drawn line or endpoint drag belongs to the old plate.
+        active._cancel_drag(context)
+        overlay.clear_preview(context)
+        active._hover_cursor = ""
+        return active
+    cancel_active_interact(context)
+    return None
+
+
 def activate_match_by_slot(
     context: bpy.types.Context,
     index: int,
     *,
     report=None,
 ) -> set[str]:
-    """Activate the Nth match root (1-based, name-sorted). Cancels live tools."""
+    """Activate the Nth match root (1-based, name-sorted)."""
     roots = properties.iter_match_roots()
     if index < 1 or index > len(roots):
         message = (
@@ -739,7 +754,6 @@ def activate_match_by_slot(
         return {"CANCELLED"}
     root = roots[index - 1]
     try:
-        # set_active_match cancels any Draw / Pick modal before switching.
         scene.set_active_match(context, root)
     except Exception as error:
         if report is not None:
@@ -2400,16 +2414,15 @@ class PM_OT_interact(bpy.types.Operator):
     def modal(self, context: bpy.types.Context, event) -> set[str]:
         workspace = _workspace(context)
         settings = _session(context)
-        # External clears (match switch / unload) or lost session end the tool.
+        # External clears (unload, file load) or lost session end the tool.
         if settings is None or not workspace.is_modal or _active_interact is not self:
             return self._finish(context, cancelled=True)
         # Ctrl+Alt+NumPad / arrows must be handled here — modal handlers see keys first.
         slot = _match_slot_from_event(event)
         if slot is not None:
             result = activate_match_by_slot(context, slot, report=self.report)
-            # Successful switch already finished this modal via set_active_match.
             if result == {"FINISHED"}:
-                return {"CANCELLED"}
+                return {"RUNNING_MODAL"} if _active_interact is self else {"CANCELLED"}
             return {"RUNNING_MODAL"}
         history = _match_history_from_event(event)
         if history is not None:
@@ -2417,13 +2430,13 @@ class PM_OT_interact(bpy.types.Operator):
                 context, history, report=self.report
             )
             if result == {"FINISHED"}:
-                return {"CANCELLED"}
+                return {"RUNNING_MODAL"} if _active_interact is self else {"CANCELLED"}
             return {"RUNNING_MODAL"}
         cycle = _match_cycle_from_event(event)
         if cycle is not None:
             result = activate_match_by_delta(context, cycle, report=self.report)
             if result == {"FINISHED"}:
-                return {"CANCELLED"}
+                return {"RUNNING_MODAL"} if _active_interact is self else {"CANCELLED"}
             return {"RUNNING_MODAL"}
         if event.type in {"ESC", "RIGHTMOUSE"} and event.value == "PRESS":
             if self._cancel_drag(context):
@@ -2591,7 +2604,7 @@ class PM_OT_activate_match_slot(bpy.types.Operator):
     bl_description = (
         "Switch to a Perspective Match by slot (Ctrl+Alt+NumPad 1–9). "
         "Re-selecting the current match keeps live zoom/pan. "
-        "Cancels any active Draw / Pick tool"
+        "Keeps Landmark picking active; ends other Draw / Pick tools"
     )
     bl_options = {"UNDO"}
 

@@ -618,10 +618,10 @@ def set_active_match(
     """Activate a match root and switch the viewport to its camera."""
     if not properties.is_match_root(root):
         raise ValueError("Not a Perspective Match root")
-    # Cancel Draw / Pick Origin / PP / Landmark tools before changing session.
+    # Landmark picking spans matches; other Draw / Pick tools are session-local.
     from ..ui import operators as operators_module
 
-    operators_module.cancel_active_interact(context)
+    landmark_tool = operators_module.prepare_interact_for_match_switch(context)
     space = properties.workspace(context)
     previous = space.active_root
     same_match = previous == root
@@ -638,8 +638,8 @@ def set_active_match(
     # Align dropdowns (Anchor can drift: dynamic enums store an index).
     # Must not do this from poll/draw — Scene RNA is frozen there.
     properties.reconcile_workspace_refs(space)
-    space.is_modal = False
-    space.work_mode = "NONE"
+    space.is_modal = landmark_tool is not None
+    space.work_mode = "LANDMARK" if landmark_tool is not None else "NONE"
     session = root.pm_session
     camera = session.camera_object
     if camera is not None:
@@ -662,6 +662,8 @@ def set_active_match(
         context.scene.render.resolution_percentage = 100
     enter_camera_view(context, restore_framing=not same_match)
     pull_origin_empty_hidden(root)
+    if landmark_tool is not None:
+        session.status = landmark_tool._status_prompt()
     if record_history:
         operators_module.record_match_history(
             space, root.name, previous=previous_name
