@@ -4,7 +4,7 @@ When several matches show the same scene, register them into one Blender world.
 
 ## Overview
 
-1. Match each still on its own (VP lines; Origin optional). Origins do **not** need to match across stills. If every still has locked/imported full K, you can instead omit VP lines and use the calibrated ground-only workflow below.
+1. Match each still on its own (VP lines; Origin optional), or start with camera calibration and shared point picks using one of the no-VP workflows below. Origins do **not** need to match across stills.
 2. Choose an **Anchor** match — that world is shared space. Each match has **Enable sync for current match** (on by default); turn it off to exclude that still from Solve Sync / Diagnose / Refine Lenses. **This Camera** chooses how a non-anchor match participates: **Solve** (default) lets Sync move the camera and 3D; **Lock Pose** keeps the current root transform (location, rotation, and scale) while its picks still constrain landmarks and the other cameras; **Fit Only** skips pairwise and only fits this camera against 3D from the other matches. The Anchor is already fixed, so the row is disabled there. After **Solve Sync**, the Enable row shows **Synced** or **Not synced** for the active match: whether this still was registered in the last run. A later run that skips it (or **Clear**) removes the check.
 3. Add landmarks for features visible in two or more stills (≥5 shared 2D picks), **or** link **Known 3D** Blender objects (≥3) and pick them in the other stills. Optional: pair one-sided features with **Is Mirror Of** and one scene **Mirror Empty**.
 4. Pick each landmark in every still where it is visible. With the **Perspective Match** sidebar tab open and the view through the active match camera, **Ctrl+Cmd+A** (macOS; **Ctrl+Win+A** on Windows/Linux) starts **Pick in Active Match**. Optional: enable **Snap to AprilTag** (under **Pick in Active Match**) so a point click on a small or blurry marker snaps to the tag centre — the intersection of the dark quadrilateral's diagonals — without needing the marker to decode.
@@ -25,6 +25,35 @@ pose, but its own picks cannot extend the 3D graph to another still. The ground
 must represent the same physical plane throughout the set. These raycasts seed
 the solve; Known 3D references keep precedence, and triangulation agreement and
 Ground Slack still control how the ground positions are adjusted.
+
+### Shared point matches with an approximate shared FOV (no VP lines)
+
+For images with the same lens/zoom and consistent crops, shared point picks can
+support camera placement and a common focal correction without VP lines,
+On Ground, or Known 3D:
+
+1. Create a match for each image. Start with at least three views taken from
+   different positions, with overlapping features at different depths. Rotating
+   the camera in place does not supply depth evidence.
+2. Set **Manual FOV** to a reasonable horizontal-angle estimate. Use the same
+   estimate for comparable images with the same lens and crop.
+3. Choose an **Anchor**, enable Sync for the matches, and leave the other cameras
+   in **Solve** mode. Add shared point landmarks spread across the images and
+   object depth; leave them free. More than the minimum five shared picks gives
+   the solve useful redundancy. An Origin is not required.
+4. Run **Solve Sync**, then **Refine Lenses** with **Same Lens** enabled. The
+   search range is a percentage of focal length, not degrees of FOV. A wider
+   range can help when the initial estimate is poor, but does not guarantee a
+   reliable solution.
+5. Check alignment on object features you did **not** pick. A low landmark pixel
+   error alone does not establish correct camera distance, focal length, or depth.
+
+Same Lens applies one multiplier to the starting focal lengths; it preserves
+their ratios rather than making arbitrary starting calibrations identical.
+Different lenses, zooms, or crops need a different treatment. Without a metric
+reference, the recovered world still has arbitrary scale. Points promoted to
+Known 3D from this same reconstruction are working estimates, not independent
+evidence that the geometry is correct.
 
 ### Calibrated ground-only workflow (no VP lines)
 

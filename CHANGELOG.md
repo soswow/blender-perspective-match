@@ -35,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Point and line landmarks can share a plane: **Is in Plane** chooses X, Y, Z, or Free and a #1–#10 bucket; **Plane Slack** is how far they may leave that plane
 
 ### Changed
+- Clarified how to refine a shared lens from point matches without VP lines or Known 3D, including camera-motion and calibration limits.
 - Solve Sync lists its geometric constraints without presenting unknown planes, free lines, or parallel directions as sources of absolute scale.
 - Sync Matches status and this-match RMSE sit in a collapsed **Info** section under Hide Origin Empty.
 - Duplicating a landmark named left/right or top/bottom (or ending in a space and a number) flips that side or increments the number when the new name is free; otherwise it still appends copy.
