@@ -73,9 +73,13 @@ do not affect a well-defined geometric score.
 
 The pose locks in the refused-start controls isolate lens scoring. An exploratory
 unlocked doubled-focal case did not recover even at the true focal candidate;
-the refused result's identity transforms were passed back as warm starts. This
-is retained as an unaddressed search-initialization concern, not evidence against
-the scoring fix. These controls do not establish general failed-start recovery.
+the refused result's identity transforms were passed back as warm starts. The
+[initialization follow-up](lens-initialization-results.md) now confirms that
+reusing these placeholders causes a true-focal refusal while fresh registration
+succeeds on identical evidence. The subsequent lens-only fix uses fresh
+registration after refusals and reuses successful poses; this is separate
+from the scoring fix. These controls do not establish general
+failed-start recovery.
 
 Fourteen focused tests pass locally. The real regression fails by assertion with
 the old lens module. Wiring controls exercise shared/coarse/fine, per-match and

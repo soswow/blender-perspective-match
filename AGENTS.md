@@ -39,7 +39,7 @@ Keep this map accurate when you add a module, move a stage, or change a named co
 | --- | --- |
 | VP / single-camera geometry | `core/geometry.py` |
 | Landmark-graph sync | `core/sync/` (package; import as `match_perspective.core.sync`) |
-| Focal search | `core/lens_refine.py` (supported-point reprojection score and successful-incumbent support retention) |
+| Focal search | `core/lens_refine.py` (supported-point reprojection score, successful-incumbent support retention and pose reuse; refused candidates restart registration while explicit pose locks remain active) |
 | Lens job input and execution | `scene/__init__.py` (`LensRefinePrep.solver_kwargs`, `run_lens_refine`; `collect_lens_refine_inputs` reads without preparation; apply checks numerical inputs, scene identity and camera targets; `PinSyncSnapshot` also restores state after an application error) |
 | Sync input collection and Diagnose result ownership | `scene/__init__.py` (`collect_sync_request` reads without preparation; Diagnose checks its captured request hash and scene identity before applying diagnostics) |
 | Known-3D pin refine | `core/pin_refine.py` (Iterate Known 3D loop is applied in `scene/__init__.py`) |
@@ -98,6 +98,7 @@ Headless helpers under `tools/` (and `scripts/validate_addon.py`) for investigat
 - `tools/synthetic_sync/verify_job_reload.py` — generated-file reload with deferred real worker callbacks; checks cancellation, new-job availability, old finish/cancel/timer isolation and successful new application against independent withheld geometry. Numerical results are solved once and replayed from identical inputs; native UI scheduling is not simulated.
 
 - `tools/synthetic_sync/lens_support.py` — traces real focal searches with exact inputs, supported-pick coverage and independent withheld geometry; successful and refused-start controls. See `tools/synthetic_sync/lens-results.md`.
+- `tools/synthetic_sync/lens_initialization.py` — compares refused-result warm starts with fresh registration at identical true-focal inputs; saves complete requests and independent camera checks. Supports exact `--case` replay; see `tools/synthetic_sync/lens-initialization-results.md`.
 - `tools/synthetic_sync/constraint_interactions.py` — paired plane/mirror/parallel cases and float32 controls with independent direction/reflection checks; `--case ... --result ...` post-checks a saved numerical or Blender result. See `tools/synthetic_sync/constraint-interaction-results.md`.
 
 Parallel agent work uses isolated worktrees and distinct file ownership; see `docs/development.md#parallel-agent-work`.

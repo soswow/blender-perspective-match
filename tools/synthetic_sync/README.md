@@ -31,6 +31,12 @@ saved JSON is the regression artifact if the generator later changes.
 See [initial pilot observations](pilot-results.md) for the first noisy sweep and
 the distinction between a flagged experiment and a confirmed solver defect.
 
+For the refused-lens initialization reproduction, see
+[the paired warm/fresh experiment](lens-initialization-results.md). It preserves
+an exact doubled-focal case and complete request snapshots; its command reports
+the underlying warm-seed failure. The lens search now avoids those failed seeds;
+an outer-search regression verifies recovery against the same independent truth.
+
 Exit status is nonzero if any accuracy contract fails or the solver raises.
 Exceptions are recorded as failures, never accepted as a valid refusal. Reports
 include solver messages. A missing required camera fails even when the solver's

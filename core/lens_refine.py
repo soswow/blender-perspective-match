@@ -471,10 +471,17 @@ def refine_lenses_from_landmarks(
 
     def evaluate(
         cals: dict[str, core.Calibration],
-        initial_similarities: dict[str, sync_module.SimilarityTransform] | None = None,
         incumbent: sync_module.SyncSolveResult | None = None,
     ):
         nonlocal step
+        # Sync refusals currently expose identity placeholders rather than
+        # estimated camera poses. Retry those lens candidates from registration;
+        # explicit pose locks remain available through fixed_similarities.
+        initial_similarities = (
+            incumbent.similarities
+            if incumbent is not None and incumbent.success
+            else None
+        )
         result = _run_sync(
             cals,
             match_ids,
@@ -615,7 +622,6 @@ def refine_lenses_from_landmarks(
             trial = _calibrations_at_scale(scale)
             cost, result = evaluate(
                 trial,
-                initial_similarities=best_sync.similarities,
                 incumbent=best_sync,
             )
             if cost + 1.0e-6 < best_cost:
@@ -642,7 +648,6 @@ def refine_lenses_from_landmarks(
             trial = _calibrations_at_scale(scale)
             cost, result = evaluate(
                 trial,
-                initial_similarities=best_sync.similarities,
                 incumbent=best_sync,
             )
             if cost + 1.0e-6 < best_cost:
@@ -743,7 +748,6 @@ def refine_lenses_from_landmarks(
                 trial[match_id] = calibration_at_focal(match_map[match_id], focal)
                 cost, result = evaluate(
                     trial,
-                    initial_similarities=local_best_sync.similarities,
                     incumbent=local_best_sync,
                 )
                 if cost + 1.0e-6 < local_best_cost:
@@ -777,7 +781,6 @@ def refine_lenses_from_landmarks(
                 trial[match_id] = calibration_at_focal(match_map[match_id], focal)
                 cost, result = evaluate(
                     trial,
-                    initial_similarities=local_best_sync.similarities,
                     incumbent=local_best_sync,
                 )
                 if cost + 1.0e-6 < local_best_cost:
@@ -835,7 +838,6 @@ def refine_lenses_from_landmarks(
                 trial[match_b] = calibration_at_focal(match_map[match_b], focal_b)
                 cost, result = evaluate(
                     trial,
-                    initial_similarities=best_sync.similarities,
                     incumbent=best_sync,
                 )
                 if cost + 1.0e-6 < best_cost:
@@ -861,7 +863,6 @@ def refine_lenses_from_landmarks(
             trial[match_id] = calibration_at_focal(match_map[match_id], focal)
         cost, result = evaluate(
             trial,
-            initial_similarities=best_sync.similarities,
             incumbent=best_sync,
         )
         if cost + 1.0e-6 < best_cost:

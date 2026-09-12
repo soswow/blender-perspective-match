@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Refine Lenses can recover from an initially rejected Sync by registering cameras afresh at new focal candidates while preserving explicit pose locks.
 - Loading another file cancels Diagnose and Refine Lenses jobs; late callbacks from an old job cannot cancel or overwrite a newer one.
 - Refine Lenses includes recovered cameras in its focal score and preserves supported cameras and geometry when selecting improvements.
 - Mirrored lines retain compatible Is Parallel To directions from world axes or Known 3D edges, including when an independently supported hard plane also constrains them.

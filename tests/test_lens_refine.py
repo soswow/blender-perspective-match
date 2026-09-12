@@ -280,6 +280,24 @@ class LensRefinePlumbingTests(unittest.TestCase):
 
 
 class LensEvidenceTests(unittest.TestCase):
+    def test_shared_search_recovers_after_unlocked_refused_initialization(self):
+        from tools.synthetic_sync.lens_support import run_search
+        from tools.synthetic_sync.scenarios import read_case
+
+        path = (
+            Path(__file__).resolve().parents[1]
+            / "tools/synthetic_sync/cases/lens-refused-initialization.json"
+        )
+        report = run_search(read_case(path))
+        self.assertFalse(report["initial"]["record"]["success"])
+        self.assertTrue(report["improved"])
+        self.assertTrue(report["selected"]["record"]["success"])
+        self.assertTrue(
+            report["selected"]["assessment"]["passed"],
+            report["selected"]["assessment"]["violations"],
+        )
+        self.assertLess(report["selected"]["all_points"]["rmse_px"], 1e-4)
+
     def test_real_search_keeps_recovered_camera_in_score(self):
         from tools.synthetic_sync.lens_support import run_search
         from tools.synthetic_sync.scenarios import read_case
