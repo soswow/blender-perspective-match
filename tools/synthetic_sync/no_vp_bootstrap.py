@@ -1,7 +1,8 @@
 """Frozen, budgeted no-VP 2D-to-2D startup controls.
 
 The generator and oracle are independent of Perspective Match. The numerical
-runner uses the shared experiment ledger and does not select candidates by truth.
+runner executes the baseline true/guessed-K matrix under the shared experiment
+ledger; it does not perform an outer focal search or select candidates by truth.
 """
 
 from __future__ import annotations
@@ -200,8 +201,14 @@ def run(out: Path) -> dict:
         solver_sha256=source_tree_sha256(list((ROOT / "core" / "sync").glob("*.py"))),
         focal_solver_sha256=source_sha256(ROOT / "core" / "lens_refine.py"),
         budget_sha256=source_sha256(ROOT / "tools" / "synthetic_sync" / "budget.py"),
+        numerical_core_sha256=source_tree_sha256(list((ROOT / "core").rglob("*.py"))),
+        harness_sha256=source_tree_sha256([
+            ROOT / "tools" / "synthetic_sync" / name
+            for name in ("solver.py", "evaluation.py", "geometry.py", "scenarios.py")
+        ]),
         options=dict(max_calls=16, per_call_seconds=180, wall_seconds=720,
-                     shared_search_span=0.25, shared_search_span_includes_truth=True,
+                     lens_search_implemented=False, proposed_shared_search_span=0.25,
+                     proposed_shared_span_includes_truth=True,
                      matrix=[f"{kind}/{intr}" for kind in KINDS for intr in ("trueK", "guessedK")]))
     rows = []
     with ExperimentBudget(out / "ledger.jsonl", metadata=metadata,

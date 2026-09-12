@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 import json
+import math
 import unittest
 
 import numpy as np
@@ -17,6 +18,27 @@ def true_record(case):
                 landmarks=deepcopy(case["truth"]["points"]), line_segments={})
 
 
+def assert_portable_json(test: unittest.TestCase, saved, generated, path="root",
+                         *, rel_tol=1e-14, abs_tol=1e-14):
+    """Check exact structure while allowing only roundoff-scale float drift."""
+    test.assertIs(type(saved), type(generated), path)
+    if isinstance(saved, dict):
+        test.assertEqual(saved.keys(), generated.keys(), path)
+        for key in saved:
+            assert_portable_json(test, saved[key], generated[key], f"{path}.{key}",
+                                 rel_tol=rel_tol, abs_tol=abs_tol)
+    elif isinstance(saved, list):
+        test.assertEqual(len(saved), len(generated), path)
+        for index, (left, right) in enumerate(zip(saved, generated)):
+            assert_portable_json(test, left, right, f"{path}[{index}]",
+                                 rel_tol=rel_tol, abs_tol=abs_tol)
+    elif isinstance(saved, float):
+        test.assertTrue(math.isclose(saved, generated, rel_tol=rel_tol, abs_tol=abs_tol),
+                        f"{path}: {saved!r} != {generated!r}")
+    else:
+        test.assertEqual(saved, generated, path)
+
+
 class NoVpFixtureTests(unittest.TestCase):
     def test_frozen_cases_replay_and_have_no_truth_or_pose_prior(self):
         for kind in KINDS:
@@ -24,7 +46,7 @@ class NoVpFixtureTests(unittest.TestCase):
                 with self.subTest(kind=kind, intr=intr):
                     case = make_case(kind, intr)
                     saved = read_case(CASE_DIR / f"no-vp-{kind.replace('_', '-')}-{intr}.json")
-                    self.assertEqual(json.dumps(case), json.dumps(saved))
+                    assert_portable_json(self, saved, json.loads(json.dumps(case)))
                     validate_fixture(saved)
                     request_hash = fingerprint(saved["request"])
                     saved["truth"]["points"].clear()
@@ -85,7 +107,10 @@ class NoVpFixtureTests(unittest.TestCase):
         self.assertEqual(ledger[2]["result"], saved["record"])
         self.assertEqual(saved["request_sha256"], fingerprint(case["request"]))
         replay = assess(case, saved["record"])
-        self.assertEqual(replay, saved["assessment"])
+        # Derived angles and RMS aggregate many floating operations and differ
+        # slightly more across BLAS/NumPy builds than the frozen input numbers.
+        assert_portable_json(self, saved["assessment"], replay,
+                             rel_tol=2e-13, abs_tol=1e-12)
         self.assertEqual(replay["classification"], "false_precise_acceptance")
 
 

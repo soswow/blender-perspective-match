@@ -10,6 +10,11 @@ This supplements `tests/sync_fixtures.py`, `tests/pair_fixtures.py` and
 pairs; this harness checks camera accuracy against an independent reference and
 compares the numerical request with evidence collected from real Blender state.
 
+The [no-VP bootstrap pilot](no-vp-bootstrap-results.md) freezes true- and
+guessed-intrinsics cases without metric or pose priors. Its `--run` command
+executes only the baseline Sync matrix; no outer lens search is implemented in
+that pilot runner.
+
 ## Run and inspect
 
 From the repository root, using Python with NumPy:

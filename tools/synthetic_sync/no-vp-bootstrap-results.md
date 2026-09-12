@@ -71,6 +71,10 @@ OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 ~/venvs/my/bin/python \
 The test suite reads the saved result and ledger and replays the independent
 oracle; it does not call Sync. To regenerate only case inputs, run
 `~/venvs/my/bin/python tools/synthetic_sync/no_vp_bootstrap.py --freeze`.
-The numerical command is `--run .local/no-vp-bootstrap` and must remain under
-an outer 720-second process timeout; its ledger prevents repeating a completed
-candidate within the same source/options metadata.
+The numerical runner's `--run OUT` command executes only the baseline
+true/guessed-K Sync matrix; it does not implement the proposed outer shared-
+or independent-focal search. It must remain under an outer 720-second process
+timeout. Its ledger prevents repeating a completed candidate under matching
+source/options metadata and rejects a changed source. The saved historical
+ledger has its original hashes; later runner code adds recursive core and
+harness hashes for new ledgers, without altering that record.
