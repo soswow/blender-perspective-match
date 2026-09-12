@@ -17,25 +17,30 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
-from tools.synthetic_sync import focal_lines
+from tools.synthetic_sync import focal_line_constraints, focal_lines
 from tools.synthetic_sync.blender_case import blender_pixels, register_extension
 from tools.synthetic_sync.geometry import project
 from tools.synthetic_sync.verify_focal_constraints_blender import build
 
 
-def check(out, fresh=False, partial=False):
+def check(out, fresh=False, partial=False, relations=False):
     from match_perspective import properties, scene
     from match_perspective.core import lens_refine, sync
 
-    case = focal_lines.generate()
+    case = focal_line_constraints.generate() if relations else focal_lines.generate()
     (out / 'case.json').write_text(json.dumps(case, indent=2))
     build(case, out)
     space = properties.workspace(bpy.context)
-    space.mirror_origin = 'LANDMARK'
-    space.mirror_landmark = case['request']['mirror_landmark_id']
+    if not relations:
+        space.mirror_origin = 'LANDMARK'
+        space.mirror_landmark = case['request']['mirror_landmark_id']
     prep = scene.collect_lens_refine_inputs(bpy.context)
     assert len(prep.line_observations) == len(case['request']['line_observations'])
-    assert tuple(case['request']['mirror_pairs'][-1]) in [tuple(p) for p in prep.mirror_pairs]
+    if relations:
+        assert set(map(tuple, case['request']['plane_groups'])) == set(map(tuple, prep.plane_groups))
+        assert set(map(tuple, case['request']['parallel_pairs'])) == set(map(tuple, prep.parallel_pairs))
+    else:
+        assert tuple(case['request']['mirror_pairs'][-1]) in [tuple(p) for p in prep.mirror_pairs]
     true_cameras = {c['id']: c for c in case['truth']['cameras']}
     similarities = {}
     for item in prep.lens_inputs:
@@ -98,8 +103,29 @@ def check(out, fresh=False, partial=False):
         else:
             raise AssertionError('Changed line stroke did not invalidate the job')
     pick.x2, pick.y2 = endpoint
+    if relations:
+        for relation, edit in (
+            ('plane', lambda item: setattr(item, 'plane_group', '3')),
+            ('parallel', lambda item: setattr(item, 'parallel_to', 'NONE')),
+        ):
+            item = landmarks['free_edge_a']
+            old = item.plane_group if relation == 'plane' else item.parallel_to
+            edit(item)
+            assert scene.collect_lens_refine_inputs(bpy.context).source_request_sha256 != current_prep.source_request_sha256
+            with patch.object(scene, '_apply_sync_solve_result', side_effect=AssertionError('Stale result applied')):
+                try:
+                    scene.apply_lens_refine_result(bpy.context, result, current_prep)
+                except scene.StaleSyncResult:
+                    pass
+                else:
+                    raise AssertionError(f'Changed {relation} relation did not invalidate the job')
+            if relation == 'plane':
+                item.plane_group = old
+            else:
+                item.parallel_to = old
     report = dict(passed=True, bundles=1, fresh_registration=fresh, partial_startup=partial,
-                  withheld_max_px=float(max(errors)), lines=len(result.sync_result.line_segments))
+                  withheld_max_px=float(max(errors)), lines=len(result.sync_result.line_segments),
+                  relations=relations)
     (out / 'result.json').write_text(json.dumps(report, indent=2))
     print('Line FOV Blender PASS:', report)
 
@@ -109,13 +135,14 @@ def main():
     parser.add_argument('--out', required=True)
     parser.add_argument('--fresh', action='store_true')
     parser.add_argument('--partial-startup', action='store_true')
+    parser.add_argument('--relations', action='store_true')
     args = parser.parse_args(sys.argv[sys.argv.index('--') + 1:])
     if args.fresh and args.partial_startup:
         parser.error('--partial-startup uses the prepared oracle start, not --fresh')
     out = Path(args.out).resolve()
     out.mkdir(parents=True, exist_ok=False)
     register_extension()
-    check(out, args.fresh, args.partial_startup)
+    check(out, args.fresh, args.partial_startup, args.relations)
 
 
 if __name__ == '__main__':

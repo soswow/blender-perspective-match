@@ -137,10 +137,34 @@ Error also applies to the perpendicular error of each stroke endpoint.
 Ordinary free lines and line-to-line **Is Mirror Of** pairs are supported.
 This first implementation allows up to 24 lines and 96 strokes per fit.
 A line needs two-view strokes, or a reconstructed mirror partner to supply its
-geometry. Line **Is in Plane**, **Is Parallel To**, Known 3D lines and mixed
-point/line mirror pairs are currently refused; point plane groups remain
-supported alongside line strokes. Degenerate or inconsistent line evidence can
+geometry. Known 3D lines and mixed point/line mirror pairs remain unsupported.
+Degenerate or inconsistent line evidence can
 cause a refusal even when the point-only fit would pass.
+
+Line **Is in Plane** and **Is Parallel To** also participate in this joint fit:
+
+- Put a line and at least one picked point in the same **X/Y/Z #** group to
+  establish the shared coordinate. For **Free #**, include at least three
+  non-collinear picked points in that group. Each supporting point still needs
+  two-view picks. The supporting plane follows those points during fitting;
+  they do not become Known 3D. Line-only plane groups are not supported here yet.
+- A plane constrains both the line's position and direction. **Plane Slack**
+  softens position, while the line must still run along the plane. Plane Slack
+  is not an angular tolerance.
+- **Is Parallel To** may target another included line or **X/Y/Z Axis**. Opposite
+  drawing directions are equivalent, and the lines may be at different positions.
+  A parallel relation alone does not provide missing line depth or replace the
+  two-view-stroke/mirror-partner startup requirement.
+- These relations can be combined with line mirrors. They affect the fit and
+  conditional focal uncertainty, but do not count as additional independent
+  image picks. Conflicting relations can make the joint fit refuse.
+
+Use relations that describe the physical object, not edges that merely look
+parallel in one image. Valid constraints can rule out distorted reconstructions;
+they cannot guarantee recovery from a wrong principal point or lens model.
+Use Free planes and line-to-line parallelism when world orientation is unknown;
+X/Y/Z planes and axes assert that the object is already aligned to those world
+directions in the anchor frame.
 
 Point landmarks may use **Is in Plane** (X/Y/Z or Free) and **Is Mirror Of**
 with a supplied **Mirror Empty** or an on-plane **Mirror Landmark**. Plane Slack and Mirror Slack keep their
@@ -148,7 +172,8 @@ existing meanings: plane membership can be softened, and Mirror Slack lets
 the effective mirror plane slide along its normal relative to the selected object or live landmark.
 Each member still needs picks in at least two cameras; the one-view constrained
 reconstruction available in ordinary Sync is not part of this FOV mode.
-Free groups need four members to constrain coplanarity; axis groups need two.
+Point-only Free groups need four members to constrain coplanarity; point-only
+axis groups need two. Point-supported line planes use the requirements above.
 Plane and mirror relations are enforced in the joint fit after preliminary
 camera registration from the image picks. This helps weak camera arrangements
 whose guessed starting FOV previously left the constrained fit stuck.

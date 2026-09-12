@@ -15,6 +15,7 @@ import numpy as np
 
 from . import geometry as core
 from . import sync as sync_module
+from .focal_line_constraints import validate_line_relations
 from .focal_bundle import (
     DEFAULT_POINT_FOCAL_SPAN, MAX_CAMERAS, MAX_POINTS, MAX_LINES, MAX_LINE_STROKES,
     fit_independent_focals,
@@ -482,8 +483,8 @@ def refine_lenses_from_landmarks(
             return refusal("Point focal estimation needs at least three cameras")
         if len(matches) > MAX_CAMERAS:
             return refusal(f"Point focal estimation currently supports up to {MAX_CAMERAS} cameras per joint fit (resource limit)")
-        if known_lines or parallel_pairs:
-            return refusal("Independent FOV fitting does not support Known 3D or parallel lines")
+        if known_lines:
+            return refusal("Independent FOV fitting does not support Known 3D lines")
         point_count = len({item.landmark_id for item in observations})
         if not 8 <= point_count <= MAX_POINTS:
             return refusal(f"Point focal estimation needs 8–{MAX_POINTS} points")
@@ -518,8 +519,10 @@ def refine_lenses_from_landmarks(
         line_ids = {item.landmark_id for item in (line_observations or ())}
         if len(line_ids) > MAX_LINES or len(line_observations or ()) > MAX_LINE_STROKES:
             return refusal(f"Line fit supports up to {MAX_LINES} lines and {MAX_LINE_STROKES} strokes (resource limit)")
-        if any(item[0] in line_ids for item in (plane_groups or ())):
-            return refusal("Independent FOV fitting does not yet support line Is in Plane relations")
+        try:
+            validate_line_relations(point_ids, line_ids, plane_groups, parallel_pairs)
+        except (ValueError, TypeError) as exc:
+            return refusal(str(exc))
         if any(set(pair) & line_ids and set(pair) & point_ids for pair in (mirror_pairs or ())):
             return refusal("Mirror relation contains unsupported or mixed point/line members")
         relation_ids = {item[0] for item in (plane_groups or ())} | {
@@ -536,7 +539,7 @@ def refine_lenses_from_landmarks(
 
         unsupported = (
             share_lens or bool(known_world) or
-            bool(known_lines) or bool(parallel_pairs) or bool(fixed_similarities) or
+            bool(known_lines) or bool(fixed_similarities) or
             bool(readonly_match_ids) or lock_rotation or lock_translation or
             any(item.on_ground for item in observations) or
             any(any(item.line_bundles.values()) or item.reorient_from_vp

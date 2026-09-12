@@ -1,5 +1,5 @@
 **Perspective Match: reliability and AI development proposal**
-Investigation baseline: commit `5d876f6` / extension 0.5.0, 10 September 2026. Latest product checkpoint: bound-aware focal optimization and progress correction, 12 September 2026, described under **Current frontier**. Read that section first; the dated checkpoints preserve history, and the original proposal is retained for rationale rather than as an implementation checklist.
+Investigation baseline: commit `5d876f6` / extension 0.5.0, 10 September 2026. Latest product checkpoint: line plane/parallel relations in independent FOV fitting, 12 September 2026, described under **Current frontier**. Read that section first; the dated checkpoints preserve history, and the original proposal is retained for rationale rather than as an implementation checklist.
 
 **My recommendation is to make every solver decision reproducible from a complete, versioned input, and judge it with checks independent of the implementation.** Build that foundation around the existing fixtures, Blender smoke test, and diagnostics. Then use it to improve calibration ownership, quality reporting, and selected solver decisions. This would turn a debugging session into an addition to a reusable capability.
 
@@ -9,7 +9,31 @@ The deeper product issue is that three different promises are currently close to
 
 ## Current frontier — 12 September 2026
 
-**Latest follow-up: focal limits and honest progress.** The old joint optimizer
+**Latest addition: line planes and parallelism during focal fitting.**
+`core/focal_line_constraints.py` adds line position/direction in a point-supported
+plane and unoriented parallel direction to another line or a world axis. X/Y/Z
+groups need one same-bucket point; Free needs three non-collinear same-bucket
+points. Those points remain fitted variables with two-view observations, not
+Known 3D. Line-only plane groups remain explicitly unsupported. Existing
+two-view-stroke or reconstructed-mirror-partner initialization requirements
+remain; parallelism alone does not initialize line depth.
+
+The plane is recalculated from current supporting points, including their
+derivatives in the joint Jacobian. Plane Slack softens position, not angular
+membership. Direction/position acceptance and conditional uncertainty include
+these constraints, while only image rows receive independent pick noise.
+Line mirrors can participate at the same time. New exact oracle controls check
+axis/Free planes, world-axis/line parallelism, simultaneous mirrors, unused
+camera/line geometry, and refusals for false declarations. The focused suite
+passes 87 tests, including a parallel-only noise-accounting check. Native
+preparation, fresh registration, fit/application and stale plane/parallel edits
+pass, with maximum withheld error about 0.00038 px in the generated fresh run.
+These controls establish
+supported behavior, not a measured improvement on unknown real-image geometry.
+Use `tools/synthetic_sync/focal_line_constraints.py` and
+`verify_focal_lines_blender.py --relations` for the new cases.
+
+**Previous follow-up: focal limits and honest progress.** The old joint optimizer
 clipped a focal step at its bound without recalculating the coupled pose/geometry
 step. `core/focal_optimizer.py` now solves feasible active-set steps and checks
 cancellation between re-solves. A small coupled linear regression exposes the
@@ -53,8 +77,9 @@ perpendicular endpoint residuals per stroke. Drawing direction and the visible
 interval are not endpoint correspondences. Stroke noise contributes to the
 conditional focal ranges. Point-based startup and its minimum support/depth
 requirements remain. Current added resource bounds are 24 lines / 96 strokes.
-Point plane groups remain supported alongside lines; line plane/parallel
-relations, Known 3D lines and mixed point/line mirrors are explicitly refused.
+At that checkpoint line plane/parallel relations were refused; the addition above
+supersedes that restriction for point-supported line planes and parallelism.
+Known 3D lines and mixed point/line mirrors remain explicitly refused.
 
 `tools/synthetic_sync/focal_lines.py` supplies independent varied/reversed
 strokes and withheld truth. Exact oracle-start tests recover focal lengths to

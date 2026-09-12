@@ -16,6 +16,7 @@ import numpy as np
 from . import geometry as core
 from .focal_constraints import PointFocalConstraints
 from .focal_lines import LineChart, endpoint_distances
+from .focal_line_constraints import LineFocalConstraints, LINE_RELATION_DIRECTION_HARD_SINE
 from .focal_optimizer import bounded_lm_step
 from .focal_startup import provisional_poses
 from .sync import SyncObservation, SyncLineObservation, SyncSolveResult, SimilarityTransform, SyncMatchInput
@@ -493,10 +494,6 @@ def fit_independent_focals(
     line_groups = [item for item in (plane_groups or []) if item[0] in line_set]
     if len(point_groups) + len(line_groups) != len(plane_groups or []):
         return refuse("Plane relation contains an unsupported landmark")
-    if line_groups:
-        return refuse("Independent FOV fitting does not yet support line Is in Plane relations")
-    if parallel_pairs:
-        return refuse("Independent FOV fitting does not yet support line parallel relations")
     line_seeds = {}
     for line_id in line_ids:
         strokes = [item for item in line_observations if item.landmark_id == line_id]
@@ -541,6 +538,10 @@ def fit_independent_focals(
             mirror_slack=0.0 if mirror_slack is None else mirror_slack,
             mirror_landmark_id=mirror_landmark_id,
             extra_mirror_pairs=bool(line_mirrors))
+        line_constraints = LineFocalConstraints.from_inputs(
+            point_ids, line_ids, plane_groups=plane_groups, parallel_pairs=parallel_pairs,
+            anchor_rotation=anchor_r, plane_spring=constraints.plane_spring,
+            baseline_world=baseline, hard_plane=constraints.hard_plane)
     except (ValueError, TypeError, IndexError) as exc:
         return refuse(str(exc))
     direction = centers0[1] / np.linalg.norm(centers0[1])
@@ -550,6 +551,7 @@ def fit_independent_focals(
     tangent_b = np.cross(direction, tangent_a)
     tangents = np.vstack((tangent_a, tangent_b))
     ncam = len(ids)
+    has_geometric_priors = constraints.active or line_constraints.active
     npoint = len(point_ids)
     scale_columns = int(constraints.free_baseline)
     point_offset = ncam + 5 + scale_columns + 6 * (ncam - 2)
@@ -616,8 +618,9 @@ def fit_independent_focals(
         return result.ravel()
 
     def line_prior(params: np.ndarray, points: np.ndarray, geometry):
+        relations = line_constraints.residual(points, geometry)
         if not line_mirrors:
-            return np.empty(0)
+            return relations
         normal = constraints.mirror_normal
         assert normal is not None
         householder = np.eye(3) - 2 * np.outer(normal, normal)
@@ -625,7 +628,7 @@ def fit_independent_focals(
                     if constraints.mirror_reference_index is not None else constraints.mirror_distance)
         if mirror_offset_column is not None:
             distance += float(params[mirror_offset_column])
-        result = []
+        result = list(relations)
         for left_id, right_id in line_mirrors:
             left_p, left_d = geometry[line_index[left_id]]
             right_p, right_d = geometry[line_index[right_id]]
@@ -714,7 +717,7 @@ def fit_independent_focals(
                     line_image_residual(shifted, f, r, c, line_geometry(shifted)) - line_residual) / step
             jac = np.vstack((jac, line_jac))
         pixel_residual = np.concatenate((pixel_residual, line_residual))
-        if not constraints.active and not line_mirrors:
+        if not has_geometric_priors:
             return pixel_residual, jac, depths
         offset = float(params[mirror_offset_column]) if mirror_offset_column is not None else 0.0
         prior_residual, prior_jacobian = constraints.residual_and_jacobian(
@@ -725,6 +728,8 @@ def fit_independent_focals(
         if jacobian and len(mirror_line_residual):
             mirror_jac = np.zeros((len(mirror_line_residual), len(params)))
             relevant = set(range(line_offset, line_end))
+            for point in line_constraints.point_indices:
+                relevant.update(range(point_offset + 3 * point, point_offset + 3 * point + 3))
             if constraints.mirror_reference_index is not None:
                 start = point_offset + 3 * constraints.mirror_reference_index
                 relevant.update(range(start, start + 3))
@@ -901,6 +906,11 @@ def fit_independent_focals(
         if len(luv):
             final_geometry = line_geometry(x)
             focal_check, rotations_check, centers_check, _points = decode(x)
+            plane_gap, direction_gap = line_constraints.world_gaps(_points, final_geometry)
+            if plane_gap > PLANE_HARD_SLACK:
+                return refuse("Fitted lines violate a hard Is in Plane relation", fitted=fitted_rmse)
+            if direction_gap > LINE_RELATION_DIRECTION_HARD_SINE:
+                return refuse("Fitted line directions violate Is in Plane or Is Parallel To", fitted=fitted_rmse)
             for index, endpoints in enumerate(luv):
                 camera = lci[index]
                 line_point, line_direction = final_geometry[lli[index]]
@@ -914,7 +924,7 @@ def fit_independent_focals(
                     if (rotations_check[camera] @ (support - centers_check[camera]))[2] <= 0:
                         return refuse("Fitted line stroke has geometry behind a camera", fitted=fitted_rmse)
         # Residual count and model dimensions make this a noise-aware fit test.
-        if not constraints.active and not _fits_noise_model(all_raw, len(x), pick_sigma_px):
+        if not has_geometric_priors and not _fits_noise_model(all_raw, len(x), pick_sigma_px):
             hint = _conflict_hint(ids, observations, pick_sigma_px,
                                   cancel_check=cancel_check)
             if cancel_check and cancel_check():
@@ -948,7 +958,7 @@ def fit_independent_focals(
         # constraints and soft springs affect the fit, never the pick count.
         pixel_influence = ((vh[~null].T / singular[~null]) @
                            u[:pixel_rows, ~null].T) * coordinate_weights / column_scale[:, None]
-        if constraints.active and not _fits_constrained_noise_model(
+        if has_geometric_priors and not _fits_constrained_noise_model(
                 all_raw, jac[:pixel_rows] / coordinate_weights[:, None],
                 pixel_influence, pick_sigma_px):
             hint = _conflict_hint(ids, observations, pick_sigma_px,

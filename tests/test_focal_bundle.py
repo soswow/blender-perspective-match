@@ -151,12 +151,12 @@ class PointFocalBundleTests(TestCase):
         self.assertFalse(result.improved)
         self.assertEqual([step for step, _, _ in updates], [0, 0, 2])
 
-    def test_line_relations_refuse_before_expensive_registration(self):
+    def test_unsupported_line_relations_refuse_before_expensive_registration(self):
         _case, matches, observations = _inputs("four-view")
         strokes = [sync.SyncLineObservation(key, "edge", 0., 0., 10., 10.)
                    for key in ("view_0", "view_1")]
         for extra, message in (
-            ({"plane_groups": [("edge", "FREE", 1)]}, "line Is in Plane"),
+            ({"plane_groups": [("edge", "FREE", 1)]}, "Line Is in Plane"),
             ({"mirror_pairs": [("edge", observations[0].landmark_id)],
               "mirror_plane": (np.zeros(3), np.array([1., 0., 0.]))}, "mixed point/line"),
         ):
