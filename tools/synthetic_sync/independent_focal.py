@@ -167,8 +167,9 @@ class EvalCap(BaseException):
 
 
 class WorkMeter:
-    def __init__(self, total: dict):
+    def __init__(self, total: dict, limits: dict = LIMITS):
         self.total = total
+        self.limits = limits
         self.local = dict(residual=0, jacobian=0)
         self.started = time.monotonic()
 
@@ -176,14 +177,16 @@ class WorkMeter:
         self.local[kind] += 1
         self.total[kind] += 1
         elapsed = time.monotonic()-self.started
-        if (self.local[kind] > LIMITS[f"per_case_{kind}"] or
-            self.total[kind] > LIMITS[f"total_{kind}"] or
-            elapsed > LIMITS["per_case_seconds"] or
-            time.monotonic()-self.total["started"] > LIMITS["total_seconds"]):
+        if (self.local[kind] > self.limits[f"per_case_{kind}"] or
+            self.total[kind] > self.limits[f"total_{kind}"] or
+            elapsed > self.limits["per_case_seconds"] or
+            time.monotonic()-self.total["started"] > self.limits["total_seconds"]):
             raise EvalCap(f"{kind} or wall-time optimizer cap exceeded")
 
 
-def optimize(request: dict, baseline: dict, total: dict) -> dict:
+def optimize(request: dict, baseline: dict, total: dict, *,
+             initial_focal_scale: float = 1., max_nfev: int = 80,
+             limits: dict = LIMITS, dense_exact: bool = False) -> dict:
     """Fit free focal/poses/points from picks; keep only one global gauge."""
     from scipy.optimize import least_squares
     from scipy.optimize._numdiff import approx_derivative
@@ -191,7 +194,7 @@ def optimize(request: dict, baseline: dict, total: dict) -> dict:
     state = initial_state(request, baseline)
     cidx, pidx, uv = observation_arrays(request, state)
     cxcy = np.asarray([[c["cx"], c["cy"]] for c in request["cameras"]], float)
-    meter = WorkMeter(total)
+    meter = WorkMeter(total, limits)
     pattern = jacobian_pattern(cidx, pidx, len(state["point_ids"]))
 
     def residual(x):
@@ -209,15 +212,20 @@ def optimize(request: dict, baseline: dict, total: dict) -> dict:
 
     def jacobian(x):
         meter.tick("jacobian")
-        return approx_derivative(residual, x, method="2-point", sparsity=pattern)
+        return approx_derivative(residual, x, method="2-point",
+                                 sparsity=None if dense_exact else pattern)
 
     x0 = parameterize(request, state)
+    if not 0.6 < initial_focal_scale < 1.6:
+        raise ValueError("Initial focal scale must be strictly inside the frozen bounds")
+    x0[:3] = math.log(initial_focal_scale)
     lower = np.full(len(x0), -np.inf)
     upper = np.full(len(x0), np.inf)
     lower[:3] = math.log(FOCAL_SCALE_BOUNDS[0])
     upper[:3] = math.log(FOCAL_SCALE_BOUNDS[1])
     result = least_squares(residual, x0, jac=jacobian, bounds=(lower, upper),
-        method="trf", x_scale="jac", max_nfev=80, ftol=1e-10,
+        method="trf", tr_solver="exact" if dense_exact else "lsmr",
+        x_scale="jac", max_nfev=max_nfev, ftol=1e-10,
         xtol=1e-10, gtol=1e-10)
     focal, rotations, centers, points = decode(result.x, request, state)
     rmse = float(np.sqrt(np.mean(np.square(result.fun.reshape(-1, 2)).sum(axis=1))))
@@ -244,6 +252,7 @@ def optimize(request: dict, baseline: dict, total: dict) -> dict:
                              abs(result.x[i]-upper[i]) < 1e-4) for i in range(3)]),
         optimizer=dict(nfev=result.nfev, njev=result.njev, meter=meter.local,
                        elapsed_s=time.monotonic()-meter.started,
+                       linear_solver="exact" if dense_exact else "lsmr",
                        initial_baseline_length=state["baseline_length"]))
 
 

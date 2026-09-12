@@ -1,0 +1,45 @@
+{
+  "metadata": {
+    "plan": "noisy-true-K-startup-2026-09-12",
+    "names": [
+      "no-vp-mixed-guessedK",
+      "no-vp-shared-guessedK"
+    ],
+    "max_calls": 2,
+    "per_call_seconds": 120,
+    "wall_seconds": 240,
+    "truth_use": "calibrated K is an explicit experimental input; oracle assesses only"
+  },
+  "source_runtime": {
+    "source_sha256": "10249169761158885fc55796bba9e92281c7a5bcdda8046787913364c9d4714f",
+    "environment": {
+      "python": "3.12.6",
+      "numpy": "2.0.1",
+      "platform": "macOS-26.5-arm64-arm-64bit",
+      "revision": "3045dd4e16ea899c3f981fabe3a56712519d4583",
+      "working_tree_dirty": true
+    },
+    "executable": "/Users/sasha/venvs/my/bin/python",
+    "python": "3.12.6",
+    "numpy": "2.0.1",
+    "scipy": "1.15.3",
+    "opencv": "4.13.0",
+    "threads": {
+      "OPENBLAS_NUM_THREADS": "1",
+      "OMP_NUM_THREADS": "1",
+      "MKL_NUM_THREADS": null,
+      "VECLIB_MAXIMUM_THREADS": null,
+      "NUMEXPR_NUM_THREADS": null
+    }
+  },
+  "cases": {
+    "no-vp-mixed-guessedK": {
+      "request_sha256": "7e0d88e158fe75e0fd2f9fbba33a2a39bfb717e8b4c4372f52c5357a3b34c3e6",
+      "file_sha256": "ec165be7e75a2e44103ad795cd3bcfbeefc584c3bc667ee80763fdf36fc9de1f"
+    },
+    "no-vp-shared-guessedK": {
+      "request_sha256": "0ab7f4f23c391fbec90ce5f8eab20726aa31387eb279507231bcb6e41eedf8a3",
+      "file_sha256": "0eeeb092e63204dfcc6360c0e51e7ac128bf8272b508d9bc678fa5a6e399fd3d"
+    }
+  }
+}

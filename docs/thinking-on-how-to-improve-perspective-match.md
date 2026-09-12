@@ -1,5 +1,5 @@
 **Perspective Match: reliability and AI development proposal**
-Investigation baseline: commit `5d876f6` / extension 0.5.0, 10 September 2026. Latest product fix and regression checkpoint: `cc7d14d`, 12 September 2026. Read **Current frontier**, including **Latest investigation**, first; the dated checkpoints preserve history, and the original proposal is retained for rationale rather than as an implementation checklist.
+Investigation baseline: commit `5d876f6` / extension 0.5.0, 10 September 2026. Latest product fix and regression checkpoint: noisy pair-baseline collapse, 12 September 2026, described under **Current frontier**. Read that section first; the dated checkpoints preserve history, and the original proposal is retained for rationale rather than as an implementation checklist.
 
 **My recommendation is to make every solver decision reproducible from a complete, versioned input, and judge it with checks independent of the implementation.** Build that foundation around the existing fixtures, Blender smoke test, and diagnostics. Then use it to improve calibration ownership, quality reporting, and selected solver decisions. This would turn a debugging session into an addition to a reusable capability.
 
@@ -22,6 +22,7 @@ disposition changes; the dated reports below retain the original measurements.
 | Finding | Current disposition | Evidence / next action |
 | --- | --- | --- |
 | Exact 2D-only startup accepts inaccurate geometry despite correct intrinsics | **Fixed and verified in `cc7d14d`** | [Frozen case and follow-up](../tools/synthetic_sync/no-vp-bootstrap-results.md): robust anchor connection plus direct/bridge competition restore shared- and mixed-focal true-K geometry. Actual old-solver regression fails; integrated 374-test suite and Blender solve/apply/reopen pass. |
+| Noisy calibrated 2D-only startup collapses camera baselines | **Pair-refinement defect fixed; integrated validation below** | [Noisy continuation](../tools/synthetic_sync/independent-focal-results.md): ray-distance refinement could reduce its objective by shrinking the camera baseline. Holding its unobservable scale gauge prevents that collapse. The old regression fails; fixed noisy mixed/shared fitted RMSE is 0.376/0.319 px with all withheld features in front. Mixed withheld RMS 1.974 px and center error 0.068 object diagonals remain accuracy findings, not closed by this fix. |
 | Guessed intrinsics can produce low-error but inaccurate free 3D | **Open quality/uncertainty gap** | [Unknown-focal continuation](../tools/synthetic_sync/unknown-focal-results.md): shared and mixed guessed-K Sync runs fit at ~0.49 px but fail withheld geometry. The actual Same Lens route succeeds on shared K with an explicit ±25% range; a general warning or acceptance rule needs stronger evidence. |
 | Pure rotation is accepted as reconstructed free 3D | **Open observability defect** | [Frozen true/guessed-K rotation controls](../tools/synthetic_sync/unknown-focal-results.md) both accept 23 reconstructed points at near-zero fitted RMSE despite unobservable depth. A parallax cutoff selected from only these controls is unjustified; determine a stable geometry-only warning/refusal contract with noisy and near-critical controls. |
 | Mild noisy free-scale/overhead cases and five of ten noisy graph cases exceed provisional accuracy limits | **Open accuracy findings; cause not established** | [Initial pilot](../tools/synthetic_sync/pilot-results.md), [evidence placement](../tools/synthetic_sync/evidence-results.md), [graph sweep](../tools/synthetic_sync/graph-results.md). Reassess after the exact startup fix; compare input uncertainty with reconstruction sensitivity before claiming a solver defect. |
@@ -50,23 +51,52 @@ case-specific contracts or a claim that every geometry is now accurate.
 
 **Objective and scope:** improve Sync reliability through reproducible evidence and independent checks of the rest of the object, beyond fitted picks. Both visual alignment and metric accuracy matter. Synthetic scenes are the primary corpus; private projects are optional evidence. Images are optional. **Latest user steering:** reliable FOV estimation from shared landmarks without dependable VP lines is now a priority; both shared-lens sets and mixed lenses/zooms/crops are common. Image transformations and distortion are now in scope when they affect that workflow. Automatic AprilTag/VP detection remains optional, not a prerequisite. Earlier deferrals below are historical.
 
-**Newest result:** the [independent-focal prototype](../tools/synthetic_sync/independent-focal-results.md)
-fit three unrelated focals, camera poses and all free points from the frozen
-2D-only Sync starts, under separate optimizer and wall-time caps. The exact
-shared case converged and passed withheld geometry. The mixed candidate
-reached focal errors below 0.02% and withheld RMS 0.00114 px but hit its
-declared iteration cap, so remains a refusal. Weak-translation and
-pure-rotation candidates retained inaccurate geometry despite fitted RMSE
-below 0.002 px. With an explicitly assumed 0.5 px pick-noise standard
-deviation, the local focal intervals are broad even for mixed/shared exact
-fits; this does not certify global uniqueness or real-image FOV accuracy. No
-production lens mode, Sync acceptance or UI changed. The preceding
+**Newest result:** the [noisy focal continuation](../tools/synthetic_sync/independent-focal-results.md)
+led to a production pair-registration fix. Correctly calibrated noisy cases
+previously accepted distorted geometry with withheld features behind cameras;
+two-view ray refinement now holds its seed baseline length instead of shrinking
+it to improve the residual. This removes an invalid optimization direction;
+it supplies no metric scale and preserves pose locks.
+
+The independent-focal experiment also separated numerical stalls from evidence
+ambiguity: four dense fits converged where sparse fits exhausted their budget,
+but weak-motion fits still had wrong depth. Mixed/shared noisy fits improved
+withheld alignment while retaining broad local focal uncertainty (8.7–22.2%
+upper excursions under an explicit 0.5 px noise assumption). Pure-rotation
+fits fabricated parallax despite raw picks remaining homography-compatible.
+No independent no-VP lens mode or general ambiguity detector is shipped.
+Historical guessed-K focal fits used the pre-fix initializer; their results
+must not be presented as post-fix performance. The preceding
 [unknown-focal continuation](../tools/synthetic_sync/unknown-focal-results.md)
 established a working actual Same Lens search when its explicit range included
 the correction, and `cc7d14d`'s true-K startup fix remains verified.
 
-**Independent-focal integration checkpoint:** prototype/evidence `9e6f0ca` and
-guards/corpus checks `da3ba09` are integrated. Shared-lens user instructions are
+**Noisy pair-baseline integration checkpoint:** the full numerical suite passed
+386 tests (two absent optional sample-YAML skips) in 380.523 seconds with the
+OpenCV environment. Blender 5.1.0 passed generated exact shared-true-K scene
+creation, numerical solve, camera application and fresh-process reopening.
+The noisy numerical regression fails on the pre-fix `3045dd4` checkout and
+passes after the fix; focused corpus checks also pass on both Python
+environments. Validation logs and generated files are under
+`.local/noisy-pair-validation/`; no private project file was modified. The
+worker branch `experiment/focal-noise` retains its implementation/evidence
+commit; its clean worktree is removed after integration. Nothing was pushed.
+Implementation, tests, changelog, user docs and this review checkpoint form one
+coherent fix commit. The earlier three unpublished prototype commits were
+combined in `3045dd4`; published/release history was left intact.
+
+**Next decision:** evaluate independent no-VP focal recovery from the corrected
+startup, with model comparison and explicit uncertainty. Optimizer convergence,
+positive fitted depths and fitted parallax all failed to identify ambiguous
+motion in the preserved controls. A homography-compatible scene can be planar
+or rotating; do not turn this small corpus into a cutoff that claims to identify
+the motion. The surviving noisy mixed accuracy flag also needs stronger evidence
+before being called another arithmetic defect or closed as expected noise.
+
+**Independent-focal integration checkpoint:** prototype/evidence, guards and
+corpus checks are combined in `3045dd4` (the three unpublished integration
+commits were squashed; their original history remains on
+`archive/independent-focal-before-squash`). Shared-lens user instructions are
 in `036dbd5` and [the Sync guide](sync.md#shared-point-matches-with-an-approximate-shared-fov-no-vp-lines).
 Seven focused evidence tests pass on both Python environments without new
 numerical solves. In the OpenCV environment, use `PYTHONPATH=tests:.` with

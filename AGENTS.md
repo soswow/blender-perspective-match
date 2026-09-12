@@ -2,6 +2,11 @@
 
 Conventions for humans and coding agents working in this repo.
 
+Prefer coherent commits containing implementation, tests and relevant docs;
+combine review corrections and checkpoint notes before integration. An
+experiment budget is a review boundary, not completion of the larger task.
+See `docs/development.md#commit-size-and-completion`.
+
 ## Changelog
 
 User-visible work must land with a bullet under `## [Unreleased]` in `CHANGELOG.md` **in the same commit** as the code (Keep a Changelog: Added / Changed / Fixed / Removed).
@@ -62,7 +67,7 @@ Do not special-case a user `.blend` (filename, match names, landmark names, or t
 | `types.py` | `SimilarityTransform`, observations, `SyncSolveResult` |
 | `request.py` | Complete `SyncSolveRequest`, versioned JSON capture/restore and request fingerprint |
 | `projection.py` | Project, rays, triangulate, image-line geometry; analytic infinite-line projection for pinhole cameras, sampled approximation for distortion |
-| `pose.py` | Essential / PnP / IPPE / pairwise register; shared-ground seeds from registered location-enabled cameras |
+| `pose.py` | Essential / PnP / IPPE / pairwise register; free-ray refinement holds the seed camera-baseline scale gauge; shared-ground seeds from registered location-enabled cameras |
 | `ground.py` | Calibrated On Ground plane init (`estimate_anchor_ground_plane`) |
 | `lines.py` | Free / Known 3D lines, Is-Parallel-To, compatible independent axis/CAD direction priors, supporting-plane angle diagnostics |
 | `mirrors.py` | Point/line Is-Mirror-Of pairs across one scene plane; reflected line fitting within compatible supported planes and independently fixed parallel directions |
@@ -114,6 +119,7 @@ Parallel agent work uses isolated worktrees and distinct file ownership; see `do
 - `tools/synthetic_sync/no_vp_startup_trace.py` — bounded stage trace for frozen no-VP camera registration, pair scores, triangulation, peeling and recovery; supports an input-order control and records exact results in a separate follow-up ledger.
 - `tools/synthetic_sync/unknown_focal.py` — one persistent budget for the frozen guessed-K, weak-baseline and pure-rotation no-VP cases and a five-call run through the actual Same Lens API; records complete trial inputs, source/runtime identity, assessments and selected search output. See `tools/synthetic_sync/unknown-focal-results.md`.
 - `tools/synthetic_sync/independent_focal.py` — bounded three-focal, camera-pose and free-point bundle-adjustment prototype seeded by saved Sync results, with one global scale gauge and input-only selection. `independent_focal_sensitivity.py` measures local focal uncertainty under an explicit pixel-noise assumption. Their frozen mixed/shared/weak/rotation evidence and optimizer ledgers are in `tools/synthetic_sync/independent-focal-results.md`.
+- `tools/synthetic_sync/independent_focal_noise.py`, `independent_focal_dense.py`, `independent_focal_true_k_control.py`, `independent_focal_sync_probe.py`, and `independent_focal_observability.py` — frozen noisy picks and alternate starts, dense-vs-sparse convergence controls, calibrated-startup isolation, pair-collapse tracing, and raw-pick homography/local-sensitivity diagnostics. See the same focal results report; convergence and fitted parallax do not certify depth. The calibrated noisy regression prevents baseline collapse without promising exact geometry.
 
 ## Do not
 

@@ -27,6 +27,15 @@ starts. Four exact controls and a separate local-sensitivity check are bounded
 and preserved with exact optimizer inputs/results. This is numerical tooling,
 not a sidebar option or a production acceptance rule.
 
+The [noisy continuation](independent-focal-results.md#noisy-pick-and-calibrated-startup-results)
+freezes 0.5 px pick noise in `independent_focal_noise.py`, then compares sparse
+and dense focal fits (`independent_focal_dense.py`), calibrated true-K Sync
+starts (`independent_focal_true_k_control.py`), stage traces
+(`independent_focal_sync_probe.py`) and read-only homography/depth evidence
+(`independent_focal_observability.py`). Its exact requests, ledgers and results
+are under `cases/independent-focal-noise/`. The calibrated controls exposed a
+two-view baseline-collapse bug, now covered by a focused Sync regression.
+
 ## Run and inspect
 
 From the repository root, using Python with NumPy:

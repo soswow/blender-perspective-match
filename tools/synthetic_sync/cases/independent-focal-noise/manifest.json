@@ -1,0 +1,91 @@
+{
+  "names": [
+    "no-vp-mixed-guessedK",
+    "no-vp-shared-guessedK",
+    "no-vp-weak-baseline-guessedK",
+    "no-vp-pure-rotation-guessedK"
+  ],
+  "seeds": {
+    "no-vp-mixed-guessedK": 20260912,
+    "no-vp-shared-guessedK": 20260913,
+    "no-vp-weak-baseline-guessedK": 20260914,
+    "no-vp-pure-rotation-guessedK": 20260915
+  },
+  "sigma_px": 0.5,
+  "start_scales": [
+    0.7,
+    1.0,
+    1.3
+  ],
+  "limits": {
+    "per_case_residual": 10000,
+    "per_case_jacobian": 300,
+    "per_case_seconds": 30.0,
+    "total_residual": 120000,
+    "total_jacobian": 3600,
+    "total_seconds": 300.0
+  },
+  "max_runs": 12,
+  "max_nfev": 300,
+  "inner_metadata": {
+    "plan": "independent-focal-noise-2026-09-12",
+    "names": [
+      "no-vp-mixed-guessedK",
+      "no-vp-shared-guessedK",
+      "no-vp-weak-baseline-guessedK",
+      "no-vp-pure-rotation-guessedK"
+    ],
+    "sigma_px": 0.5,
+    "seeds": {
+      "no-vp-mixed-guessedK": 20260912,
+      "no-vp-shared-guessedK": 20260913,
+      "no-vp-weak-baseline-guessedK": 20260914,
+      "no-vp-pure-rotation-guessedK": 20260915
+    },
+    "purpose": "fresh noisy-pick startup only"
+  },
+  "source_runtime": {
+    "source_sha256": "164f90f234bf470bf9a764ea3fd74b80fecc7e3ce18b1b14065b2b4175eec74b",
+    "environment": {
+      "python": "3.12.6",
+      "numpy": "2.0.1",
+      "platform": "macOS-26.5-arm64-arm-64bit",
+      "revision": "3045dd4e16ea899c3f981fabe3a56712519d4583",
+      "working_tree_dirty": true
+    },
+    "executable": "/Users/sasha/venvs/my/bin/python",
+    "python": "3.12.6",
+    "numpy": "2.0.1",
+    "scipy": "1.15.3",
+    "opencv": "4.13.0",
+    "threads": {
+      "OPENBLAS_NUM_THREADS": "1",
+      "OMP_NUM_THREADS": "1",
+      "MKL_NUM_THREADS": null,
+      "VECLIB_MAXIMUM_THREADS": null,
+      "NUMEXPR_NUM_THREADS": null
+    }
+  },
+  "cases": {
+    "no-vp-mixed-guessedK": {
+      "original_request_sha256": "a34de7da163809852b5eb6469e7df0860d7a547d24f253c8b998700371b5303c",
+      "noisy_request_sha256": "5473af85af5dfc21b13bbd0ff8f6ad442510190d6f9b6d6711ae86628641034c",
+      "file_sha256": "d3fcd7d81fcb70a06934983ed013ab87ffe8273dda6719342c457dd198d8240c"
+    },
+    "no-vp-shared-guessedK": {
+      "original_request_sha256": "c3da3a866ec8b324c58a6616b31cbd26ff1beff0357cf79411ef6f31686d542c",
+      "noisy_request_sha256": "2a440edc4af30edf900440c17222fc5c3de2995f34fd1ad095c8534bb97e5011",
+      "file_sha256": "0c671c3c9152d977842a427b3a463b53c5e379492f0dce494f1b4db4c40bc313"
+    },
+    "no-vp-weak-baseline-guessedK": {
+      "original_request_sha256": "c1b8013fbd53cb4ca0c2efc29215e40c5fa57d56b5838f4a4b57d075ba75771b",
+      "noisy_request_sha256": "60d54c75849a3d508242139c2e4dfab22875b2c2ed281047fc4cfe02a398fe65",
+      "file_sha256": "f9ea3304d3a95886df51d9a23a0db117788921681650d331bebaea8ab0d68a1d"
+    },
+    "no-vp-pure-rotation-guessedK": {
+      "original_request_sha256": "b5e369b3f6e69841be226aa98fb7e901c0fa362161a9bad6c175914d9f6e4723",
+      "noisy_request_sha256": "fab5b3cccca63b8f0bb6ef66ba87e0a00c807efb244ee5f21559aa3777c4d9a7",
+      "file_sha256": "d44229cef73e1e770ebdb57fd82f7da6fa0528a43fec11673d58bbddfe6a6fd6"
+    }
+  }
+}

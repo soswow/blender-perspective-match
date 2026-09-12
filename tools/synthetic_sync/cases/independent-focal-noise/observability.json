@@ -1,0 +1,89 @@
+{
+  "rows": [
+    {
+      "name": "no-vp-mixed-guessedK",
+      "request_sha256": "5473af85af5dfc21b13bbd0ff8f6ad442510190d6f9b6d6711ae86628641034c",
+      "pairs": {
+        "view_0/view_1": {
+          "count": 15,
+          "homography_symmetric_transfer_rmse_px": 24.237439330697583
+        },
+        "view_0/view_2": {
+          "count": 6,
+          "homography_symmetric_transfer_rmse_px": 205.83835978333013
+        },
+        "view_1/view_2": {
+          "count": 14,
+          "homography_symmetric_transfer_rmse_px": 73.46960495330427
+        }
+      },
+      "all_fitted_points_in_front": true,
+      "min_fitted_depth_baselines": 0.5760148130776493,
+      "median_max_pair_parallax_deg": 119.73743653432713
+    },
+    {
+      "name": "no-vp-shared-guessedK",
+      "request_sha256": "2a440edc4af30edf900440c17222fc5c3de2995f34fd1ad095c8534bb97e5011",
+      "pairs": {
+        "view_0/view_1": {
+          "count": 15,
+          "homography_symmetric_transfer_rmse_px": 24.95558081494216
+        },
+        "view_0/view_2": {
+          "count": 6,
+          "homography_symmetric_transfer_rmse_px": 295.59112290367153
+        },
+        "view_1/view_2": {
+          "count": 14,
+          "homography_symmetric_transfer_rmse_px": 62.87245241053034
+        }
+      },
+      "all_fitted_points_in_front": true,
+      "min_fitted_depth_baselines": 0.6345816541869066,
+      "median_max_pair_parallax_deg": 120.49753608035401
+    },
+    {
+      "name": "no-vp-weak-baseline-guessedK",
+      "request_sha256": "60d54c75849a3d508242139c2e4dfab22875b2c2ed281047fc4cfe02a398fe65",
+      "pairs": {
+        "view_0/view_1": {
+          "count": 23,
+          "homography_symmetric_transfer_rmse_px": 1.003230790172644
+        },
+        "view_0/view_2": {
+          "count": 23,
+          "homography_symmetric_transfer_rmse_px": 0.911306480401744
+        },
+        "view_1/view_2": {
+          "count": 23,
+          "homography_symmetric_transfer_rmse_px": 1.0749427028050007
+        }
+      },
+      "all_fitted_points_in_front": true,
+      "min_fitted_depth_baselines": 246.86879249926042,
+      "median_max_pair_parallax_deg": 0.12425016706909653
+    },
+    {
+      "name": "no-vp-pure-rotation-guessedK",
+      "request_sha256": "fab5b3cccca63b8f0bb6ef66ba87e0a00c807efb244ee5f21559aa3777c4d9a7",
+      "pairs": {
+        "view_0/view_1": {
+          "count": 23,
+          "homography_symmetric_transfer_rmse_px": 1.0408683538810237
+        },
+        "view_0/view_2": {
+          "count": 23,
+          "homography_symmetric_transfer_rmse_px": 0.7577450279561067
+        },
+        "view_1/view_2": {
+          "count": 23,
+          "homography_symmetric_transfer_rmse_px": 0.9622412698183235
+        }
+      },
+      "all_fitted_points_in_front": true,
+      "min_fitted_depth_baselines": 8.358812121391335,
+      "median_max_pair_parallax_deg": 4.846053297600124
+    }
+  ],
+  "source_sha256": "14142f6e42a5b1834da78059e60a6b2f72ab8e7b85de453d8403b726a032d0c0"
+}

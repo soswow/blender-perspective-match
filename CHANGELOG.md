@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Solve Sync keeps two-view camera baselines from collapsing while registering noisy shared point picks.
+
 ## [0.6.0] - 2026-09-12
 
 ### Fixed

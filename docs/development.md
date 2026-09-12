@@ -24,6 +24,24 @@ ZIP builds (`./scripts/build-extension.sh`) are only needed for a local packagin
 
 User-visible changes go in `CHANGELOG.md` under `## [Unreleased]` in the same commit (see `AGENTS.md`). Do not bump `blender_manifest.toml` until a release.
 
+### Commit size and completion
+
+Prefer one commit per coherent outcome, including its implementation, focused
+tests, relevant documentation and changelog. Review corrections and checkpoint
+notes normally belong in that same commit, rather than separate commits for
+each step. Separate unrelated fixes or independently useful changes. Temporary
+worker commits can be combined before integration; preserve source snapshots
+referenced by numerical evidence on an archive branch when needed. Do not
+rewrite published commits or release history as routine cleanup.
+
+An experiment budget limits that experiment, not the authorized task. At its
+boundary, inspect the evidence and choose the next bounded experiment, implement
+the supported fix, or identify a substantive blocker. Do not end a development
+session just because a prototype report or a checkpoint commit is finished when
+the next necessary step is clear and authorized. A useful stopping point is a
+verified product outcome, an evidence-backed limitation requiring a decision,
+or the user's instruction to stop; do not claim the whole roadmap is complete.
+
 ## Parallel agent work
 
 Use separate worktrees for independent problems, with one main thread reviewing
@@ -98,6 +116,10 @@ code could block signal delivery. Resuming retains call counts and charges
 interrupted attempts their reserved time. The caller must supply source-content,
 environment and option fingerprints; a Git revision plus a dirty flag is not
 sufficient. Cached values are serialized evidence, not reusable live solver objects.
+When editing an experimental wrapper between runs, preserve its exact source
+snapshot or a patch against a retained commit alongside the ledger. A hash
+identifies a source version but cannot reconstruct missing source bytes; doing
+this does not require a separate main-branch commit for every experiment.
 
 Measure a task's main-thread usage delta plus its children, with input, cached
 input and output separate. Cached input is part of input; reasoning output is

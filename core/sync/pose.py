@@ -1364,7 +1364,7 @@ def _refine_rigid_from_rays(
     lock_rotation: bool = False,
     lock_translation: bool = False,
 ) -> SimilarityTransform:
-    """Levenberg–Marquardt on Empty (R, t) minimizing ray–ray distances."""
+    """Refine pair rotation and baseline direction at a fixed free-scale gauge."""
     seed = _apply_pose_locks(
         seed,
         lock_scale=True,
@@ -1399,8 +1399,14 @@ def _refine_rigid_from_rays(
     pair_scale_array = np.asarray(pair_scales, dtype=np.float64)
     origin_a = anchor.camera_center
     origin_b_private = other.camera_center
+    seed_center = seed.transform_point(origin_b_private)
+    seed_offset = seed_center - origin_a
+    fixed_baseline = float(np.linalg.norm(seed_offset))
+    if fixed_baseline < 1.0e-12:
+        return seed
 
-    def residual(values: np.ndarray) -> np.ndarray:
+    def fixed_gauge(values: np.ndarray) -> SimilarityTransform:
+        """Keep the unobservable pair scale out of the ray-distance objective."""
         similarity = _unpack_similarity_pose(
             values,
             lock_scale=True,
@@ -1410,6 +1416,20 @@ def _refine_rigid_from_rays(
             fixed_rotation=fixed_rotation,
             fixed_translation=fixed_translation,
         )
+        if lock_translation:
+            return similarity
+        offset = similarity.transform_point(origin_b_private) - origin_a
+        length = float(np.linalg.norm(offset))
+        direction = offset / length if length > 1.0e-12 else seed_offset / fixed_baseline
+        center = origin_a + fixed_baseline * direction
+        return SimilarityTransform(
+            scale=1.0,
+            rotation=similarity.rotation,
+            translation=center - similarity.rotation @ origin_b_private,
+        )
+
+    def residual(values: np.ndarray) -> np.ndarray:
+        similarity = fixed_gauge(values)
         origin_b = similarity.transform_point(origin_b_private)
         direction_b = other_direction_array @ similarity.rotation.T
         normals = np.cross(anchor_direction_array, direction_b)
@@ -1425,7 +1445,7 @@ def _refine_rigid_from_rays(
                 np.cross(offset, direction_b[~regular]),
                 axis=1,
             )
-        return pair_scale_array * distances
+        return pair_scale_array * distances / fixed_baseline
 
     damping = 1.0e-2
     previous_cost = float("inf")
@@ -1466,15 +1486,7 @@ def _refine_rigid_from_rays(
         if not improved:
             break
 
-    return _unpack_similarity_pose(
-        params,
-        lock_scale=True,
-        lock_rotation=lock_rotation,
-        lock_translation=lock_translation,
-        fixed_scale=1.0,
-        fixed_rotation=fixed_rotation,
-        fixed_translation=fixed_translation,
-    )
+    return fixed_gauge(params)
 
 
 def _apply_depth_heuristic_scale(
@@ -1882,8 +1894,8 @@ def _compute_relative_from_pairs(
         if norm < 1.0e-10:
             return
         baseline_direction /= norm
-        # Two-view translation has no absolute scale. Start far enough from
-        # the zero-baseline minimum that ray-distance LM can refine R and t.
+        # Two-view translation has no absolute scale. A finite seed baseline
+        # defines the gauge held by ray-distance refinement.
         baseline = max(float(np.linalg.norm(anchor.camera_center)), 5.0)
         for sign in (1.0, -1.0):
             center_b = (
