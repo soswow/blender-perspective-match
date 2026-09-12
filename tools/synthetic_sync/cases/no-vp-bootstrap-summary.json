@@ -1,0 +1,60 @@
+{
+  "metadata": {
+    "environment": {
+      "python": "3.12.6",
+      "numpy": "2.0.1",
+      "platform": "macOS-26.5-arm64-arm-64bit",
+      "revision": "d39b4dcb965a91218157224213c67b2c2ca98597",
+      "working_tree_dirty": true
+    },
+    "python": "3.12.6",
+    "numpy": "2.0.1",
+    "opencv": "4.13.0",
+    "generator_sha256": "4206e36d32770dc6549b6588a41b91cef6e6110234e959044e827d1c284a3cf2",
+    "solver_sha256": "d76e892dfaf13c57af70b6becb3a22bd79a3e6265b16a7db74facf7aa6eb0e34",
+    "focal_solver_sha256": "2363ae447e9721dfb4b6de36b4bc0de15972ea6b4c56068c7026255838248fbd",
+    "budget_sha256": "1fda6662029d06f7babd0f6f01f08afd741191d5b6175339290ea1e939267eb2",
+    "options": {
+      "max_calls": 16,
+      "per_call_seconds": 180,
+      "wall_seconds": 720,
+      "shared_search_span": 0.25,
+      "shared_search_span_includes_truth": true,
+      "matrix": [
+        "shared/trueK",
+        "shared/guessedK",
+        "mixed/trueK",
+        "mixed/guessedK",
+        "weak_baseline/trueK",
+        "weak_baseline/guessedK",
+        "pure_rotation/trueK",
+        "pure_rotation/guessedK"
+      ]
+    }
+  },
+  "rows": [
+    {
+      "name": "no-vp-shared-trueK",
+      "classification": "false_precise_acceptance",
+      "reported_rmse_px": 1.3751672573553873,
+      "elapsed_s": 3.386173415929079,
+      "focal_relative_error": {
+        "view_0": 0.0,
+        "view_1": 0.0,
+        "view_2": 0.0
+      },
+      "violations": [
+        "point_22: reconstructed point error 0.06122 of object diagonal",
+        "view_0: holdout_rmse_px 12.25 > 1",
+        "view_0: rotation_deg 14.01 > 1",
+        "view_0: center_fraction 0.4948 > 0.02",
+        "view_1: holdout_rmse_px 5.282 > 1",
+        "view_1: rotation_deg 4.729 > 1",
+        "view_1: center_fraction 0.1612 > 0.02",
+        "view_2: holdout_rmse_px 17.28 > 1",
+        "view_2: rotation_deg 10.72 > 1",
+        "view_2: center_fraction 0.2669 > 0.02"
+      ]
+    }
+  ]
+}
