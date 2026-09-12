@@ -31,11 +31,11 @@ The final five calls exercised **the actual `refine_lenses_from_landmarks(..., s
 
 The mixed case needs independently changing ratios; Same Lens preserves the three biased starting ratios, while the current independent mode freezes no-VP focals. No independent focal prototype was justified by one remaining exploratory call. The five-call actual shared route and frozen matrix separate the supported local correction from this open product capability. Focal truth was never given to the solver or search, and candidate selection did not use the independent oracle. The present fitted-RMSE status can still certify inaccurate geometry for guessed K or ambiguous camera motion; deciding how to communicate uncertainty and how to search three unrelated focals needs a separate bounded design and validation step.
 
-Raw complete requests, numerical records, assessments, source/runtime keys and call accounting are in [`cases/unknown-focal-continuation/ledger.jsonl`](cases/unknown-focal-continuation/ledger.jsonl). Individual Sync assessments and the complete [`actual-shared-search.json`](cases/unknown-focal-continuation/actual-shared-search.json) preserve the selected trial and all alternatives. The local runner is [`unknown_focal.py`](unknown_focal.py). No numerical regression test or product code change was made, because this phase established an unsupported route and an observability boundary rather than a narrow solver defect with a justified fix.
+Raw complete requests, numerical records, assessments, source/runtime keys and call accounting are in [`cases/unknown-focal-continuation/ledger.jsonl`](cases/unknown-focal-continuation/ledger.jsonl). Individual Sync assessments and the complete [`actual-shared-search.json`](cases/unknown-focal-continuation/actual-shared-search.json) preserve the selected trial and all alternatives. The local runner is [`unknown_focal.py`](unknown_focal.py). Three read-only automated tests check this saved corpus. No new numerical solve regression or product code change was made, because this phase established an unsupported route and an observability boundary rather than a narrow solver defect with a justified fix.
 
 To inspect saved results without spending a numerical call:
 
 ```sh
 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 ~/venvs/my/bin/python \
-  scripts/run_unittests.py test_synthetic_no_vp_bootstrap test_synthetic_budget
+  scripts/run_unittests.py test_synthetic_unknown_focal
 ```

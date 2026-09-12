@@ -176,13 +176,14 @@ Sync/lens preparation and fresh-process reopening. Numerical calls were blocked.
 They establish unchanged prepared inputs and the current focal eligibility rules,
 not solved-camera application or the native interactive workflow.
 
-**Next numerical question:** resume the remaining frozen guessed-K and weak/
-pure-rotation controls under a new bounded ledger. The correctly calibrated
-startup gate is now understood and fixed; do not retrace it without new evidence.
-Test what the existing shared-lens route can recover and where independent focal
-freedom is actually needed. Keep truth out of candidate selection, preserve
-withheld checks, and do not promote triangulated working references to independent
-evidence. Independent focal search and distortion optimization remain unimplemented.
+**Next numerical question after the unknown-focal continuation:** the remaining
+guessed-K and weak/pure-rotation controls and a small actual Same Lens search are
+now recorded in the [bounded continuation](../tools/synthetic_sync/unknown-focal-results.md).
+Investigate an input-only independent-focal strategy for mixed lenses and a
+geometry-only ambiguity response for pure rotation, with noisy and near-critical
+controls before adopting a cutoff. Keep truth out of candidate selection,
+preserve withheld checks, and do not promote triangulated working references to
+independent evidence. Distortion optimization remains unimplemented.
 
 **Workflow trial:** a fresh Sol/high worker owned the numerical cases/oracle and
 returned one evidence packet at the planned review gate. Main independently
