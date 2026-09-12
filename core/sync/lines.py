@@ -8,6 +8,7 @@ import numpy as np
 
 from .. import geometry as core
 from .constants import (
+    LINE_CONSTRAINT_DIRECTION_TOLERANCE,
     LINE_FIXED_ANCHOR_MIN,
     LINE_PLANE_MIN_SINE,
     LINE_RECONSTRUCT_TRUNCATE_PX,
@@ -434,6 +435,35 @@ def _orthonormal_basis_perpendicular(direction: np.ndarray) -> tuple[np.ndarray,
     axis_b = np.cross(unit, axis_a)
     axis_b = axis_b / max(float(np.linalg.norm(axis_b)), 1.0e-12)
     return axis_a, axis_b
+
+
+def _fixed_parallel_line_directions(
+    parallel_pairs: list[tuple[str, str]] | None,
+    known_lines: dict[str, tuple[np.ndarray, np.ndarray]],
+) -> dict[str, np.ndarray]:
+    """Compatible axis/CAD directions only; free lines cannot supply an exact prior."""
+    output = {}
+    for group in _parallel_landmark_groups(parallel_pairs):
+        directions = [WORLD_AXIS_DIRECTIONS[key] for key in group if key in WORLD_AXIS_DIRECTIONS]
+        invalid = False
+        for key in group:
+            if key not in known_lines:
+                continue
+            ends = known_lines[key]
+            direction = ends[1] - ends[0]
+            length = float(np.linalg.norm(direction))
+            if not np.isfinite(length) or length <= 1e-12:
+                invalid = True
+                break
+            directions.append(direction / length)
+        if invalid or not directions:
+            continue
+        reference = directions[0]
+        if any(float(np.linalg.norm(np.cross(reference, direction))) > LINE_CONSTRAINT_DIRECTION_TOLERANCE
+               for direction in directions[1:]):
+            continue
+        output.update((key, reference.copy()) for key in group)
+    return output
 
 
 def _fit_line_fixed_direction(

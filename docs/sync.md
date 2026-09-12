@@ -77,6 +77,8 @@ Diagnose labels these points **Plane + one view**. Their depth follows your plan
 
 A hard plane established independently by other reconstructed geometry also helps fit existing free lines, including mirrored pairs. The line is fitted within the plane using its strokes. Compatible planes on mirrored partners preserve both plane membership and reflection. Free lines and points whose depth comes from that plane alone do not count as independent plane support for this check. This does not add reconstruction of an ordinary line with only one stroke.
 
+Mirrored lines also retain a compatible **Is Parallel To** direction supplied by a world axis or a **Known 3D** edge. When a supported hard plane applies, reconstruction keeps that direction, plane membership and reflection together. A fixed direction alone does not determine the line's position: nearly coincident reflected strokes can still produce a **Weak 3D line support** warning. Nonzero Plane Slack does not turn the plane into a hard depth reference.
+
 ### Line landmarks
 
 Add with the mesh icon next to +. Drag the same physical edge in each still — endpoints do **not** need to be the same 3D points, only the same infinite edge. Optional: assign two Empties as **Known 3D** / **Known 3D B** so the edge is metric. **Is Parallel To** can constrain the edge to shared-world **X Axis**, **Y Axis**, or **Z Axis**, or to another Line landmark that shares its 3D direction. **Is Mirror Of** pairs a line with its counterpart across the scene Mirror Empty, the same as for points. **Is in Plane** can keep a line in a wall, table, or other shared plane with point landmarks.

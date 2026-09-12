@@ -7,6 +7,7 @@ import re
 import numpy as np
 
 from .. import geometry as core
+from .constants import LINE_CONSTRAINT_DIRECTION_TOLERANCE
 from .projection import (
     _intersect_planes_to_line,
     _plane_from_line_observation,
@@ -526,6 +527,8 @@ def _fit_mirror_line_in_plane(
     observations_by_landmark: dict[str, list[SyncLineObservation]],
     similarities: dict[str, SimilarityTransform],
     matches: dict[str, SyncMatchInput],
+    *,
+    preserve_direction: bool = False,
 ) -> tuple[np.ndarray, np.ndarray] | None:
     """Fit one reflected pair inside compatible, independently supported planes."""
     equations = []
@@ -542,7 +545,9 @@ def _fit_mirror_line_in_plane(
     if not equations or any(not np.allclose(equation, equations[0]) for equation in equations[1:]):
         return None
     plane = equations[0]
-    unit = direction_b - plane[:3] * float(plane[:3] @ direction_b)
+    if preserve_direction and abs(float(plane[:3] @ direction_b)) > LINE_CONSTRAINT_DIRECTION_TOLERANCE:
+        return None
+    unit = direction_b.copy() if preserve_direction else direction_b - plane[:3] * float(plane[:3] @ direction_b)
     length = float(np.linalg.norm(unit))
     if length < 1e-12:
         return None
@@ -572,6 +577,43 @@ def _fit_mirror_line_in_plane(
     return (point, unit) if np.isfinite(point).all() else None
 
 
+def _fit_mirror_line_fixed_direction(
+    landmark_a: str,
+    landmark_b: str,
+    direction_b: np.ndarray,
+    origin: np.ndarray,
+    normal: np.ndarray,
+    observations_by_landmark: dict[str, list[SyncLineObservation]],
+    similarities: dict[str, SimilarityTransform],
+    matches: dict[str, SyncMatchInput],
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """Fit both reflected stroke sets at one fixed direction without fixing depth."""
+    from .lines import _orthonormal_basis_perpendicular
+
+    basis = np.column_stack(_orthonormal_basis_perpendicular(direction_b))
+    rows, rhs = [], []
+    for key in (landmark_a, landmark_b):
+        for item in _posed_line_observations(key, observations_by_landmark, similarities):
+            if item.match_id not in matches or item.weight <= 0:
+                continue
+            plane = _plane_from_line_observation(item, matches[item.match_id].calibration, similarities[item.match_id])
+            if plane is None:
+                continue
+            if key == landmark_a:
+                plane = _reflect_plane(plane, origin, normal)
+            weight = float(np.sqrt(item.weight))
+            rows.append(weight * (plane[:3] @ basis))
+            rhs.append(-weight * plane[3])
+    if len(rows) < 2:
+        return None
+    try:
+        coefficients, _residuals, rank, _singular = np.linalg.lstsq(rows, rhs, rcond=None)
+    except np.linalg.LinAlgError:
+        return None
+    point = basis @ coefficients
+    return (point, direction_b) if rank == 2 and np.isfinite(point).all() else None
+
+
 def enforce_mirror_line_segments(
     line_segments: dict[str, tuple[np.ndarray, np.ndarray]],
     landmarks: dict[str, np.ndarray],
@@ -585,12 +627,14 @@ def enforce_mirror_line_segments(
     fixed_match_ids: set[str] | None = None,
     *,
     line_planes: dict[str, tuple[np.ndarray, np.ndarray]] | None = None,
+    parallel_pairs: list[tuple[str, str]] | None = None,
 ) -> None:
     """Snap free mirrored edges onto one reflected 3D line pair."""
-    from .lines import _fit_line_fixed_direction, _line_anchor_match_ids
+    from .lines import _fit_line_fixed_direction, _fixed_parallel_line_directions, _line_anchor_match_ids
 
     origin, normal = _normalize_plane(plane_point, plane_normal)
     known = known_lines or {}
+    fixed_directions = _fixed_parallel_line_directions(parallel_pairs, known)
     for landmark_a, landmark_b in _dedupe_mirror_pairs(pairs):
         if landmark_a not in line_segments or landmark_b not in line_segments:
             continue
@@ -612,6 +656,36 @@ def enforce_mirror_line_segments(
         if float(np.linalg.norm(consensus)) < 1.0e-9:
             consensus = direction_b
         consensus = consensus / float(np.linalg.norm(consensus))
+        fixed_direction = fixed_directions.get(landmark_b)
+        if landmark_a in fixed_directions:
+            reflected_fixed = reflect_direction(fixed_directions[landmark_a], normal)
+            if fixed_direction is None:
+                fixed_direction = reflected_fixed
+            elif float(np.linalg.norm(np.cross(fixed_direction, reflected_fixed))) > LINE_CONSTRAINT_DIRECTION_TOLERANCE:
+                fixed_direction = None
+        if fixed_direction is not None and landmark_a not in known and landmark_b not in known:
+            if line_planes and (landmark_a in line_planes or landmark_b in line_planes):
+                fitted = _fit_mirror_line_in_plane(
+                    landmark_a, landmark_b, fixed_direction, line_planes, origin, normal,
+                    line_observations_by_landmark, similarities, matches, preserve_direction=True,
+                )
+            else:
+                fitted = _fit_mirror_line_fixed_direction(
+                    landmark_a, landmark_b, fixed_direction, origin, normal,
+                    line_observations_by_landmark, similarities, matches,
+                )
+            if fitted is not None:
+                point, direction = fitted
+                for key, position, axis in (
+                    (landmark_b, point, direction),
+                    (landmark_a, reflect_point(point, origin, normal), reflect_direction(direction, normal)),
+                ):
+                    observations = _posed_line_observations(key, line_observations_by_landmark, similarities)
+                    _store_mirror_line(
+                        key, position, axis, line_segments, landmarks, observations, similarities, matches,
+                        extent_match_ids=_line_anchor_match_ids(observations, fixed_match_ids),
+                    )
+                continue
         if line_planes and landmark_a not in known and landmark_b not in known:
             fitted = _fit_mirror_line_in_plane(
                 landmark_a, landmark_b, consensus, line_planes, origin, normal,

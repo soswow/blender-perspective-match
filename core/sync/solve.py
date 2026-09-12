@@ -584,6 +584,12 @@ def _snap_mirror_landmarks(state: _SolveState) -> None:
         state.match_map,
         state.known_lines,
         state.fixed_match_ids,
+        parallel_pairs=state.parallel_pairs,
+        line_planes=supported_line_planes(
+            state.landmarks, state.line_segments, state.plane_groups, state.known_lines,
+            ground_landmark_ids=sorted({item.landmark_id for item in state.valid_observations if item.on_ground}),
+            excluded_support_ids=state.plane_seeded_ids,
+        ) if state.plane_slack <= 1e-12 else None,
     )
 
 
@@ -645,6 +651,7 @@ def _attach_mirror_landmarks(state: _SolveState) -> None:
             ground_landmark_ids=ground_ids,
             excluded_support_ids=state.plane_seeded_ids,
         ) if state.plane_slack <= 1e-12 else None,
+        parallel_pairs=state.parallel_pairs,
     )
     existing = {
         (observation.match_id, observation.landmark_id)
@@ -935,6 +942,12 @@ def _rebuild_free_line_segments(state: _SolveState) -> None:
             state.match_map,
             state.known_lines,
             getattr(state, "fixed_match_ids", None),
+            parallel_pairs=state.parallel_pairs,
+            line_planes=supported_line_planes(
+                state.landmarks, segments, plane_groups, state.known_lines,
+                ground_landmark_ids=ground_ids if plane_groups else [],
+                excluded_support_ids=getattr(state, "plane_seeded_ids", set()),
+            ) if float(getattr(state, "plane_slack", 0.0) or 0.0) <= 1e-12 else None,
         )
     state.line_segments = segments
 
@@ -1925,6 +1938,12 @@ def solve_landmark_sync(
                 match_map,
                 known_lines,
                 state.fixed_match_ids,
+                parallel_pairs=parallel_pairs,
+                line_planes=supported_line_planes(
+                    landmarks, line_segments, plane_groups, known_lines,
+                    ground_landmark_ids=ground_landmark_ids,
+                    excluded_support_ids=state.plane_seeded_ids,
+                ) if plane_slack <= 1e-12 else None,
             )
 
     def _run_ba(

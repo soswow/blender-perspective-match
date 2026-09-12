@@ -83,6 +83,8 @@ SYNC_WEIGHT_PROTECT = 1.0
 LINE_FIXED_ANCHOR_MIN = 2
 # Prefer separated interpretation planes; flag free lines with only weaker support.
 LINE_PLANE_MIN_SINE = 0.12
+# Compatible directions may differ by one float32 epsilon after Blender storage.
+LINE_CONSTRAINT_DIRECTION_TOLERANCE = float(np.finfo(np.float32).eps)
 # Truncate per-view line RMSE when ranking reconstruction pairs.
 LINE_RECONSTRUCT_TRUNCATE_PX = 80.0
 
