@@ -62,6 +62,21 @@ search was not tested here. Mixed independent no-VP focal recovery and an
 honest weak-geometry/ambiguity response remain open. The
 preceding `cc7d14d` startup fix and its true-K controls remain verified.
 
+**Unknown-focal integration checkpoint:** evidence is committed as `fc41142`,
+read-only corpus checks as `9a35f2b`, and their cross-NumPy angle-roundoff
+correction as `70060e2`. All three new evidence tests pass on both the OpenCV
+environment and default interpreter without numerical solves; the worker also
+passed fourteen focused bootstrap/budget tests (including one existing regression
+solve). The experiment itself used fifteen inner Sync calls, 46.43 active seconds.
+No production code changed, so the prior 374-test/Blender product checkpoint was
+not repeated. Sol owned the implementation, artifacts and documentation; main
+review caught the missing corpus checks, stale next-step wording and derived-angle
+portability issue, then integrated and reran only the new read-only checks.
+This is operational use of the Sol-led workflow, not a controlled token-savings
+comparison. Private partial usage counters are in
+`.local/unknown-focal-validation/task-usage.json`. The clean worker worktree is
+removed, its branch retained, older stashes untouched, and nothing pushed.
+
 **Reference provenance clarified by the user:** trustworthy external Known 3D is
 rare. Most Known 3D points are promoted from agreement among existing matches to
 help fit later matches; they are working estimates, not independent measurements.
