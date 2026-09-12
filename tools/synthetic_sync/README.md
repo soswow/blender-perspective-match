@@ -657,3 +657,15 @@ routes it there. Camera and line truth checks are separate from exact declared
 parallel direction and signed hard coplanarity. Final finite extent is checked
 separately from the infinite line; intermediate endpoints can slide along that
 line. See [the evidence and limits](accepted-recovery-results.md).
+
+### Reference sensitivity without known truth
+
+`python3 tools/synthetic_sync/reference_sensitivity.py --out /tmp/pm-reference-sensitivity`
+compares eight exact/noisy controls before and after releasing Known 3D point
+priors, retaining their picks. The diagnostic uses only request/result data;
+synthetic truth separately assesses the outcome. Missing references or lost camera/pick
+support make the comparison incomplete. It reports reference displacement,
+fit and projected camera movement, alongside the existing 5 px stored-anchor
+warning. The first pilot quantified sensitivity but did not establish additional
+detection beyond that warning; see [the results](reference-sensitivity-results.md).
+This is an experimental command, not a new product warning or automatic prior selection.
