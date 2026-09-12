@@ -66,21 +66,35 @@ values; the **%** field bounds the focal search around those values (40% by
 default in this mode, separate from the existing 18% lens search). A result
 at the search boundary is refused with a suggestion to widen the range.
 
-**Pick Error (px)** is your assumed standard deviation of error in each picked
+**Assumed Pick Error (px)** is your assumed standard deviation of error in each picked
 image coordinate. It is used to assess weak evidence and estimate local focal
 ranges; it is not a measured accuracy score. Start conservatively when picks
-are blurry. A small fitted pixel error does not justify reducing this setting.
+are blurry. The default 1 px assumes roughly one pixel of typical error in
+each X/Y coordinate at the original image resolution, independent of viewport
+zoom. Larger values tolerate more noise but widen the estimated FOV ranges and
+can make depth evidence insufficient. This is not a maximum allowed residual or
+a control to force acceptance. A small fitted pixel error does not justify
+reducing this setting.
 The reported FOV ranges describe sensitivity near the fitted solution under
 that assumption, not a guarantee of correct geometry or a search for every
 possible solution. Inspect features you did not pick, and add translated views
 or better-spread picks when the ranges remain broad.
 
-This mode supports 3–8 cameras and 8–80 point landmarks, with at
+This mode supports 3–32 cameras and 8–80 point landmarks, with at
 least eight picks per camera and at least two views per point. It requires
 square-pixel pinhole calibration, zero distortion and a fixed principal point.
+The camera ceiling is a resource guard for the current dense numerical fit,
+not a mathematical maximum. All participating views are fitted jointly; no
+overlapping batches are necessary within this limit. Larger sets may take
+longer to register, and the subsequent focal fit retains its time limit.
 It refuses unsupported constraints instead of ignoring them: Known 3D, On
 Ground, VP strokes, landmark lines,
 pose locks and Fit Only belong to the existing Sync/lens workflows. It does
+not treat mirrored lines as point pairs. To fit from points in a scene containing
+lines, turn off **Use in Sync** on those **line landmarks** for the operation; removing a camera
+does not remove this limitation. Their strokes then supply no evidence for that
+fit. Re-enable them afterward for ordinary Solve Sync with the fitted lenses.
+It does
 not estimate distortion or unknown crop offsets. If the shared picks can be
 explained by planar geometry or rotation without reliable depth evidence, the
 mode declines to change the cameras. A successful result applies the jointly

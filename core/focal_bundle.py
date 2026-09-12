@@ -21,7 +21,8 @@ from .sync.projection import _log_rodrigues, _rodrigues
 
 
 DEFAULT_POINT_FOCAL_SPAN = 0.4
-MAX_CAMERAS = 8
+# Resource guard for the dense joint fit, not an identifiability limit.
+MAX_CAMERAS = 32
 MAX_POINTS = 80
 MAX_ITERATIONS = 100
 MAX_SECONDS = 30.0
@@ -339,8 +340,10 @@ def fit_independent_focals(
 
     initial_rmse = float("inf")
     ids = list(calibrations)
-    if not (3 <= len(ids) <= MAX_CAMERAS):
-        return refuse(f"Point focal estimation needs 3–{MAX_CAMERAS} cameras")
+    if len(ids) < 3:
+        return refuse("Point focal estimation needs at least three cameras")
+    if len(ids) > MAX_CAMERAS:
+        return refuse(f"Point focal estimation currently supports up to {MAX_CAMERAS} cameras per joint fit (resource limit)")
     if anchor_id not in calibrations:
         return refuse("Anchor camera is missing")
     ids.remove(anchor_id)

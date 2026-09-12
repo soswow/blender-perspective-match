@@ -475,8 +475,12 @@ def refine_lenses_from_landmarks(
 
         if len(initial_cals) != len(matches):
             return refusal("Point focal estimation needs a saved private camera solve for every match")
-        if not 3 <= len(matches) <= MAX_CAMERAS:
-            return refusal(f"Point focal estimation needs 3–{MAX_CAMERAS} cameras")
+        if len(matches) < 3:
+            return refusal("Point focal estimation needs at least three cameras")
+        if len(matches) > MAX_CAMERAS:
+            return refusal(f"Point focal estimation currently supports up to {MAX_CAMERAS} cameras per joint fit (resource limit)")
+        if line_observations or known_lines or parallel_pairs:
+            return refusal("Estimate FOV from Points does not support line landmarks yet; disable line landmarks for this fit, or use the existing lens workflow")
         point_count = len({item.landmark_id for item in observations})
         if not 8 <= point_count <= MAX_POINTS:
             return refusal(f"Point focal estimation needs 8–{MAX_POINTS} points")

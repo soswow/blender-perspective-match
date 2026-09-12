@@ -1616,11 +1616,12 @@ class PMWorkspace(bpy.types.PropertyGroup):
         update=_redraw,
     )
     focal_pick_sigma_px: bpy.props.FloatProperty(
-        name="Pick Error (px)",
+        name="Assumed Pick Error (px)",
         description=(
-            "Assumed standard deviation of point-pick error in pixels for the "
-            "approximate local 95% FOV interval; this is an assumption, not "
-            "a measured calibration accuracy"
+            "Expected error per X or Y coordinate in source-image pixels "
+            "(standard deviation). Controls noise checks and approximate FOV "
+            "uncertainty: larger values allow more noise but widen the ranges. "
+            "Not the measured fitting error; do not lower it just to get narrower ranges"
         ),
         default=1.0,
         min=0.1,

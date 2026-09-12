@@ -9,6 +9,29 @@ The deeper product issue is that three different promises are currently close to
 
 ## Current frontier — 12 September 2026
 
+**Camera-count and eligibility follow-up:** independent point-FOV fitting now
+allows 3–32 cameras in one joint fit. Eight was an implementation cap, not a
+mathematical boundary. `tests/test_focal_camera_count.py` verifies a nine-camera
+fresh registration/fit with distinct lenses, partial picks and independent
+withheld projections (about 2½ minutes locally), plus 16/32-camera bundle fits
+from oracle pose/point starts (about one second combined). The latter isolate
+bundle capacity; they do not establish fresh-registration reliability at those
+sizes or noisy real-pick accuracy. Planar refusal and the 33-camera resource
+guard are covered. Existing focal iteration/time limits remain; startup cost
+is a separate scaling concern. Consider faster pair selection or sparse joint
+linear algebra only after profiling the stage that actually dominates.
+
+The point-only eligibility warning now identifies unsupported lines before
+checking point relations: mirrored line IDs previously caused a misleading
+missing-two-view-picks message. A synthetic regression reproduces that ordering
+error. `tools/debug-sync/probe_lens_inputs.py` exposes camera pick counts and
+named unsupported/under-supported landmarks without solving or saving a file.
+**Remaining product gap:** independent-FOV fitting still cannot use line
+strokes or mirrored lines. Temporarily excluding lines makes them absent
+evidence, not supported constraints; joint line/FOV support needs its own
+independent geometry and uncertainty checks. Assumed Pick Error is now labeled
+explicitly and documented as an input noise assumption, not a fitted score.
+
 **Latest outcome:** a shared mirror plane can now follow a reconstructed point
 landmark in ordinary Sync and point-FOV fitting, with supplied world-axis or
 object orientation. The landmark is fitted jointly, not copied into a fixed
@@ -258,7 +281,7 @@ case-specific contracts or a claim that every geometry is now accurate.
 **Newest result:** **Estimate FOV from Points** is an opt-in product mode under
 Refine Lenses when Same Lens is off. It jointly fits independent focal lengths,
 camera poses and free 3D points without VP lines or Known 3D. The implemented
-scope is 3–8 cameras and 8–80 points, at least eight picks per camera and
+scope is 3–32 cameras and 8–80 points, at least eight picks per camera and
 two views per point, fixed principal points and zero distortion. The current
 plane/symmetry continuation adds Is in Plane and supplied point-mirror
 relations; Known 3D, Ground, lines and unsupported camera roles still cause an

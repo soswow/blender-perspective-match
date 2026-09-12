@@ -85,6 +85,8 @@ Do not special-case a user `.blend` (filename, match names, landmark names, or t
 
 ## Debugging tools
 
+- `tools/debug-sync/probe_lens_inputs.py` — read-only lens eligibility report: per-camera point counts, line landmarks, and named plane/mirror members without two-view point support; no solve or save.
+
 Headless helpers under `tools/` (and `scripts/validate_addon.py`) for investigating a `.blend` without clicking the sidebar. If you build a new dump, probe, or reproduction script while solving a problem, **check it in** and add a bullet here so the next agent can find it.
 
 - `tools/debug-memory/` — process `vmmap` (GPU / `IOAccelerator`) vs headless `bpy.data.images` / numpy / Memory Statistics. See `tools/debug-memory/README.md`.

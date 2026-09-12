@@ -61,6 +61,19 @@ def _saved_initial(case, matches, label):
 
 
 class PointFocalBundleTests(TestCase):
+    def test_mirrored_line_reports_unsupported_lines_before_missing_point_picks(self):
+        _case, matches, observations = _inputs("four-view")
+        with mock.patch.object(lens_refine, "_run_sync") as run:
+            outcome = lens_refine.refine_lenses_from_landmarks(
+                matches, observations, anchor_id="view_0", estimate_focal_from_points=True,
+                line_observations=[sync.SyncLineObservation("view_0", "edge_a", 0., 0., 1., 1.)],
+                mirror_pairs=[("edge_a", "edge_b")],
+                mirror_plane=(np.zeros(3), np.array([1., 0., 0.])))
+        self.assertFalse(outcome.improved)
+        self.assertIn("line landmarks", outcome.refusal_reason)
+        self.assertNotIn("two-view", outcome.refusal_reason)
+        run.assert_not_called()
+
     def test_bad_two_view_correspondence_adds_tentative_pair_hint_on_refusal(self):
         for name in ("noisy-mixed", "noisy-shared"):
             case, matches, observations = _inputs(name)

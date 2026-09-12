@@ -18,6 +18,12 @@ BLENDER_BIN="${BLENDER_BIN:-/Applications/Blender 5.1.app/Contents/MacOS/blender
 
 Prints the same report to stdout. `--out` is optional.
 
+For independent point-FOV eligibility, run `probe_lens_inputs.py` with the same
+`--blend` and optional `--out` arguments (add `--disable-autoexec` to Blender's
+arguments when inspecting an external file). It lists per-camera point counts,
+unsupported line landmarks, and named plane/mirror members with their point
+views. It only collects inputs: no numerical solve or file save.
+
 The main solves in `dump_sync.py`, `probe_graph.py` and `probe_resected.py` use
 the same complete prepared request as Solve Sync and Diagnose, including live
 pose locks, workspace rotation/translation locks, all slack settings, confidence
