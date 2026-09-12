@@ -1,5 +1,5 @@
 **Perspective Match: reliability and AI development proposal**
-Investigation baseline: commit `5d876f6` / extension 0.5.0, 10 September 2026. Current implementation checkpoint: `c304fbe`, 12 September 2026. Read **Current frontier** first; the dated checkpoints preserve history, and the original proposal is retained for rationale rather than as an implementation checklist.
+Investigation baseline: commit `5d876f6` / extension 0.5.0, 10 September 2026. Latest product fix: `c304fbe`; latest test checkpoint: `0fcfe57`, 12 September 2026. Read **Current frontier**, including **Latest investigation**, first; the dated checkpoints preserve history, and the original proposal is retained for rationale rather than as an implementation checklist.
 
 **My recommendation is to make every solver decision reproducible from a complete, versioned input, and judge it with checks independent of the implementation.** Build that foundation around the existing fixtures, Blender smoke test, and diagnostics. Then use it to improve calibration ownership, quality reporting, and selected solver decisions. This would turn a debugging session into an addition to a reusable capability.
 
@@ -9,7 +9,7 @@ The deeper product issue is that three different promises are currently close to
 
 ## Current frontier — 12 September 2026
 
-**Objective and scope:** improve Sync reliability through reproducible evidence and independent checks of the rest of the object, beyond fitted picks. Both visual alignment and metric accuracy matter. Synthetic scenes are the primary corpus; private projects are optional evidence. Images are optional. AprilTag/VP detection and distortion/image-transformation work remain deferred; do not reintroduce them as prerequisites.
+**Objective and scope:** improve Sync reliability through reproducible evidence and independent checks of the rest of the object, beyond fitted picks. Both visual alignment and metric accuracy matter. Synthetic scenes are the primary corpus; private projects are optional evidence. Images are optional. **Latest user steering:** reliable FOV estimation from shared landmarks without dependable VP lines is now a priority; both shared-lens sets and mixed lenses/zooms/crops are common. Image transformations and distortion are now in scope when they affect that workflow. Automatic AprilTag/VP detection remains optional, not a prerequisite. Earlier deferrals below are historical.
 
 **Checkpoint:** the truth-free reference-sensitivity pilot is committed as `d302390`; analytic pinhole line projection is fixed in `c304fbe`. The projection regressions fail on old code and pass after the fix, including arbitrary line directions, combined transforms and unchanged distorted-camera behavior. Combined validation passed **349 tests, 9 skipped, 260.811 seconds**, plus Blender 5.1.0 smoke. Two additional diagnostic comparison tests and independent no-solve projection/cached-pair checks passed after integration. Evidence tooling is committed as `8abac35`. Both workers have finished; their worktrees are archived and removed. No task is running. Hosted CI remains unverified; nothing has been pushed. Earlier reference-bias and plane/parallel work remains in `67f8877` and `3997bd3`.
 
@@ -25,6 +25,10 @@ The deeper product issue is that three different promises are currently close to
 
 **Open directions after the third bounded parallel follow-up:**
 
+The no-VP lens and experiment-budgeting investigation below is the newest
+priority. These four earlier directions remain open, rather than four concurrent
+assignments.
+
 1. **Acceptance across constraint types.** The recovered-camera guard protects established point fits; line-only support and the full constrained objective are not protected by that contract. The [first line-bearing experiment](../tools/synthetic_sync/recovery-acceptance-results.md) found a crash, now fixed; afterward its candidate was rejected and production matched the freeze control. The stage-only positive control now establishes an accepted candidate, but does not show recovery-caused final damage; it exposed a separate plane/parallel defect. Natural accepted-routing coverage and line-aware acceptance remain open.
 2. **Weak evidence and biased references.** The reference-release pilot (`d302390`) retained support and quantified reference/camera movement on eight exact/noisy controls, but the existing anchor warning already detected both biased references. Do not add a new warning from that result. A worthwhile next test puts reference error along the anchor viewing ray, where its anchor projection stays unchanged, or removes an unavailable anchor pick; retain accurate noisy controls and compare against existing checks. Biased planes, imperfect symmetry and the recorded noisy graph cases remain open.
 3. **Remaining Blender lifecycle boundaries.** Choose one bounded undo/redo or native modal sequence, building on `verify_jobs.py` and `verify_job_reload.py`. Do not repeat the already-covered stale-input and old-callback cases as new investigations.
@@ -35,6 +39,86 @@ The deeper product issue is that three different promises are currently close to
 **Lens initialization, now fixed:** the first Sol/high investigation proved the warm-placeholder failure through identical true-focal requests. The subsequent worker fixed the common lens evaluation path: reuse only successful poses; keep explicit locks and refusal scoring separate. The frozen outer-search regression fails on old code and passes with all independent geometry checks on the fix (0.000000033 px point RMS). All 15 focused lens tests pass, including successful warm-start controls, explicit locks and useful partial refusals. The underlying direct-Sync warm/cold reproducer intentionally retains its old result; the lens search now avoids that invalid input. See [the complete evidence](../tools/synthetic_sync/lens-initialization-results.md).
 
 **Selective escalation procedure:** use Sol/high with fresh context for a bounded numerical experiment; the main thread owns hypothesis review, independent correctness criteria and the decision record. Give the worker only relevant paths, owned files, controls, a solve budget and a stopping condition (the first trial allowed at most 20 solves). Return artifact paths and concise measurements rather than full logs. Escalate unresolved geometry or conflicting evidence; do not rerun the worker's entire investigation in the main thread. Evaluate the workflow by review/rework needed and recorded usage where available, not by parallelism alone. No measured token-savings claim is available from this first handoff.
+
+### Latest investigation: no-VP lenses and measurable agent work
+
+**Status:** source audit and usage research complete; no new lens behavior has
+been implemented. The OpenCV environment (`~/venvs/my`) ran 360 tests in 262.014 s:
+two skipped because optional sample YAML files are absent; four subtest failures
+were confined to one frozen-generator comparison using exact float serialization.
+The observed differences were rounding precision, not geometry changes. Test-only
+commit `0fcfe57` preserves exact structure and permits tiny floating-point
+differences; all eight tests in the affected module then passed under both the
+OpenCV environment (Python 3.12.6 / NumPy 2.0.1 / OpenCV 4.13.0) and the default
+interpreter. The full suite was not repeated after that test-only correction.
+The earlier 349-test result above remains the previous combined product checkpoint.
+
+**Observed capabilities and gaps:**
+
+| Route | Current behavior | Boundary |
+| --- | --- | --- |
+| Manual FOV / imported calibration | Supplies starting intrinsics without VP lines | Manual FOV is a supplied estimate, not a measurement inferred from landmarks. |
+| Refine Lenses, Same Lens on | Can search without VP lines by scaling every starting focal length with one multiplier, keeping principal point and distortion fixed | A local correction, not independent recovery of unrelated focal guesses; it retains their starting ratios rather than enforcing one physical lens. |
+| Refine Lenses, Same Lens off | Searches independently where VP orientation is usable | No-VP and one-point matches have their focal frozen. |
+| Iterate Known 3D | Alternates VP-based camera refinement using Known 3D pins with Sync | Requires enough VP lines and at least four Known 3D picks. Shared 2D landmarks alone do not satisfy this contract. |
+| Core Known 3D pin fitter | Can fit pose/focal/principal point without VPs when supplied fixed 3D coordinates | This capability is not exposed by Iterate's eligibility path; tentative triangulated points are not independent Known 3D evidence. |
+
+Evidence: [lens input collection](../scene/__init__.py), especially
+`collect_lens_refine_inputs`, `known_3d_iterate_roots` and
+`ensure_ground_frame_from_landmarks`; [focal scaling/search](../core/lens_refine.py);
+[pin fitter](../core/pin_refine.py); [current user workflow](sync.md).
+Solve Sync prepares a calibrated ground frame, whereas Refine Lenses prepares
+origins without that same ground-frame initialization. A guessed focal can
+therefore influence the anchor frame before refinement. The anchor is fixed
+during Sync, and no-VP focal candidates keep their private orientation. This is
+a supported reason to test the full preparation path, not proof that every
+such setup fails.
+
+**Recommended next experiment, not yet run:** use the existing synthetic harness
+for a no-VP, pinhole, centered-image pilot. Start with three translated views and
+well-spread points at several depths. Compare a shared-focal case with a mixed
+focal case, using known truth but perturbed starting calibration. Include a
+ground-supported Blender preparation path and separate direct solver inputs.
+First evaluate the existing methods and a true-calibration control; if the
+control fails, investigate preparation/pose recovery before adding focal search.
+Only then test a probe that permits independent focal changes and revisits the
+anchor initialization. Keep this out of production until evidence warrants it.
+
+Freeze the cases and oracle limits before searching. Judge focal error, camera
+and reconstructed-point error, and withheld object projections using only one
+legitimate global frame/scale alignment. Do not align each camera independently
+or select trials using synthetic truth. Add low-parallax and pure-rotation
+controls: a low fitted residual with divergent focal/withheld geometry must be
+reported as ambiguity, not accurate calibration. Planar controls need careful
+interpretation; planarity alone does not make every multiview calibration
+impossible. Stop or change course if the favorable exact cases cannot recover
+from modest focal errors, results depend strongly on starting guesses, or the
+oracle cannot distinguish wrong geometry. Record every inner solve against a
+predeclared budget; do not start an unbounded grid search.
+
+Known crop/resize transformations should follow this pinhole pilot, then
+controlled distortion. Do not initially optimize focal, principal point,
+distortion and free geometry together: one can absorb errors in another.
+Independent [COLMAP guidance](https://colmap.github.io/faq.html#fix-intrinsics)
+likewise treats principal-point refinement cautiously and notes that shared
+intrinsics across views can improve constraints. That supports the experimental
+ordering, not replacing this project's solver with COLMAP.
+
+**Agent-cost finding:** local metadata from two recent completed worker batches
+shows about 18.17 million worker input tokens (roughly 96% cached) and 13.45
+million main-thread input tokens (roughly 99% cached) during their corresponding
+time windows. These are cumulative processing counts, not unique context sizes,
+bills or subscription-quota measurements. Main activity cannot all be attributed
+to the workers, and there is no matched Astra-only baseline. The supported
+conclusion is that coordination overhead deserves measurement; savings are not
+established. Private aggregate evidence is retained locally in
+`.local/agent-usage-research/report.md`, outside version control.
+
+The next operational trial should keep the already-used fresh Sol briefs, add
+planning/review gates for the expensive main model, and measure the whole task
+including review. Put enforceable solve limits and resumable, fingerprinted
+artifacts in the harness; put task ownership and escalation rules in development
+instructions. A new skill is not needed. See [the budgeting protocol](development.md#budgeting-experiments-and-model-usage).
 
 **Commit workflow authorized by the user:** commit completed, verified increments as this reliability plan proceeds. Separate independently reviewable changes; keep each product fix with its regression, required changelog/user docs and reusable reproduction. Do not ask again for routine commits within this work. This authorization does not include pushing, releases or tags. Update this record with the resulting hashes so interruptions do not leave the next agent guessing which work landed.
 

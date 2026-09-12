@@ -64,6 +64,37 @@ single dependent debugging chain is usually faster with one agent. Keep this
 workflow in the repository; executable reproducers and tests carry the lasting
 knowledge rather than an additional skill duplicating these commands.
 
+### Budgeting experiments and model usage
+
+Fresh, narrowly briefed Sol/high workers are already the established workflow;
+switching to fresh context is not a new saving. Use the stronger main model at
+defined gates: approve the question and oracle, then review a complete evidence
+packet. Escalate earlier only for a blocked decision or contradictory evidence.
+Avoid repeatedly reading partial logs or duplicating the worker's exploration.
+
+Before a numerical experiment, specify the permitted cases, total solver-call
+budget (including drafts, failed attempts and retries), wall-time limit and stop
+condition. An outer lens search can contain many Sync calls: define and count
+both, rather than calling an entire search one solve. The next harness improvement
+should enforce this budget and save an attempt ledger before each invocation;
+written limits alone have already been exceeded. Reuse results only when exact
+input, source, options and relevant environment fingerprints match. Preserve
+failures and timeouts as evidence too. This ledger is proposed, not implemented.
+
+Measure a task's main-thread usage delta plus its children, with input, cached
+input and output separate. Cached input is part of input; reasoning output is
+part of output. Do not sum cumulative counter snapshots or count inherited
+history twice. Record review/rework, accepted evidence and elapsed time alongside
+usage. Parent activity during a worker's time window is an association, not exact
+task attribution. Local token counters are not a measurement of subscription
+allowance or an invoice. See the official [subagent guidance](https://learn.chatgpt.com/docs/agent-configuration/subagents)
+and [pricing explanation](https://learn.chatgpt.com/docs/pricing).
+
+For the next small task, freeze its brief and artifact requirements before
+starting; capture the complete planning-through-review interval. Compare with a
+similar completed task, reporting differences in difficulty and rework. Treat
+this as an operational pilot, not proof that one model combination is cheaper.
+
 ## Wheels
 
 Wheels are **not** stored in git (~50–65 MB each). Before building or linking:
@@ -87,6 +118,18 @@ Run unit tests (works even if the checkout directory is not named `match_perspec
 ```sh
 ./scripts/run-unittests.sh
 ```
+
+Use an ordinary Python environment with OpenCV to exercise optional numerical
+coverage. On the maintainer's current machine that environment is available as:
+
+```sh
+source ~/venvs/my/bin/activate
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 python scripts/run_unittests.py
+```
+
+Record Python, NumPy and OpenCV versions with experiment results. OpenCV does
+not remove skips for absent private sample files; Blender smoke tests remain a
+separate check. Do not install packages into Blender's Python for this purpose.
 
 Run a focused test without relying on test discovery order:
 
