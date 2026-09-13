@@ -1465,7 +1465,7 @@ class PMSession(bpy.types.PropertyGroup):
             "Hide this match Origin Empty in the viewport. "
             "The match camera and collection stay visible"
         ),
-        default=False,
+        default=True,
         update=_update_hide_origin_empty,
     )
 

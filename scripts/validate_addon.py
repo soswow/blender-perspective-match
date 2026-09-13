@@ -158,6 +158,8 @@ def main() -> None:
 
             root_a = scene.create_match_camera(bpy.context)
             assert properties.active_root(bpy.context) == root_a
+            assert root_a.pm_session.hide_origin_empty and root_a.hide_get()
+            assert not root_a.pm_session.camera_object.hide_get()
             scene.bind_reference_image(bpy.context, str(image_path))
             settings = properties.active_session(bpy.context)
             assert settings is not None
@@ -326,6 +328,8 @@ def main() -> None:
             )
             root_b = scene.create_match_camera(bpy.context)
             assert properties.active_root(bpy.context) == root_b
+            assert root_b.pm_session.hide_origin_empty and root_b.hide_get()
+            assert not root_b.pm_session.camera_object.hide_get()
             scene.bind_reference_image(bpy.context, str(image_b_path))
             settings_b = properties.active_session(bpy.context)
             assert settings_b is not None
@@ -513,15 +517,14 @@ def main() -> None:
             assert abs(camera_a.data.lens - 73.0) > 1.0
 
             space = properties.workspace(bpy.context)
-            settings_a.hide_origin_empty = True
-            assert root_a.hide_get()
+            assert settings_a.hide_origin_empty and root_a.hide_get()
             assert not settings_a.camera_object.hide_viewport
             assert not settings_a.match_collection.hide_viewport
-            assert not root_b.hide_get()
             scene.set_active_match(bpy.context, root_b)
             assert root_a.hide_get()
+            assert root_b.hide_get() and settings_b.hide_origin_empty
+            settings_b.hide_origin_empty = False
             assert not root_b.hide_get()
-            assert not settings_b.hide_origin_empty
             root_b.hide_set(True)
             scene.set_active_match(bpy.context, root_a)
             assert settings_a.hide_origin_empty

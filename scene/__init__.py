@@ -503,6 +503,7 @@ def create_match_camera(
         status = "Load a reference image"
 
     apply_camera(context.scene, session, calibration)
+    apply_origin_empty_hidden(root, session.hide_origin_empty)
     set_active_match(context, root)
     session.status = status
     properties.tag_sync_ui_redraw(context)
