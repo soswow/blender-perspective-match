@@ -7,6 +7,27 @@ combine review corrections and checkpoint notes before integration. An
 experiment budget is a review boundary, not completion of the larger task.
 See `docs/development.md#commit-size-and-completion`.
 
+## Model delegation policy
+
+For substantial, bounded implementation work, delegate to fresh Sol workers
+(`gpt-5.6-sol`, high reasoning) when that model and delegation are available.
+Reserve Astra for framing the problem, architectural decisions and review of
+completed evidence. Give each worker ownership of diagnosis, a focused
+regression, the fix and relevant verification; escalate contradictory evidence,
+blocked decisions or exhausted experiment budgets rather than duplicating its
+investigation in the main thread.
+
+Handle trivial changes directly when delegation would add more overhead than
+it saves. Run workers in parallel only for independent tasks, using isolated
+worktrees and distinct file ownership. If the requested model is unavailable,
+report the limitation and use the available model without claiming cheaper
+execution. This is an instruction for choosing workers, not automatic model
+routing or proof of token savings.
+
+Follow [the parallel workflow](docs/development.md#parallel-agent-work) and
+[experiment and usage budgeting](docs/development.md#budgeting-experiments-and-model-usage)
+for task briefs, evidence, integration and whole-task usage measurement.
+
 ## Changelog
 
 User-visible work must land with a bullet under `## [Unreleased]` in `CHANGELOG.md` **in the same commit** as the code (Keep a Changelog: Added / Changed / Fixed / Removed).
