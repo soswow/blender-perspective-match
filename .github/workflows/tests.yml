@@ -187,7 +187,7 @@ jobs:
             --out "${RUNNER_TEMP}/synthetic-blender/point-focal-apply"
           blender --factory-startup --disable-autoexec -b --python-exit-code 1 \
             --python tools/synthetic_sync/verify_focal_candidate_blender.py -- \
-            --out "${RUNNER_TEMP}/synthetic-blender/focal-candidate"
+            --out "${RUNNER_TEMP}/synthetic-blender/focal-candidate" --reload
           blender --factory-startup --disable-autoexec -b --python-exit-code 1 \
             --python tools/synthetic_sync/verify_lens_progress.py
           # Fixed verification budget: one inner Sync and one bundle per case.

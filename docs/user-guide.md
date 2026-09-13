@@ -71,7 +71,8 @@ fits each lens from shared picks without Known 3D or VP lines. Check each match'
 **Manual PP Offset** first: this mode holds principal points fixed. No separate
 Solve Sync is required after changing FOV or PP. If an improved fit passes the
 physical checks but cannot validate calibration, **Use Best Fit** appears with
-its point error. It applies cameras and landmarks together, retains the warning,
+its point error. Improvement uses the combined point, line and constraint fit;
+the status explains when point error alone increased. It applies cameras and landmarks together, retains the warning,
 and supports Blender Undo. Check unused object features before trusting the
 geometry; see [independent FOV fitting](sync.md#independent-fov-estimates-from-shared-points-no-vp-lines).
 

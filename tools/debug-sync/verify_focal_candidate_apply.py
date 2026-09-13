@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 import sys
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import bpy
 import numpy as np
@@ -58,7 +59,8 @@ def _candidate(saved):
         bundle_adjusted=bool(raw_sync.get("bundle_adjusted", False)))
     return FocalFitCandidate(
         calibrations, solved, float(values["initial_rmse_px"]),
-        float(values["fitted_rmse_px"]), values["reason"]), raw["reason"]
+        float(values["fitted_rmse_px"]), values["reason"],
+        values.get("initial_objective"), values.get("fitted_objective")), raw["reason"]
 
 
 def _project(calibration, similarity, points):
@@ -74,7 +76,7 @@ def _project(calibration, similarity, points):
     return pixels * (k.fx, k.fy) + (k.cx, k.cy)
 
 
-def verify(inputs, saved):
+def verify(inputs, saved, *, through_operator=False):
     from match_perspective import properties, scene
     from match_perspective.core.sync.request import json_values
 
@@ -92,9 +94,24 @@ def verify(inputs, saved):
         cancelled=False, point_focal_mode=True, improved=False,
         refusal_reason=refusal, message=refusal, candidate=candidate,
         calibrations={}, sync_result=None, focal_intervals={})
-    _, applied = scene.apply_lens_refine_result(
-        bpy.context, result, prep, use_candidate=True)
-    assert applied is candidate.sync_result
+    if through_operator:
+        from match_perspective.ui import operators
+
+        def reuse(prepared, **kwargs):
+            if json_values(prepared.solver_kwargs()) != inputs:
+                raise ValueError("Operator preparation changed the captured inputs")
+            return result
+
+        with patch.object(scene, "run_lens_refine", side_effect=reuse):
+            assert bpy.ops.perspective_match.refine_lenses() == {"FINISHED"}
+        assert operators.lens_best_fit_is_available(bpy.context)
+        assert "Use Best Fit is available" in properties.workspace(bpy.context).sync_status
+        assert bpy.ops.perspective_match.use_best_focal_fit() == {"FINISHED"}
+        assert not operators.lens_best_fit_is_available(bpy.context)
+    else:
+        _, applied = scene.apply_lens_refine_result(
+            bpy.context, result, prep, use_candidate=True)
+        assert applied is candidate.sync_result
     space = properties.workspace(bpy.context)
     points = candidate.sync_result.landmarks
     by_camera = {}
@@ -134,6 +151,7 @@ def verify(inputs, saved):
     if "calibration not validated" not in space.sync_status:
         raise AssertionError("Applied candidate lost its provisional status")
     return dict(passed=True, numerical_solves=0, saved_blend=False,
+                applied_through_operator=through_operator,
                 cameras=len(by_camera), picked_points=len(errors),
                 landmarks=len(points), candidate_point_rmse_px=candidate.fitted_rmse_px,
                 evaluated_pick_rmse_px=rmse,
@@ -144,6 +162,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("blend", "inputs", "result", "out"):
         parser.add_argument("--" + name, type=Path, required=True)
+    parser.add_argument("--operator", action="store_true",
+                        help="Publish the saved candidate through Refine Lenses, then use its operator; zero solves")
     args = parser.parse_args(sys.argv[sys.argv.index("--") + 1:])
     blend = args.blend.expanduser().resolve()
     if args.out.resolve() in {blend, args.inputs.resolve(), args.result.resolve()}:
@@ -153,7 +173,7 @@ def main():
     bpy.ops.wm.open_mainfile(filepath=str(blend), load_ui=False)
     inputs = json.loads(args.inputs.read_text())
     saved = json.loads(args.result.read_text())
-    report = verify(inputs, saved)
+    report = verify(inputs, saved, through_operator=args.operator)
     source_after = blend.stat()
     if (source_before.st_size, source_before.st_mtime_ns) != (
         source_after.st_size, source_after.st_mtime_ns

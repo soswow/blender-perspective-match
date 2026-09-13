@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Point-based FOV refinement supports Is in Plane and point mirror pairs with a supplied Mirror Empty.
 
 ### Fixed
+- Use Best Fit remains available when fitting lines and constraints improves the combined result while point error rises; the status explains that tradeoff and the button location.
+- Independent FOV fitting reports whether nonconvergence means the iteration limit or failure to find an improving step.
 - Independent FOV fitting can correct the overall camera and landmark orientation to satisfy supplied world-axis and mirror constraints instead of distorting geometry to fit a guessed anchor frame.
 - FOV refinement avoids misleading shared-pick warnings when a model using all the pair's picks already agrees with the assumed noise.
 - Independent FOV fitting recalculates coupled camera and geometry steps when a focal reaches its limit, and reports candidate point error on boundary or convergence refusal.

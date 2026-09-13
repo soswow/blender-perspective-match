@@ -195,3 +195,36 @@ input/startup sidecars. `probe_focal_startup.py --joint` likewise serializes the
 candidate in its outcome. These private artifacts avoid another expensive
 registration and must remain outside the repository. Their reuse helps future
 investigations, but has not measured token savings or certified a real lens.
+
+## Complete-objective candidate eligibility — 13 September 2026
+
+A later Manual FOV edit removed the active search bound in the private capture.
+The current bundle instead reaches 200 iterations, with the last relative
+objective improvement 7.835e-8 versus the 1e-9 stopping check. Point RMSE changes
+from 1.67207 to 1.82004 px while the combined objective drops from 12,280,325.106
+to 593.026. Startup fits points without the supplied line/plane/mirror relations;
+the joint endpoint passes the physical and per-camera checks. This distinction
+exposed a bug: the new candidate route required point-only RMSE to decrease.
+
+Eligibility now requires improvement in the same weighted objective minimized
+by fitting, with a numerical relative-gain guard. It retains both objective
+values and both point scores. The UI explicitly announces candidate availability
+and the point-error tradeoff. Nonconvergence messages state iteration exhaustion
+or a stalled step; diagnostic endpoints retain the last ten accepted gains.
+The optimizer and automatic calibration acceptance are unchanged.
+
+`test_focal_candidate_tradeoff.py` reproduces the eligibility failure using
+independent exact-pixel geometry in a wrong world frame. It checks physical
+plane/mirror repair and withheld projection after fitting; the final statistical
+refusal is mocked only to select the provisional-result path. The test fails
+before the change and passes afterward. The focused 88-test group passes.
+`verify_focal_candidate_blender.py --reload` checks a controlled point-error
+increase through modal publication/application. A zero-solve real-candidate
+`verify_focal_candidate_apply.py --operator` run checks publication through the
+registered blocking Refine operator and Use Best Fit application: native RMSE
+1.82006 px and maximum projection difference 0.0020 px. No source blend was saved.
+
+These results establish eligibility and application fidelity, not real-world
+calibration. The strict convergence tolerance is a separate measured opportunity;
+any relaxation needs independent shape, weak-evidence and parameter-stability
+checks before changing automatic acceptance.

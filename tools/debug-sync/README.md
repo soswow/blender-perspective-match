@@ -54,6 +54,10 @@ projections and landmark state with the candidate, checks picked-point RMSE,
 then exits without saving. This verifies application fidelity, not independent
 real-world accuracy or interactive Undo. It currently reads the `--joint`
 report format, not the full `.fit.json` from the original capture.
+Add `--operator` to publish the saved numerical result through the registered
+blocking Refine Lenses operator, assert that Use Best Fit is available, and apply
+through that registered operator. This still performs zero solves. The synthetic
+candidate checker separately exercises the modal timer path after `--reload`.
 
 The main solves in `dump_sync.py`, `probe_graph.py` and `probe_resected.py` use
 the same complete prepared request as Solve Sync and Diagnose, including live

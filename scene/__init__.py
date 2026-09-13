@@ -4196,6 +4196,11 @@ def apply_lens_refine_result(
         raise ValueError("Point FOV result has no usable best fit")
     if point_focal and getattr(refine_result, "refusal_reason", "") and not use_candidate:
         space.sync_status = refine_result.message or refine_result.refusal_reason
+        available = getattr(refine_result, "candidate", None)
+        if available is not None:
+            space.sync_status += (
+                f" Combined fit improved; point RMSE {available.initial_rmse_px:.2f} "
+                f"→ {available.fitted_rmse_px:.2f}px. Use Best Fit is available below Refine Lenses.")
         space.lens_refine_progress = 0.0
         properties.tag_viewport_redraw(context)
         return refine_result, None
@@ -4280,6 +4285,8 @@ def apply_lens_refine_result(
             f"→ {candidate.fitted_rmse_px:.2f}px); "
             f"calibration not validated. {candidate.reason}"
         )
+        if candidate.fitted_rmse_px > candidate.initial_rmse_px:
+            space.sync_status += " The combined fit improved, although point RMSE increased."
     else:
         space.sync_status = refine_result.message + " · " + sync_result.message
     if point_focal and not use_candidate:

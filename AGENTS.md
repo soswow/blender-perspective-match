@@ -66,6 +66,14 @@ onto the original private poses loses the corrected frame. Synthetic reports
 use `result_record(..., calibrations=result.calibrations)` in
 `tools/synthetic_sync/solver.py` for this ownership boundary.
 
+Provisional focal eligibility uses the same combined weighted point/line/prior
+objective as fitting (`MIN_CANDIDATE_RELATIVE_GAIN` in `core/focal_bundle.py`),
+after physical and per-camera checks. Point RMSE alone can increase when the
+point-only startup violates relations. Preserve both scores and the refusal;
+`tests/test_focal_candidate_tradeoff.py` reproduces that boundary with an
+independent world-frame/withheld-geometry check. Endpoint diagnostics include
+the stopping reason, initial/final objective and the last ten relative gains.
+
 Do not special-case a user `.blend` (filename, match names, landmark names, or that file’s layout) in solver code, comments, constants, tests, UI copy, changelog, or docs. Reproduce the geometry with generic synthetic fixtures; keep the motivating file in the chat, not in the repo.
 
 ### Sync package (`core/sync/`)
@@ -97,11 +105,11 @@ Do not special-case a user `.blend` (filename, match names, landmark names, or t
 - `tools/synthetic_sync/focal_line_constraints.py` — independent varied-stroke axis/Free-plane, line/line and line/world-axis parallel fixtures; integration tests cover withheld camera/line geometry, simultaneous mirrors and contradictory relations. `verify_focal_lines_blender.py --relations` checks native preparation/application and stale plane/parallel edits with one oracle-start bundle (add `--fresh` for registration).
 - `tools/debug-sync/compare_focal_optimizers.py` — capture the initialized objective from saved lens inputs/startup and compare bounded SciPy TRF or NumPy active-set steps, retaining endpoints without another Sync or applying results. Source-local capture is guarded and records hashes; this research tool requires SciPy, the extension does not.
 - `tools/synthetic_sync/verify_lens_progress.py` — native Blender operator callback/RNA checks for textual independent-FOV activity and correctly scaled ordinary lens-search progress; no numerical solves.
-- `tools/synthetic_sync/verify_focal_candidate_blender.py` — generated Use Best Fit publication/application, stale edits and rollback with zero solves; executes the registered Undo-enabled operator, but does not verify an actual Undo roundtrip in background Blender.
+- `tools/synthetic_sync/verify_focal_candidate_blender.py` — generated Use Best Fit modal publication/application, point-error tradeoff, stale edits and rollback with zero solves; `--reload` runs the job after extension reload. Executes the registered Undo-enabled operator, but does not verify an actual Undo roundtrip in background Blender.
 - `tools/synthetic_sync/focal_crop.py` — exact off-center crop of an independent camera oracle; shifted-principal-point recovery and deliberately centered-calibration control, with withheld geometry. This isolates known crop calibration, not unknown-offset estimation.
 
 - `tools/debug-sync/probe_focal_startup.py` — read-only diagnostics from saved lens `.inputs.json` / `.startup.json`: bounded OpenCV PnP/focal and raw-pair checks, or `--joint` to reuse startup for one production bundle without another Sync; optional `--span-percent` changes only the diagnostic trial.
-- `tools/debug-sync/verify_focal_candidate_apply.py` — load a saved point-FOV candidate into its original blend only in memory, verify captured inputs and evaluated camera/landmark projections, then exit without solving or saving.
+- `tools/debug-sync/verify_focal_candidate_apply.py` — load a saved point-FOV candidate into its original blend only in memory, verify captured inputs and evaluated camera/landmark projections, then exit without solving or saving. `--operator` checks publication through the registered blocking Refine operator and application through Use Best Fit, substituting only the saved numerical result.
 
 - `tools/debug-sync/probe_lens_inputs.py` — lens eligibility report with named constraints; optional `--fit-seconds` performs a bounded numerical trial and preserves inputs/startup/full fit (including any candidate) alongside `--out`. Never applies results or saves the source blend.
 - `tools/synthetic_sync/focal_lines.py` and `verify_focal_lines_blender.py` — independent varied/reversed line-stroke and mirrored-line fixtures; native preparation, one bundle from explicit oracle point/pose startup (or one real Sync with `--fresh`), apply and stale-stroke checks. No user file or saved blend.

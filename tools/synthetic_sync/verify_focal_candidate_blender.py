@@ -49,12 +49,13 @@ def check(out: Path) -> dict:
               for index, item in enumerate(space.landmarks)}
     fitted = sync.SyncSolveResult(
         similarities=similarities, landmarks=points,
-        mean_reprojection_px=.8, per_match_rmse_px={key: .8 for key in calibrations},
-        per_landmark_rmse_px={key: .8 for key in points},
+        mean_reprojection_px=2.1, per_match_rmse_px={key: 2.1 for key in calibrations},
+        per_landmark_rmse_px={key: 2.1 for key in points},
         message="Generated provisional geometry", success=True)
     candidate = SimpleNamespace(
         calibrations=calibrations, sync_result=fitted,
-        initial_rmse_px=2., fitted_rmse_px=.8,
+        initial_rmse_px=2., fitted_rmse_px=2.1,
+        initial_objective=100., fitted_objective=20.,
         reason="Point focal fit did not converge")
     result = SimpleNamespace(
         cancelled=False, point_focal_mode=True, refusal_reason=candidate.reason,
@@ -70,11 +71,13 @@ def check(out: Path) -> dict:
          patch.object(operators, "threading", SimpleNamespace(
              Thread=InlineWorker, Event=threading.Event)):
         job = SimpleNamespace(_timer=None, report=lambda *_: None)
+        job._finish_job = lambda context, *, cancelled: operators.PM_OT_refine_lenses._finish_job(
+            job, context, cancelled=cancelled)
         assert operators.PM_OT_refine_lenses.invoke(job, context, None) == {"RUNNING_MODAL"}
-        assert operators.PM_OT_refine_lenses._finish_job(
-            job, context, cancelled=False) == {"FINISHED"}
+        assert operators.PM_OT_refine_lenses.modal(
+            job, context, SimpleNamespace(type="TIMER")) == {"FINISHED"}
     assert operators.lens_best_fit_is_available(context)
-    assert operators.lens_best_fit_label() == "Use Best Fit (0.80 px)"
+    assert operators.lens_best_fit_label() == "Use Best Fit (2.10 px)"
     operators._diagnose_sync_running = True
     assert not operators.lens_best_fit_is_available(context)
     operators._diagnose_sync_running = False
@@ -110,6 +113,8 @@ def check(out: Path) -> dict:
     assert not operators.lens_best_fit_is_available(context)
     assert "Provisional fit applied" in space.sync_status
     assert "calibration not validated" in space.sync_status
+    assert "point RMSE 2.00 → 2.10px" in space.sync_status
+    assert "combined fit improved, although point RMSE increased" in space.sync_status
     assert candidate.reason in space.sync_status
     assert "95%" not in space.sync_status
     for root in properties.iter_match_roots():
@@ -127,7 +132,7 @@ def check(out: Path) -> dict:
     assert not operators.lens_best_fit_is_available(context)
     # Background Blender has no Undo context. The registered operator ran,
     # but its UNDO flag cannot be exercised until an interactive window test.
-    return dict(passed=True, numerical_solves=0, candidate_rmse_px=.8,
+    return dict(passed=True, numerical_solves=0, candidate_rmse_px=2.1,
                 cameras=len(calibrations), landmarks=len(points),
                 undo_checked=False, headless_undo_available=bool(bpy.ops.ed.undo.poll()))
 
@@ -135,11 +140,17 @@ def check(out: Path) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--reload", action="store_true",
+                        help="Reload the extension before the controlled candidate job")
     args = parser.parse_args(sys.argv[sys.argv.index("--") + 1:])
     args.out.mkdir(parents=True, exist_ok=False)
     register_extension()
     create_scene(generate("free_scale", seed=0, noise_px=0.0), args.out, False)
+    if args.reload:
+        import match_perspective
+        match_perspective.reload_addon()
     report = check(args.out)
+    report["reloaded_before_job"] = args.reload
     (args.out / "result.json").write_text(json.dumps(report, indent=2) + "\n")
     print("Best-fit Blender PASS:", report)
 

@@ -45,7 +45,18 @@ class FocalCandidateTests(TestCase):
         with mock.patch.object(focal_bundle, 'MAX_ITERATIONS', 2):
             result = self.fit()
         self.assertIn('did not converge', result.reason)
+        self.assertIn('reached the 2-iteration limit', result.reason)
         self.check_candidate(result)
+
+    def test_stalled_step_is_distinct_from_iteration_limit(self):
+        diagnostics = []
+        with mock.patch.object(focal_bundle, 'bounded_lm_step',
+                               side_effect=lambda jac, residual, x, *a, **k: np.zeros_like(x)):
+            result = self.fit(diagnostic_callback=diagnostics.append)
+        self.assertIn('no improving step found at iteration 1', result.reason)
+        self.assertEqual(diagnostics[0]['stop_reason'], 'no_improving_step')
+        self.assertEqual(diagnostics[0]['recent_relative_improvements'], [])
+        self.assertIsNone(result.candidate)
 
     def test_focal_bound_preserves_the_explicit_use_option(self):
         result = self.fit(fx_span=.01)

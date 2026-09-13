@@ -1,5 +1,5 @@
 **Perspective Match: reliability and AI development proposal**
-Investigation baseline: commit `5d876f6` / extension 0.5.0, 10 September 2026. Latest checkpoint: explicit use of improved provisional focal fits and corrected-principal-point investigation, 13 September 2026, described under **Current frontier**. Read that section first; the dated checkpoints preserve history, and the original proposal is retained for rationale rather than as an implementation checklist.
+Investigation baseline: commit `5d876f6` / extension 0.5.0, 10 September 2026. Latest checkpoint: provisional candidates use the complete fitting objective and report explicit stopping reasons, 13 September 2026, described under **Current frontier**. Read that section first; the dated checkpoints preserve history, and the original proposal is retained for rationale rather than as an implementation checklist.
 
 **My recommendation is to make every solver decision reproducible from a complete, versioned input, and judge it with checks independent of the implementation.** Build that foundation around the existing fixtures, Blender smoke test, and diagnostics. Then use it to improve calibration ownership, quality reporting, and selected solver decisions. This would turn a debugging session into an addition to a reusable capability.
 
@@ -8,6 +8,42 @@ Your clarification is that both metric accuracy and visual alignment matter, dep
 The deeper product issue is that three different promises are currently close together: “these measurements fit,” “this reconstruction is well determined,” and “the Blender viewport represents that reconstruction.” The code has made substantial progress on each, but failures still occur at their boundaries. Another recurring issue is that a geometric model can be wrong for the evidence: uncertain calibration, approximate CAD, imperfect symmetry, or images of different versions of an object can make precise simultaneous agreement impossible.
 
 ## Current frontier — 13 September 2026
+
+**Latest correction: a missing Use Best Fit candidate and an opaque stop reason.**
+After a further Manual FOV edit, the latest private capture reproduces the
+reported nonconvergence: the bundle reaches 200 iterations with no focal bound
+active. The last accepted step reduces the combined objective by about
+0.0000078%, still above the existing 0.0000001% relative-gain stopping threshold.
+That is a numerical stopping rule, not a required point RMSE or proof of bad
+geometry. Messages now distinguish the iteration limit from failure to find an
+improving step; endpoint diagnostics retain the objective and recent gains.
+
+The missing button was a separate confirmed defect introduced by the provisional
+workflow: eligibility required point RMSE to improve. Point-only startup here
+has 1.672 px error, whereas the complete fit has 1.820 px and satisfies the
+supplied geometry. Its combined weighted objective falls from about 12,280,325
+to 593.026. Those scores include point, line and relation penalties; they are
+not pixel RMSE and are comparable only within this fixed input/objective.
+Candidate eligibility now uses that same combined objective after the unchanged
+physical and per-camera checks. The status explains the point-error tradeoff
+and explicitly announces availability below Refine Lenses. Reload itself was
+not the defect.
+
+The new independent synthetic regression starts with exact point projections
+but an incorrect world frame, then verifies corrected plane/mirror geometry
+and withheld projections despite increased point RMSE. Only its final noise
+refusal is substituted to isolate candidate eligibility. A zero-solve Blender
+check covers reload followed by modal publication and the tradeoff warning.
+The real saved candidate also passes registered-operator publication/application
+and evaluated projection checks without another solve or save: point RMSE
+1.82006 px in Blender versus 1.82004 numerically, maximum camera projection
+difference about 0.0020 px. The focused 88-test regression group passes.
+
+**Remaining numerical question:** whether a less strict stopping rule could
+accept useful settled fits earlier without weakening the independent accuracy
+and ambiguity controls. This change does not alter optimization or automatic
+calibration acceptance. Evaluate such a rule against geometry and parameter
+movement, not merely the already-small point residual or a longer iteration cap.
 
 **Latest workflow fix: keep a useful fit without certifying its calibration.**
 Independent FOV estimation now retains a completed, improved candidate after
@@ -27,11 +63,12 @@ explicit apply, stale edits, error rollback and job ownership with controlled
 results and zero numerical solves. The operator has Blender's Undo flag;
 actual Undo is not verified by this headless check. Candidates are temporary,
 cleared on use/new lens job/file load, and cannot overwrite changed inputs.
-Integration verification ran all 498 unit tests: 496 passed and two skipped
+At the initial provisional-application checkpoint, integration verification ran
+all 498 unit tests: 496 passed and two skipped
 because optional sample YAML files were unavailable. Blender registration/scene
 smoke and the controlled candidate lifecycle checks also passed.
 
-**Updated real-data evidence:** the user identified incorrect Manual PP Offsets
+**Earlier corrected-PP evidence, before the latest FOV edit above:** the user identified incorrect Manual PP Offsets
 and supplied a corrected save. Earlier private optimizer measurements below
 were conditional on those incorrect intrinsics. The corrected capture has the
 same picks, line strokes, geometric constraints and focal starts, but centered

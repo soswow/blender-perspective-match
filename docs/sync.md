@@ -70,6 +70,21 @@ search boundary is not automatically applied; it does not establish where the
 true lens lies. An improved, geometrically usable candidate can instead be
 chosen explicitly with **Use Best Fit**, as described below.
 
+The goal is to minimize the combined disagreement with your point picks, line
+strokes and geometric constraints, using their weights and slack settings. The
+solver does not know the true FOVs or a final error value in advance. Point RMSE
+is one part of that score: satisfying a plane or mirror relation can slightly
+increase point error while improving the combined fit. Startup registration
+uses points alone, so its smaller point error can accompany worse constraints.
+
+“Converged” means nearby adjustments have become sufficiently unhelpful under
+the numerical stopping checks. It is separate from image accuracy and does not
+prove a global optimum or correct depth. Fitting currently has a 200-iteration
+and 30-second limit after startup. A nonconvergence message identifies whether
+the iteration limit was reached or no improving step was found. Running longer
+is not guaranteed to produce a useful change, and reaching a lower point RMSE
+is not itself a convergence condition.
+
 If initial Sync omits a camera despite enough picks, this mode can now try a
 provisional pose against the reconstructed point cloud and then fit all cameras,
 lenses and geometry together. The provisional cloud is not treated as Known 3D.
@@ -147,13 +162,17 @@ mode declines to change the cameras. A successful result applies the jointly
 fitted cameras, points and lines together; a refusal initially leaves the existing scene intact.
 Without an external reference, scale remains arbitrary.
 
-**Use Best Fit** appears after a completed fit if its point RMSE improved and
+**Use Best Fit** appears after a completed fit if its combined error improved and
 it passed the physical geometry and per-camera deterioration checks, but
 convergence, a focal bound, the noise model or local uncertainty prevented
 automatic acceptance. It applies the fitted FOVs, camera poses, points and
 lines together, without another Sync. The status retains the refusal reason
 and labels the result **Provisional fit applied; calibration not validated**;
 it does not present confidence intervals. Use Blender Undo to reverse the apply.
+The status explicitly says when the option is available below Refine Lenses,
+shows startup and fitted point RMSE, and notes if point RMSE increased while
+the combined fit improved. The physical and per-camera deterioration checks
+still apply; a lower combined score cannot bypass them.
 Check alignment on features you did not pick: this option gives you a usable
 modeling candidate, not evidence that its lens lengths or depth are correct.
 

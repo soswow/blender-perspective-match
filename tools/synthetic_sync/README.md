@@ -60,6 +60,13 @@ an application error. It exercises the registered apply operator but cannot
 verify an actual Undo roundtrip in headless Blender. It does not establish the
 physical accuracy of a refused fit. CI runs this check alongside the ordinary
 accepted-FOV application checks.
+Add `--reload` to exercise the modal result handoff after reloading the extension.
+Its controlled candidate improves combined error while point error increases.
+`test_focal_candidate_tradeoff.py` separately fits a real synthetic tilted-world
+case whose initial point projections are exact but plane/mirror geometry is
+wrong. It checks that a physically valid candidate survives that point-error
+tradeoff, with independent world constraints and withheld projections. Only
+the final statistical refusal is substituted to isolate candidate eligibility.
 
 ## Run and inspect
 

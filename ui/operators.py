@@ -3981,7 +3981,8 @@ class PM_OT_use_best_focal_fit(bpy.types.Operator):
     bl_idname = "perspective_match.use_best_focal_fit"
     bl_label = "Use Best Fit"
     bl_description = (
-        "Apply the best geometrically valid point FOV fit even though calibration "
+        "Apply a fit that improved the combined point, line and constraint error "
+        "and passed physical checks; point error alone can increase. Calibration "
         "was not validated; this can be undone"
     )
     bl_options = {"REGISTER", "UNDO"}

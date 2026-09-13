@@ -39,6 +39,7 @@ MAX_LINE_STROKES = 96
 LINE_MIRROR_DIRECTION_HARD_SINE = 0.01
 MAX_ITERATIONS = 200
 MAX_SECONDS = 30.0
+MIN_CANDIDATE_RELATIVE_GAIN = 1.0e-9
 FOCAL_BOUND_MARGIN = 1.0e-4
 MAX_LOG_METRIC_BASELINE_CHANGE = 10.0
 METRIC_BASELINE_BOUND_MARGIN = 1e-4
@@ -49,13 +50,15 @@ EPIPOLAR_HINT_MAX_SECONDS = 10.0
 
 @dataclass
 class FocalFitCandidate:
-    """Improved physical fit available for explicit use, without calibration claims."""
+    """Lower combined error with physical checks, without calibration claims."""
 
     calibrations: dict[str, core.Calibration]
     sync_result: SyncSolveResult
     initial_rmse_px: float
     fitted_rmse_px: float
     reason: str
+    initial_objective: float | None = None
+    fitted_objective: float | None = None
 
 
 @dataclass
@@ -387,6 +390,8 @@ def fit_independent_focals(
 
     def refuse(reason: str, *, fitted: float = float("inf"),
                allow_candidate: bool = False) -> FocalBundleOutcome:
+        if allow_candidate and candidate is None:
+            reason += " No best fit is available: the combined fit did not improve."
         retained = replace(candidate, reason=reason) if allow_candidate and candidate else None
         return FocalBundleOutcome(False, reason, initial_rmse_px=initial_rmse,
                                   fitted_rmse_px=fitted, candidate=retained)
@@ -824,6 +829,8 @@ def fit_independent_focals(
         damping = 1.0e-3
         converged = False
         iterations = 0
+        stop_reason = "iteration_limit"
+        relative_gains = []
         for iteration in range(MAX_ITERATIONS):
             if cancel_check and cancel_check():
                 return refuse("Cancelled")
@@ -841,6 +848,7 @@ def fit_independent_focals(
             if np.linalg.norm(gradient, ord=np.inf) < 1.0e-7:
                 converged = True
                 iterations = iteration
+                stop_reason = "small_gradient"
                 break
             accepted_step = False
             for _trial in range(12):
@@ -864,13 +872,17 @@ def fit_independent_focals(
                     x = trial_x
                     damping = max(damping / 3.0, 1.0e-9)
                     accepted_step = True
+                    relative_gains.append(relative_gain)
                     if relative_gain < 1.0e-9:
                         converged = True
+                        stop_reason = "small_improvement"
                     break
                 damping *= 10.0
             iterations = iteration + 1
             if converged or not accepted_step:
                 converged = converged or not accepted_step and np.linalg.norm(gradient, ord=np.inf) < 1.0e-5
+                if not accepted_step:
+                    stop_reason = "small_gradient" if converged else "no_improving_step"
                 break
         endpoint_residual, _, endpoint_depths = residual_and_jacobian(x, jacobian=False)
         point_raw = endpoint_residual[:point_rows].reshape(-1, 2) / weights[:, None]
@@ -890,6 +902,10 @@ def fit_independent_focals(
             diagnostic_callback({
                 "iterations": iterations,
                 "converged": bool(converged),
+                "stop_reason": stop_reason,
+                "initial_objective": float(initial_residual @ initial_residual),
+                "final_objective": float(endpoint_residual @ endpoint_residual),
+                "recent_relative_improvements": relative_gains[-10:],
                 "orientation_parameters": len(rotation_basis),
                 "world_rotation": (world_from_internal @ anchor_r).tolist(),
                 "focal_bound_hits": {
@@ -924,7 +940,11 @@ def fit_independent_focals(
                 f"; candidate point RMSE {endpoint_rmse:.2f}px. "
                 "Check starting FOVs and image calibration before widening Lens Search %.")
         elif not converged:
-            calibration_refusal = f"Point focal fit did not converge; candidate point RMSE {endpoint_rmse:.2f}px."
+            stopped = (f"reached the {MAX_ITERATIONS}-iteration limit" if stop_reason == "iteration_limit"
+                       else f"no improving step found at iteration {iterations}")
+            calibration_refusal = (
+                f"Point focal fit did not converge: {stopped}; "
+                f"candidate point RMSE {endpoint_rmse:.2f}px.")
         fitted_residual, jac, depths = residual_and_jacobian(x, jacobian=True)
         end_raw = fitted_residual[:point_rows].reshape(-1, 2) / weights[:, None]
         all_raw = fitted_residual[:pixel_rows] / coordinate_weights
@@ -1060,8 +1080,14 @@ def fit_independent_focals(
             bundle_adjusted=True)
         if not all(np.isfinite(segment).all() for segment in result_lines.values()):
             return refuse("Fitted line endpoints are not finite", fitted=fitted_rmse)
-        if fitted_rmse < initial_rmse - 1e-6:
-            candidate = FocalFitCandidate(result_cals, sync_result, initial_rmse, fitted_rmse, "")
+        initial_objective = float(initial_residual @ initial_residual)
+        fitted_objective = float(fitted_residual @ fitted_residual)
+        if (np.isfinite(initial_objective) and np.isfinite(fitted_objective) and
+                initial_objective - fitted_objective >
+                MIN_CANDIDATE_RELATIVE_GAIN * max(initial_objective, 1.0)):
+            candidate = FocalFitCandidate(
+                result_cals, sync_result, initial_rmse, fitted_rmse, "",
+                initial_objective, fitted_objective)
         if calibration_refusal:
             hint = _conflict_hint(ids, observations, pick_sigma_px, cancel_check=cancel_check)
             if cancel_check and cancel_check():
