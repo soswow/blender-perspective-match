@@ -11,7 +11,7 @@ The deeper product issue is that three different promises are currently close to
 
 **Current stopping policy:** independent FOV fitting uses a relative combined-cost
 tolerance of `1e-7` instead of `1e-9`, normalized by `max(cost, 1)`, and allows
-400 iterations within the unchanged 30-second optimization budget. All physical,
+400 iterations within a 60-second optimization budget. All physical,
 noise and uncertainty checks still govern automatic application. The earlier
 1.82 px case now converges and passes those checks in 164 iterations. A newer
 capture with edited picks still needed more than 200 or 300 iterations; it
@@ -20,6 +20,13 @@ converges and passes at 372, about 24 seconds in the development Python and
 measured result justifies raising the iteration cap as well as changing the
 tolerance. If time runs out, a physically checked improved endpoint can still
 be offered via Use Best Fit; cancellation continues to discard it.
+The earlier 30-second cap left too little headroom around the 27-second
+headless run and was reached during interactive use. The 60-second allowance
+is a runtime safeguard, not a measure of fit quality; the iteration limit and
+acceptance checks are unchanged. A fresh read-only Blender run with the same
+captured solver inputs passes automatic acceptance at 1.63 px under this policy;
+startup plus fitting took about 219 seconds. This verifies the numerical result,
+not interactive scheduling or application in that private scene.
 
 **Verification:** paired archived-start controls used four bundle calls and no
 Sync registration. Weak-axis iterations fell from 171 to 161 with withheld shape
@@ -27,8 +34,9 @@ RMSE 1.13417 → 1.13315 px; weak-mirror results stayed identical at 24 iteratio
 and 1.41811 px withheld RMSE. All true focal lengths remained within their local
 intervals. The earlier private case changed at most 0.259% in focal length and
 0.016° in camera rotation between its 200-step endpoint and new accepted fit.
-The 95-test focused group passes, including the new archived weak-axis stopping
-regression and time-limited candidate retention. These controls do not establish
+The 96-test focused group passes, including the archived weak-axis stopping
+regression, time-limited candidate retention and a simulated-clock regression
+that converges after 31 seconds (and fails with the old 30-second cap). These controls do not establish
 universal confidence coverage or real-world truth. Further relaxation should
 still be tested against independent geometry and weak/invalid cases.
 
@@ -147,7 +155,7 @@ its private calibration with an identity root, so subsequent Sync input collecti
 retains it. Noise, depth, focal-bound and uncertainty checks remain active. A frozen weak
 axis-plane case needed 171 iterations with the extra freedoms, so the ceiling
 rose to 200 at that checkpoint; the current limit is 400 as described above.
-The 30-second optimization cap remains. Numerical conditioning
+The optimization cap is now 60 seconds. Numerical conditioning
 remains an improvement opportunity; the larger iteration allowance is not a speedup.
 
 An independent exact oracle keeps true geometry, cameras, picks and world priors

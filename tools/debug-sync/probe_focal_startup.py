@@ -45,16 +45,18 @@ def joint_report(inputs, startup, *, max_iterations=None):
               'mirror_pairs', 'mirror_plane', 'mirror_slack', 'mirror_landmark_id', 'parallel_pairs')
     started = time.monotonic()
     endpoints = []
+    timeout_seconds = focal_bundle.MAX_SECONDS + 15.
     iterations = focal_bundle.MAX_ITERATIONS if max_iterations is None else max_iterations
     with patch.object(focal_bundle, 'MAX_ITERATIONS', iterations):
         result = focal_bundle.fit_independent_focals(
             calibrations, [sync.SyncObservation(**p) for p in inputs['observations']], initial,
             line_observations=[sync.SyncLineObservation(**p) for p in inputs['line_observations']],
             **{k: inputs[k] for k in fields if k in inputs},
-            cancel_check=lambda: time.monotonic() - started > 45.,
+            cancel_check=lambda: time.monotonic() - started > timeout_seconds,
             diagnostic_callback=endpoints.append)
     return dict(seconds=time.monotonic() - started, outcome=json_values(result),
                 focal_span=inputs.get('fx_span'), max_iterations=iterations,
+                timeout_seconds=timeout_seconds, bundle_max_seconds=focal_bundle.MAX_SECONDS,
                 endpoint=endpoints[-1] if endpoints else None,
                 full_sync_calls=0, bundle_calls=1, applied=False)
 

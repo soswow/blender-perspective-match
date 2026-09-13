@@ -70,6 +70,17 @@ class FocalCandidateTests(TestCase):
         self.assertEqual(result.reason, 'Cancelled')
         self.assertIsNone(result.candidate)
 
+    def test_fit_can_converge_after_the_old_thirty_second_cutoff(self):
+        diagnostics = []
+        with mock.patch.object(focal_bundle.time, 'monotonic', return_value=0.) as clock:
+            def progress(step, *_):
+                if step == 2:
+                    clock.return_value = 31.
+            result = self.fit(progress_callback=progress, diagnostic_callback=diagnostics.append)
+        self.assertTrue(result.accepted, result.reason)
+        self.assertTrue(diagnostics[0]['converged'])
+        self.assertGreater(diagnostics[0]['iterations'], 2)
+
     def test_time_limit_retains_an_improved_physical_candidate(self):
         diagnostics = []
         with mock.patch.object(focal_bundle.time, 'monotonic', return_value=0.) as clock:
