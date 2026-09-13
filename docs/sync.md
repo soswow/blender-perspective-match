@@ -349,6 +349,18 @@ must be meaningful in the anchor frame, and weak picks can still produce weak
 geometry. Check features outside your fitted picks. Existing files keep
 **Mirror Position = Object** and their previous behavior.
 
+When the Anchor has no picked Origin or On Ground landmarks, a world **YZ** or
+**XZ** mirror plane with **Mirror Position = Landmark** also places the 3D
+Anchor Origin below the completed reconstruction. The chosen point sits directly
+above world zero, and every reconstructed point and line endpoint is above
+Z=0. This placement runs after a successful Solve Sync or accepted Refine Lenses
+fit; it leaves image projections unchanged. It needs a free world position, so
+it does not run with Known 3D objects, a locked camera pose, Lock Translation,
+or an orientation object. The 2D **Pick Origin** marker stays unset because that
+control represents a picked ground point. Clear Sync removes reconstructed
+landmarks and Sync transforms; the Anchor camera keeps its last placement until
+you recalibrate it.
+
 In Object mode, if Is Mirror Of is set but Mirror Empty is empty, Solve Sync
 ignores those pairs and says so in the status line.
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, replace
 from pathlib import Path
 from typing import Callable
 
@@ -3841,15 +3841,56 @@ def solve_and_apply_sync(context: bpy.types.Context):
     if not result.success:
         raise SyncSolveRejected(result)
 
-    _apply_sync_solve_result(context, result, matches)
-    return result
+    return _apply_sync_solve_result(context, result, matches)
 
 
-def _apply_sync_solve_result(context: bpy.types.Context, result, matches) -> None:
+def _apply_sync_solve_result(context: bpy.types.Context, result, matches):
     """Apply an accepted Sync result, including a jointly fitted lens result."""
     space = properties.workspace(context)
     anchor = properties.anchor_root(context)
     root_by_name = {root.name: root for root in properties.iter_match_roots()}
+    offset = _free_mirror_origin_offset(context, result, anchor)
+    if offset is not None:
+        from ..core import sync as sync_module
+
+        # Keep the anchor Origin Empty at world zero. Move its private camera
+        # and the reconstructed world by the same vector, then move every
+        # other root by that vector so all image projections stay unchanged.
+        calibration = calibration_from_settings(anchor.pm_session)
+        calibration.camera_center = calibration.camera_center + offset
+        apply_camera(
+            context.scene, anchor.pm_session, calibration,
+            update_scene_camera=False,
+        )
+        for item in matches:
+            if item.match_id == anchor.name:
+                item.calibration.camera_center = calibration.camera_center.copy()
+        similarities = {
+            match_id: (
+                similarity if match_id == anchor.name else
+                sync_module.SimilarityTransform(
+                    scale=similarity.scale,
+                    rotation=similarity.rotation,
+                    translation=similarity.translation + offset,
+                )
+            )
+            for match_id, similarity in result.similarities.items()
+        }
+        landmarks = {
+            landmark_id: np.asarray(point, dtype=np.float64) + offset
+            for landmark_id, point in result.landmarks.items()
+        }
+        line_segments = {
+            landmark_id: (
+                np.asarray(start, dtype=np.float64) + offset,
+                np.asarray(end, dtype=np.float64) + offset,
+            )
+            for landmark_id, (start, end) in result.line_segments.items()
+        }
+        result = replace(
+            result, similarities=similarities, landmarks=landmarks,
+            line_segments=line_segments,
+        )
     record_sync_last_ok(set(result.similarities))
     for match_id, similarity in result.similarities.items():
         root = root_by_name.get(match_id)
@@ -3904,6 +3945,52 @@ def _apply_sync_solve_result(context: bpy.types.Context, result, matches) -> Non
 
     sync_landmark_empties(context)
     properties.tag_sync_ui_redraw(context)
+    return result
+
+
+def _free_mirror_origin_offset(context: bpy.types.Context, result, anchor):
+    """Place a free vertical-mirror reconstruction above the anchor origin."""
+    space = properties.workspace(context)
+    if anchor is None or anchor.name not in result.similarities:
+        return None
+    if anchor.pm_session.origin_is_set or uses_adjusted_camera(anchor.pm_session):
+        return None
+    if (
+        getattr(space, "mirror_origin", "OBJECT") != "LANDMARK"
+        or getattr(space, "mirror_object", None) is not None
+        or getattr(space, "mirror_plane", "YZ") not in {"YZ", "XZ"}
+        or bool(getattr(space, "lock_translation", False))
+    ):
+        return None
+    if any(
+        properties.session_sync_locks_pose(root.pm_session)
+        for root in properties.iter_sync_enabled_roots()
+        if root != anchor
+    ):
+        return None
+    if any(
+        bool(getattr(landmark, "on_ground", False))
+        or getattr(landmark, "known_object", None) is not None
+        or getattr(landmark, "known_object_b", None) is not None
+        for landmark in space.landmarks
+    ):
+        return None
+    reference = result.landmarks.get(str(getattr(space, "mirror_landmark_id", "")))
+    if reference is None or not result.landmarks:
+        return None
+    points = list(result.landmarks.values())
+    for start, end in result.line_segments.values():
+        points.extend((start, end))
+    locations = np.asarray(points, dtype=np.float64)
+    reference = np.asarray(reference, dtype=np.float64)
+    if not np.isfinite(locations).all() or not np.isfinite(reference).all():
+        return None
+    extent = float(np.max(np.ptp(locations, axis=0)))
+    clearance = max(0.01, 0.01 * extent)
+    return np.array((
+        -float(reference[0]), -float(reference[1]),
+        clearance - float(np.min(locations[:, 2])),
+    ), dtype=np.float64)
 
 
 def clear_sync_transforms(context: bpy.types.Context) -> None:
@@ -4250,12 +4337,15 @@ def apply_lens_refine_result(
                 update_scene_camera=True,
             )
 
+        origin_offset_applied = False
         if point_focal:
             sync_result = candidate.sync_result if use_candidate else refine_result.sync_result
             _apply_sync_landmark_diagnostics(context, sync_result)
             # The fitted calibrations were just written above. Reusing the old
             # solve inputs here would overwrite their fx/fy with stale values.
-            _apply_sync_solve_result(context, sync_result, ())
+            applied = _apply_sync_solve_result(context, sync_result, ())
+            origin_offset_applied = applied is not sync_result
+            sync_result = applied
         else:
             # The legacy search applies its accepted lenses before Solve Sync.
             try:
@@ -4265,6 +4355,14 @@ def apply_lens_refine_result(
         from . import distortion as distortion_module
 
         distortion_module.rebuild_undistorted_plates(context)
+        anchor = properties.anchor_root(context)
+        if origin_offset_applied and anchor is not None and anchor.name in selected_calibrations:
+            selected_calibrations[anchor.name] = calibration_from_settings(anchor.pm_session)
+        if point_focal:
+            if use_candidate:
+                candidate.sync_result = sync_result
+            else:
+                refine_result.sync_result = sync_result
     except Exception:
         space.lens_refine_progress = 0.0
         try:
