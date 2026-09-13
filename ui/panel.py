@@ -47,12 +47,8 @@ class PM_UL_landmarks(bpy.types.UIList):
         split.prop(item, "name", text="", emboss=False, icon="EMPTY_AXIS")
         meta = split.row(align=True)
         meta.alignment = "RIGHT"
-        if item.kind == "LINE":
-            meta.label(text="", icon="MESH_DATA")
-            if row_meta is not None and row_meta.parallel_linked:
-                meta.label(text="", icon="LINKED")
-        elif row_meta is not None and row_meta.mirror_linked:
-            meta.label(text="", icon="MOD_MIRROR")
+        for icon in landmark_list.link_icons(item.kind, row_meta):
+            meta.label(text="", icon=icon)
         if item.known_object is not None:
             meta.label(text="", icon="PIVOT_CURSOR")
         elif item.on_ground:

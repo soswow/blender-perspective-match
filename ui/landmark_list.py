@@ -118,6 +118,16 @@ def collect_landmark_rows(landmarks, active_root=None) -> tuple[LandmarkRowMeta,
     return tuple(rows)
 
 
+def link_icons(kind: str, row_meta: LandmarkRowMeta | None) -> tuple[str, ...]:
+    """Icons for landmark type and mirror/parallel links in the sidebar row."""
+    icons = ["MESH_DATA"] if kind == "LINE" else []
+    if row_meta is not None and row_meta.mirror_linked:
+        icons.append("MOD_MIRROR")
+    if kind == "LINE" and row_meta is not None and row_meta.parallel_linked:
+        icons.append("LINKED")
+    return tuple(icons)
+
+
 def filter_flags(
     rows: tuple[LandmarkRowMeta, ...],
     *,

@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Point-based FOV refinement supports Is in Plane and point mirror pairs with a supplied Mirror Empty.
 
 ### Fixed
+- Mirrored line landmarks show the mirror icon in the landmark list, including when they also have a parallel link.
 - Use Best Fit remains available when fitting lines and constraints improves the combined result while point error rises; the status explains that tradeoff and the button location.
 - Independent FOV fitting reports whether nonconvergence means the iteration limit or failure to find an improving step.
 - Independent FOV fitting can correct the overall camera and landmark orientation to satisfy supplied world-axis and mirror constraints instead of distorting geometry to fit a guessed anchor frame.

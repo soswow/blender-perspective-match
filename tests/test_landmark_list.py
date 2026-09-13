@@ -80,6 +80,17 @@ class LandmarkListTests(unittest.TestCase):
         line_rows = landmark_list.collect_landmark_rows((left_line, right_line))
         self.assertTrue(line_rows[0].mirror_linked)
         self.assertTrue(line_rows[1].mirror_linked)
+        self.assertEqual(
+            landmark_list.link_icons("LINE", line_rows[0]),
+            ("MESH_DATA", "MOD_MIRROR"),
+        )
+        self.assertEqual(
+            landmark_list.link_icons("LINE", line_rows[1]),
+            ("MESH_DATA", "MOD_MIRROR"),
+        )
+        self.assertEqual(
+            landmark_list.link_icons("POINT", rows[0]), ("MOD_MIRROR",)
+        )
         self.assertEqual(rows[0].observation_count, 1)
         self.assertTrue(rows[0].has_pick_in_active)
         self.assertFalse(rows[1].has_pick_in_active)
@@ -104,6 +115,21 @@ class LandmarkListTests(unittest.TestCase):
         self.assertTrue(rows[1].parallel_linked)
         self.assertTrue(rows[2].parallel_linked)
         self.assertFalse(rows[3].parallel_linked)
+        self.assertEqual(
+            landmark_list.link_icons("LINE", rows[2]), ("MESH_DATA", "LINKED")
+        )
+
+    def test_mirrored_parallel_line_shows_both_link_icons(self) -> None:
+        mirrored = _landmark(
+            item_id="mirrored", name="Mirrored", kind="LINE",
+            mirror_of="partner", parallel_to="WORLD_AXIS_X",
+        )
+        partner = _landmark(item_id="partner", name="Partner", kind="LINE")
+        rows = landmark_list.collect_landmark_rows((mirrored, partner))
+        self.assertEqual(
+            landmark_list.link_icons("LINE", rows[0]),
+            ("MESH_DATA", "MOD_MIRROR", "LINKED"),
+        )
 
     def test_filter_empty_means_show_all(self) -> None:
         rows = landmark_list.collect_landmark_rows(
