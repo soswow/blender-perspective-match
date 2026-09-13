@@ -104,6 +104,58 @@ def _project_with_depth_penalty(q: np.ndarray, focal: float,
     return predicted, derivative
 
 
+def _line_image_fd_jacobian(
+    params: np.ndarray, baseline: np.ndarray, *,
+    camera_columns: list[tuple[int, ...]], camera_strokes: list[np.ndarray],
+    line_strokes: list[np.ndarray], camera_state, line_charts: list[LineChart],
+    line_offset: int, lci: np.ndarray, lli: np.ndarray, luv: np.ndarray,
+    line_weights: np.ndarray, pp: np.ndarray, focal: np.ndarray,
+    rotations: list[np.ndarray], centers: np.ndarray,
+    geometry: list[tuple[np.ndarray, np.ndarray]],
+) -> np.ndarray:
+    """Differentiate each stroke only for its camera and line coordinates.
+
+    camera_state returns the changed focal, rotation or center; other fields are None.
+    """
+    jac = np.zeros((len(baseline), len(params)))
+    for camera, columns in enumerate(camera_columns):
+        strokes = camera_strokes[camera]
+        if not len(strokes):
+            continue
+        for column in columns:
+            step = 1e-6 * max(1.0, abs(params[column]))
+            shifted = params.copy()
+            shifted[column] += step
+            changed_focal, changed_rotation, changed_center = camera_state(
+                shifted, camera, column)
+            shifted_focal = focal[camera] if changed_focal is None else changed_focal
+            shifted_rotation = rotations[camera] if changed_rotation is None else changed_rotation
+            shifted_center = centers[camera] if changed_center is None else changed_center
+            for stroke in strokes:
+                point, direction = geometry[lli[stroke]]
+                changed = line_weights[stroke] * endpoint_distances(
+                    point, direction, shifted_rotation, shifted_center,
+                    shifted_focal, pp[camera], luv[stroke])
+                rows = slice(2 * stroke, 2 * stroke + 2)
+                jac[rows, column] = (changed - baseline[rows]) / step
+    for line, chart in enumerate(line_charts):
+        strokes = line_strokes[line]
+        for component in range(4):
+            column = line_offset + 4 * line + component
+            step = 1e-6 * max(1.0, abs(params[column]))
+            shifted = params[line_offset + 4 * line:line_offset + 4 * line + 4].copy()
+            shifted[component] += step
+            point, direction = chart.decode(shifted)
+            for stroke in strokes:
+                camera = lci[stroke]
+                changed = line_weights[stroke] * endpoint_distances(
+                    point, direction, rotations[camera], centers[camera],
+                    focal[camera], pp[camera], luv[stroke])
+                rows = slice(2 * stroke, 2 * stroke + 2)
+                jac[rows, column] = (changed - baseline[rows]) / step
+    return jac
+
+
 def _refine_homography(a: np.ndarray, b: np.ndarray, h: np.ndarray) -> np.ndarray | None:
     """Polish normalized DLT by forward geometric error, avoiding marginal DLT false positives."""
     if abs(h[2, 2]) < 1.0e-12:
@@ -626,6 +678,13 @@ def fit_independent_focals(
     luv = np.asarray([((item.u1, item.v1), (item.u2, item.v2))
                       for item in line_observations], float).reshape(-1, 2, 2)
     line_weights = np.sqrt(np.asarray([item.weight for item in line_observations], float))
+    camera_strokes = [np.flatnonzero(lci == camera) for camera in range(ncam)]
+    line_strokes = [np.flatnonzero(lli == line) for line in range(len(line_ids))]
+    camera_columns = [(camera,) for camera in range(ncam)]
+    camera_columns[1] += tuple(range(ncam, ncam + 5 + scale_columns))
+    for camera in range(2, ncam):
+        start = ncam + 5 + scale_columns + 6 * (camera - 2)
+        camera_columns[camera] += tuple(range(start, start + 6))
     base_fx = np.asarray([calibrations[key].intrinsics.fx for key in ids], float)
     pp = np.asarray([(calibrations[key].intrinsics.cx, calibrations[key].intrinsics.cy)
                      for key in ids], float)
@@ -651,6 +710,20 @@ def fit_independent_focals(
             centers.append(params[offset + 3:offset + 6])
         return focal, rotations, np.asarray(centers), params[point_offset:point_end].reshape(npoint, 3)
 
+    def camera_state(params: np.ndarray, camera: int, column: int):
+        if column == camera:
+            return (base_fx * np.exp(params[:ncam]))[camera], None, None
+        if camera == 1:
+            if column < ncam + 3:
+                return None, _rodrigues(params[ncam:ncam + 3]), None
+            raw = direction + params[ncam + 3] * tangents[0] + params[ncam + 4] * tangents[1]
+            radius = math.exp(float(params[ncam + 5])) if scale_columns else 1.0
+            return None, None, radius * raw / np.linalg.norm(raw)
+        offset = ncam + 5 + scale_columns + 6 * (camera - 2)
+        if column < offset + 3:
+            return None, _rodrigues(params[offset:offset + 3]), None
+        return None, None, params[offset + 3:offset + 6]
+
     def line_geometry(params: np.ndarray):
         return [chart.decode(params[line_offset + 4*i:line_offset + 4*i + 4])
                 for i, chart in enumerate(line_charts)]
@@ -662,7 +735,7 @@ def fit_independent_focals(
         rotation = frame_rotation(params)
         return points @ rotation.T, [(rotation @ p, rotation @ d) for p, d in geometry]
 
-    def line_image_residual(params: np.ndarray, focal, rotations, centers, geometry):
+    def line_image_residual(focal, rotations, centers, geometry):
         result = np.empty((len(luv), 2))
         for index in range(len(luv)):
             camera = lci[index]
@@ -752,30 +825,23 @@ def fit_independent_focals(
                         'nij,nj->ni', dq, derivative).ravel()
         pixel_residual = residual.ravel()
         geometry = line_geometry(params)
-        line_residual = line_image_residual(params, focal, rotations, centers, geometry)
+        line_residual = line_image_residual(focal, rotations, centers, geometry)
         if jacobian and len(line_residual):
-            line_jac = np.zeros((len(line_residual), len(params)))
-            relevant = set(range(ncam))
-            for camera in set(lci):
-                if camera == 1:
-                    relevant.update(range(ncam, ncam + 5 + scale_columns))
-                elif camera > 1:
-                    start = ncam + 5 + scale_columns + 6*(camera-2)
-                    relevant.update(range(start, start+6))
-            relevant.update(range(line_offset, line_end))
-            for column in sorted(relevant):
-                step = 1e-6 * max(1.0, abs(params[column]))
-                shifted = params.copy()
-                shifted[column] += step
-                f, r, c, _p = decode(shifted)
-                line_jac[:, column] = (
-                    line_image_residual(shifted, f, r, c, line_geometry(shifted)) - line_residual) / step
+            line_jac = _line_image_fd_jacobian(
+                params, line_residual, camera_columns=camera_columns,
+                camera_strokes=camera_strokes, line_strokes=line_strokes,
+                camera_state=camera_state, line_charts=line_charts,
+                line_offset=line_offset, lci=lci, lli=lli, luv=luv,
+                line_weights=line_weights, pp=pp, focal=focal,
+                rotations=rotations, centers=centers, geometry=geometry)
             jac = np.vstack((jac, line_jac))
         pixel_residual = np.concatenate((pixel_residual, line_residual))
         if not has_geometric_priors:
             return pixel_residual, jac, depths
         offset = float(params[mirror_offset_column]) if mirror_offset_column is not None else 0.0
-        constrained_points, constrained_lines = prior_geometry(params, points, geometry)
+        base_frame = frame_rotation(params)
+        constrained_points = points @ base_frame.T
+        constrained_lines = [(base_frame @ p, base_frame @ d) for p, d in geometry]
         prior_residual, prior_jacobian = constraints.residual_and_jacobian(
             constrained_points, point_offset=point_offset, parameter_count=len(params),
             mirror_offset=offset, mirror_offset_column=mirror_offset_column,
@@ -783,7 +849,7 @@ def fit_independent_focals(
         if jacobian and len(rotation_basis):
             point_block = prior_jacobian[:, point_offset:point_end].reshape(-1, npoint, 3)
             prior_jacobian[:, point_offset:point_end] = (
-                point_block @ frame_rotation(params)).reshape(-1, 3 * npoint)
+                point_block @ base_frame).reshape(-1, 3 * npoint)
             for column in range(line_end, orientation_end):
                 step = 1e-6 * max(1.0, abs(params[column]))
                 shifted = params.copy()
@@ -809,9 +875,24 @@ def fit_independent_focals(
                 step = 1e-6 * max(1.0, abs(params[column]))
                 shifted = params.copy()
                 shifted[column] += step
-                shifted_points = shifted[point_offset:point_end].reshape(npoint, 3)
-                changed_points, changed_lines = prior_geometry(
-                    shifted, shifted_points, line_geometry(shifted))
+                if column < line_offset:
+                    shifted_points = shifted[point_offset:point_end].reshape(npoint, 3)
+                    changed_points = shifted_points @ base_frame.T
+                    changed_lines = constrained_lines
+                elif column < line_end:
+                    changed_points = constrained_points
+                    changed_lines = constrained_lines.copy()
+                    line = (column - line_offset) // 4
+                    start = line_offset + 4 * line
+                    line_point, line_direction = line_charts[line].decode(
+                        shifted[start:start + 4])
+                    changed_lines[line] = (base_frame @ line_point,
+                                           base_frame @ line_direction)
+                elif column < orientation_end:
+                    changed_points, changed_lines = prior_geometry(
+                        shifted, points, geometry)
+                else:
+                    changed_points, changed_lines = constrained_points, constrained_lines
                 mirror_jac[:, column] = (
                     line_prior(shifted, changed_points, changed_lines) - mirror_line_residual) / step
         else:

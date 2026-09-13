@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Solve Sync and Refine Lenses run faster by reusing calculations and reducing thread overhead during camera registration.
 - New matches hide their Origin Empty by default while keeping the camera and collection visible.
 - Independent FOV fitting now allows 60 seconds of optimization after startup, giving difficult fits more time to finish.
 - Independent FOV fitting uses a less strict convergence tolerance and up to 400 iterations within its existing time budget; usable time-limited fits remain available through Use Best Fit.

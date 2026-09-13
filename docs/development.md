@@ -211,6 +211,11 @@ BLENDER_BIN="/path/to/blender" ./scripts/build-extension.sh
 
 The smoke test covers registration, multi-match create/switch/unload/prune, VP solve, camera projection, origin placement, project import, undistorted plates, and cleanup.
 
+For read-only solver performance checks, use
+[`benchmark_solvers.py`](../tools/debug-sync/README.md#timing-sync-and-refine-lenses).
+Keep exact private inputs/results outside the repo, profile separately from clean
+timings, and compare complete numerical outputs alongside elapsed time.
+
 ## Release
 
 On a clean `main`, after Unreleased bullets exist:

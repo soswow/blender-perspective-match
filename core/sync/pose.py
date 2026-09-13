@@ -8,6 +8,7 @@ from functools import lru_cache
 from itertools import combinations
 import math
 import os
+import sys
 import threading
 from typing import Callable
 
@@ -549,6 +550,10 @@ def _map_pair_jobs(func, items: list):
         return []
     if len(items) == 1:
         return [func(items[0])]
+    gil_probe = getattr(sys, "_is_gil_enabled", None)
+    # These Python-led, small NumPy solves contend for the GIL in a thread pool.
+    if gil_probe is None or gil_probe():
+        return [func(item) for item in items]
     workers = _pair_worker_count(len(items))
     with ThreadPoolExecutor(max_workers=workers) as pool:
         return list(pool.map(func, items))
@@ -1110,8 +1115,10 @@ def _pnp_similarity(
 
     damping = 1.0e-3
     previous_cost = float("inf")
+    residuals: np.ndarray | None = None
     for _iteration in range(max_iterations):
-        residuals = residual(params)
+        if residuals is None:
+            residuals = residual(params)
         cost = float(residuals @ residuals)
         if cost < 1.0e-8:
             break
@@ -1136,9 +1143,11 @@ def _pnp_similarity(
                 damping *= 10.0
                 continue
             candidate = params + delta
-            candidate_cost = float(residual(candidate) @ residual(candidate))
+            candidate_residuals = residual(candidate)
+            candidate_cost = float(candidate_residuals @ candidate_residuals)
             if candidate_cost < cost:
                 params = candidate
+                residuals = candidate_residuals
                 previous_cost = cost
                 damping = max(damping * 0.3, 1.0e-8)
                 improved = True
@@ -1354,6 +1363,27 @@ def _points_collinear_3d(
     return float(singular[1]) < relative_tolerance * span
 
 
+def _pair_ray_data(
+    pairs: list[tuple[SyncObservation, SyncObservation]],
+    anchor: core.Calibration,
+    other: core.Calibration,
+) -> list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, float]]:
+    """Build the fixed private rays used by all seeds for one pair solve."""
+    data = []
+    for anchor_obs, other_obs in pairs:
+        origin_a, direction_a = camera_ray_private(
+            anchor_obs.u, anchor_obs.v, anchor
+        )
+        origin_b, direction_b = camera_ray_private(
+            other_obs.u, other_obs.v, other
+        )
+        data.append(
+            (origin_a, direction_a, origin_b, direction_b,
+             _pair_scale(anchor_obs, other_obs))
+        )
+    return data
+
+
 def _refine_rigid_from_rays(
     seed: SimilarityTransform,
     pairs: list[tuple[SyncObservation, SyncObservation]],
@@ -1363,6 +1393,9 @@ def _refine_rigid_from_rays(
     max_iterations: int = 60,
     lock_rotation: bool = False,
     lock_translation: bool = False,
+    pair_ray_data: list[
+        tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, float]
+    ] | None = None,
 ) -> SimilarityTransform:
     """Refine pair rotation and baseline direction at a fixed free-scale gauge."""
     seed = _apply_pose_locks(
@@ -1384,16 +1417,12 @@ def _refine_rigid_from_rays(
     anchor_directions: list[np.ndarray] = []
     other_directions: list[np.ndarray] = []
     pair_scales: list[float] = []
-    for anchor_obs, other_obs in pairs:
-        _origin_a, direction_a = camera_ray_private(
-            anchor_obs.u, anchor_obs.v, anchor
-        )
-        _origin_b, direction_b = camera_ray_private(
-            other_obs.u, other_obs.v, other
-        )
+    if pair_ray_data is None:
+        pair_ray_data = _pair_ray_data(pairs, anchor, other)
+    for _origin_a, direction_a, _origin_b, direction_b, pair_scale in pair_ray_data:
         anchor_directions.append(direction_a)
         other_directions.append(direction_b)
-        pair_scales.append(_pair_scale(anchor_obs, other_obs))
+        pair_scales.append(pair_scale)
     anchor_direction_array = np.stack(anchor_directions)
     other_direction_array = np.stack(other_directions)
     pair_scale_array = np.asarray(pair_scales, dtype=np.float64)
@@ -1449,8 +1478,10 @@ def _refine_rigid_from_rays(
 
     damping = 1.0e-2
     previous_cost = float("inf")
+    residuals: np.ndarray | None = None
     for _iteration in range(max_iterations):
-        residuals = residual(params)
+        if residuals is None:
+            residuals = residual(params)
         cost = float(residuals @ residuals)
         if cost < 1.0e-14:
             break
@@ -1475,9 +1506,11 @@ def _refine_rigid_from_rays(
                 damping *= 10.0
                 continue
             candidate = params + delta
-            candidate_cost = float(residual(candidate) @ residual(candidate))
+            candidate_residuals = residual(candidate)
+            candidate_cost = float(candidate_residuals @ candidate_residuals)
             if candidate_cost < cost:
                 params = candidate
+                residuals = candidate_residuals
                 previous_cost = cost
                 damping = max(damping * 0.3, 1.0e-8)
                 improved = True
@@ -1867,6 +1900,7 @@ def _compute_relative_from_pairs(
         return None
     if lock_rotation and lock_translation:
         return SimilarityTransform()
+    pair_ray_data = _pair_ray_data(pairs, anchor, other)
     seeds: list[SimilarityTransform] = []
 
     def add_rotation_seeds(rotation: np.ndarray) -> None:
@@ -1874,16 +1908,10 @@ def _compute_relative_from_pairs(
         directions_a = []
         directions_b = []
         pair_scales = []
-        for anchor_obs, other_obs in pairs:
-            _origin_a, direction_a = camera_ray_private(
-                anchor_obs.u, anchor_obs.v, anchor
-            )
-            _origin_b, direction_b = camera_ray_private(
-                other_obs.u, other_obs.v, other
-            )
+        for _origin_a, direction_a, _origin_b, direction_b, pair_scale in pair_ray_data:
             directions_a.append(direction_a)
             directions_b.append(rotation @ direction_b)
-            pair_scales.append(_pair_scale(anchor_obs, other_obs))
+            pair_scales.append(pair_scale)
         normals = np.cross(np.stack(directions_a), np.stack(directions_b))
         normals *= np.asarray(pair_scales, dtype=np.float64)[:, None]
         _u_matrix, _singular, vt_matrix = np.linalg.svd(
@@ -1953,6 +1981,7 @@ def _compute_relative_from_pairs(
             seed, pairs, anchor, other,
             lock_rotation=lock_rotation,
             lock_translation=lock_translation,
+            pair_ray_data=pair_ray_data,
         )
         center_b = refined.transform_point(other.camera_center)
         baseline = float(np.linalg.norm(center_b - anchor.camera_center))
@@ -1964,13 +1993,9 @@ def _compute_relative_from_pairs(
         cost = 0.0
         cheirality = 0
         reprojection_errors: list[float] = []
-        for anchor_obs, other_obs in pairs:
-            origin_a, direction_a = camera_ray_private(
-                anchor_obs.u, anchor_obs.v, anchor
-            )
-            origin_b_priv, direction_b_priv = camera_ray_private(
-                other_obs.u, other_obs.v, other
-            )
+        for (anchor_obs, other_obs), (
+            origin_a, direction_a, origin_b_priv, direction_b_priv, _pair_scale_value
+        ) in zip(pairs, pair_ray_data):
             origin_b = refined.transform_point(origin_b_priv)
             direction_b = refined.rotation @ direction_b_priv
             direction_b = direction_b / max(
@@ -2245,8 +2270,10 @@ def _refine_rigid_mixed(
 
     damping = 1.0e-2
     previous_cost = float("inf")
+    residuals: np.ndarray | None = None
     for _iteration in range(max_iterations):
-        residuals = residual(params)
+        if residuals is None:
+            residuals = residual(params)
         if residuals.size == 0:
             break
         cost = float(residuals @ residuals)
@@ -2273,9 +2300,11 @@ def _refine_rigid_mixed(
                 damping *= 10.0
                 continue
             candidate = params + delta
-            candidate_cost = float(residual(candidate) @ residual(candidate))
+            candidate_residuals = residual(candidate)
+            candidate_cost = float(candidate_residuals @ candidate_residuals)
             if candidate_cost < cost:
                 params = candidate
+                residuals = candidate_residuals
                 previous_cost = cost
                 damping = max(damping * 0.3, 1.0e-8)
                 improved = True

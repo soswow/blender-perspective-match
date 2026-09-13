@@ -589,8 +589,10 @@ def _rodrigues_partials(
 def _project_private_jacobian(
     point_private: np.ndarray,
     calibration: core.Calibration,
-) -> tuple[np.ndarray, np.ndarray] | None:
-    """Return (uv, ∂uv/∂X_private) for a private-world point, or None if behind."""
+    *,
+    compute_jacobian: bool = True,
+) -> tuple[np.ndarray, np.ndarray | None] | None:
+    """Return (uv, optional ∂uv/∂X_private), or None if behind."""
     camera_point = calibration.rotation_w2c @ (point_private - calibration.camera_center)
     depth = float(camera_point[2])
     if depth <= 1.0e-8:
@@ -603,6 +605,20 @@ def _project_private_jacobian(
         ),
         dtype=np.float64,
     )
+    if not calibration.has_distortion and not compute_jacobian:
+        return ideal, None
+    if calibration.has_distortion:
+        distorted = core.distort_points(
+            ideal.reshape(1, 2),
+            intrinsics.fx,
+            intrinsics.fy,
+            intrinsics.cx,
+            intrinsics.cy,
+            calibration.division_lambda,
+            calibration.brown_conrady,
+        )[0]
+        if not compute_jacobian:
+            return distorted, None
     # Pinhole Jacobian in camera coordinates, then chain through R_w2c.
     inv_depth = 1.0 / depth
     inv_depth_sq = inv_depth * inv_depth
@@ -625,15 +641,6 @@ def _project_private_jacobian(
     if not calibration.has_distortion:
         return ideal, d_ideal_d_private
     # Distortion: chain a tiny FD through the 2D ideal → observed map.
-    distorted = core.distort_points(
-        ideal.reshape(1, 2),
-        intrinsics.fx,
-        intrinsics.fy,
-        intrinsics.cx,
-        intrinsics.cy,
-        calibration.division_lambda,
-        calibration.brown_conrady,
-    )[0]
     d_dist_d_ideal = np.zeros((2, 2), dtype=np.float64)
     for axis in range(2):
         offset = ideal.copy()
@@ -706,8 +713,9 @@ def _ba_raw_residuals_and_jacobian(
     plane_groups: list[tuple[str, str, int]] | None = None,
     plane_slack: float = 0.0,
     location_match_ids: set[str] | None = None,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Unweighted BA residuals and block-analytic Jacobian."""
+    compute_jacobian: bool = True,
+) -> tuple[np.ndarray, np.ndarray | None, np.ndarray]:
+    """Unweighted BA residuals and optional block-analytic Jacobian."""
     free_line_ids = free_line_ids or []
     fixed_line_points = fixed_line_points or {}
     fixed_line_directions = fixed_line_directions or {}
@@ -757,7 +765,7 @@ def _ba_raw_residuals_and_jacobian(
     }
     rotation_partials = (
         {}
-        if lock_rotation
+        if lock_rotation or not compute_jacobian
         else {
             match_id: _rodrigues_partials(
                 _log_rodrigues(similarities[match_id].rotation)
@@ -784,16 +792,24 @@ def _ba_raw_residuals_and_jacobian(
         calibration = matches[match_id].calibration
         scale = _observation_scale(observation)
         private = similarity.inverse_point(point_shared)
-        projected = _project_private_jacobian(private, calibration)
-        row_u = np.zeros(column_count, dtype=np.float64)
-        row_v = np.zeros(column_count, dtype=np.float64)
+        projected = _project_private_jacobian(
+            private, calibration, compute_jacobian=compute_jacobian
+        )
         if projected is None:
             residuals.extend((scale * 1.0e3, scale * 1.0e3))
-            jacobian_rows.extend((row_u, row_v))
+            if compute_jacobian:
+                jacobian_rows.extend(
+                    (np.zeros(column_count, dtype=np.float64),) * 2
+                )
             continue
         uv_coordinate, d_uv_d_private = projected
         residuals.append(scale * float(uv_coordinate[0] - observation.u))
         residuals.append(scale * float(uv_coordinate[1] - observation.v))
+        if not compute_jacobian:
+            continue
+        row_u = np.zeros(column_count, dtype=np.float64)
+        row_v = np.zeros(column_count, dtype=np.float64)
+        assert d_uv_d_private is not None
         d_uv_d_private = scale * d_uv_d_private
 
         # Shared → private: X_p = Rᵀ (X - t) / s
@@ -972,6 +988,7 @@ def _ba_raw_residuals_and_jacobian(
     spring_end = len(residuals)
 
     # Lines: pose FD + free-midpoint FD (directions stay fixed from the seed).
+    trial_states: dict[int, tuple[dict[str, SimilarityTransform], dict[str, np.ndarray]]] = {}
     for landmark_id, _seed_point, direction, observation in line_constraints:
         match_id = observation.match_id
         similarity = similarities[match_id]
@@ -986,6 +1003,8 @@ def _ba_raw_residuals_and_jacobian(
             similarity,
         )
         residuals.extend(base_errors)
+        if not compute_jacobian:
+            continue
         row_a = np.zeros(column_count, dtype=np.float64)
         row_b = np.zeros(column_count, dtype=np.float64)
         columns: list[int] = []
@@ -998,30 +1017,35 @@ def _ba_raw_residuals_and_jacobian(
             start = line_offset[landmark_id]
             columns.extend(range(start, start + 3))
         for column in columns:
-            perturbed = params.copy()
             delta = (
                 1.0e-5
                 if abs(float(params[column])) < 1.0
                 else 1.0e-5 * abs(float(params[column]))
             )
-            perturbed[column] += delta
-            trial_sims, _trial_landmarks, trial_lines = _unpack_ba_params(
-                perturbed,
-                free_match_ids,
-                free_landmark_ids,
-                lock_scale=lock_scale,
-                fixed_scales=fixed_scales,
-                lock_rotation=lock_rotation,
-                fixed_rotations=fixed_rotations,
-                lock_translation=lock_translation,
-                fixed_translations=fixed_translations,
-                free_line_ids=free_line_ids,
-            )
-            trial_sims.update(fixed_similarities)
-            trial_sims[anchor_id] = SimilarityTransform()
-            if lock_rotation and lock_translation:
-                for trial_match_id in matches:
-                    trial_sims.setdefault(trial_match_id, SimilarityTransform())
+            trial_state = trial_states.get(column)
+            if trial_state is None:
+                perturbed = params.copy()
+                perturbed[column] += delta
+                trial_sims, _trial_landmarks, trial_lines = _unpack_ba_params(
+                    perturbed,
+                    free_match_ids,
+                    free_landmark_ids,
+                    lock_scale=lock_scale,
+                    fixed_scales=fixed_scales,
+                    lock_rotation=lock_rotation,
+                    fixed_rotations=fixed_rotations,
+                    lock_translation=lock_translation,
+                    fixed_translations=fixed_translations,
+                    free_line_ids=free_line_ids,
+                )
+                trial_sims.update(fixed_similarities)
+                trial_sims[anchor_id] = SimilarityTransform()
+                if lock_rotation and lock_translation:
+                    for trial_match_id in matches:
+                        trial_sims.setdefault(trial_match_id, SimilarityTransform())
+                trial_state = (trial_sims, trial_lines)
+                trial_states[column] = trial_state
+            trial_sims, trial_lines = trial_state
             trial_point = trial_lines.get(landmark_id, point)
             sample = _line_observation_reprojection_errors(
                 trial_point,
@@ -1038,6 +1062,8 @@ def _ba_raw_residuals_and_jacobian(
     protected = np.zeros(residual_array.shape, dtype=bool)
     if residual_array.size:
         protected[measurement_count:spring_end] = True
+    if not compute_jacobian:
+        return residual_array, None, protected
     if not jacobian_rows:
         return (
             residual_array,
@@ -1115,6 +1141,7 @@ def _ba_residual_vector(
         plane_groups=plane_groups,
         plane_slack=plane_slack,
         location_match_ids=location_match_ids,
+        compute_jacobian=False,
     )
     weights = _robust_weights(residual_array, huber_delta)
     if protected.size:

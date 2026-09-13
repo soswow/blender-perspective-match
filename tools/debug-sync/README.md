@@ -195,3 +195,45 @@ Known 3D camera pin polish (source-image residuals vs VP lines, rotation locked)
 - **center_vs_z_deg** — stored ray through the image center (differs from stored nadir_deg when PP is off-center).
 - **Pairwise vs anchor** — `2d_rmse` ignores On Ground metric; `mixed_rmse` includes ground raycasts. A huge mixed error with a modest 2D error is that degeneracy, not “too few landmarks” and not mis-tagged ground.
 - **Residual vs radius** (`probe_graph.py`) — per-match inner (r<0.35) vs outer (r≥0.55) RMSE. Outer much larger than inner means a central cluster is winning and edge picks that pin camera distance are being ignored.
+
+## Timing Sync and Refine Lenses
+
+`benchmark_solvers.py` runs either public numerical path from a disposable
+factory-startup Blender process, using the saved sidebar settings. It never
+applies results or saves the source file and verifies the source file checksum
+on exit. Use a new private output directory:
+
+```sh
+blender --factory-startup --disable-autoexec -b --python-exit-code 1 \
+  --python tools/debug-sync/benchmark_solvers.py -- \
+  --blend /path/to/scene.blend --operation lens --out /tmp/lens-benchmark \
+  --max-calls 2 --seconds 600 --per-call-seconds 480
+```
+
+`--operation sync` benchmarks Solve Sync with a cold pose cache. Independent
+point-FOV refinement normally uses one inner Sync and one bundle, so two calls
+suffice. Shared/VP searches require a larger explicit `--max-calls` budget; all
+inner Sync evaluations count, including unsuccessful ones. The POSIX experiment
+ledger reserves each call before execution. Also use an outer process timeout:
+Python deadlines can wait for native code or pair workers to return.
+
+Artifacts retain exact prepared inputs, each inner solver's input/result,
+focal endpoint diagnostics, source copies and hashes, runtime versions and
+thread settings, and separate preparation/numerical timings. Keep them outside
+the repo because inputs/results can contain private names and geometry.
+`--compare /tmp/prior-benchmark` checks identical inputs and compares complete
+results, including camera poses, points, lines and diagnostics.
+
+Use `--profile --profile-stage bundle` to find focal-fit hotspots, or
+`--profile --serial-pairs` for a serial Sync diagnostic. Profiling adds overhead;
+threaded profiles can have overlapping cumulative times. Measure before/after
+speed separately without profiling and without other numerical jobs running.
+`--serial-pairs` is a diagnostic control that executes the same camera-pair jobs
+in input order without the pool; it does not alter candidates or solve rules.
+
+To reuse captured numerical evidence in the same Blender runtime, replace
+`--blend` with `--request sync-inputs.json` for Sync (also accepts the versioned
+`sync_snapshot.py` format). For a bundle-only replay, use `--operation joint
+--request lens-inputs.json --startup sync-result.json`. This skips registration
+and retains the production focal time/iteration limits. Each replay still has
+its own bounded ledger and source/runtime archive.
