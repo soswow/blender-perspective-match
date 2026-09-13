@@ -1,5 +1,5 @@
 **Perspective Match: reliability and AI development proposal**
-Investigation baseline: commit `5d876f6` / extension 0.5.0, 10 September 2026. Latest checkpoint: provisional candidates use the complete fitting objective and report explicit stopping reasons, 13 September 2026, described under **Current frontier**. Read that section first; the dated checkpoints preserve history, and the original proposal is retained for rationale rather than as an implementation checklist.
+Investigation baseline: commit `5d876f6` / extension 0.5.0, 10 September 2026. Latest checkpoint: tested convergence tolerance and iteration headroom, 13 September 2026, described under **Current frontier**. Read that section first; the dated checkpoints preserve history, and the original proposal is retained for rationale rather than as an implementation checklist.
 
 **My recommendation is to make every solver decision reproducible from a complete, versioned input, and judge it with checks independent of the implementation.** Build that foundation around the existing fixtures, Blender smoke test, and diagnostics. Then use it to improve calibration ownership, quality reporting, and selected solver decisions. This would turn a debugging session into an addition to a reusable capability.
 
@@ -9,11 +9,34 @@ The deeper product issue is that three different promises are currently close to
 
 ## Current frontier — 13 September 2026
 
-**Latest correction: a missing Use Best Fit candidate and an opaque stop reason.**
-After a further Manual FOV edit, the latest private capture reproduces the
+**Current stopping policy:** independent FOV fitting uses a relative combined-cost
+tolerance of `1e-7` instead of `1e-9`, normalized by `max(cost, 1)`, and allows
+400 iterations within the unchanged 30-second optimization budget. All physical,
+noise and uncertainty checks still govern automatic application. The earlier
+1.82 px case now converges and passes those checks in 164 iterations. A newer
+capture with edited picks still needed more than 200 or 300 iterations; it
+converges and passes at 372, about 24 seconds in the development Python and
+27 seconds in Blender's runtime, with 1.63 px point RMSE. That
+measured result justifies raising the iteration cap as well as changing the
+tolerance. If time runs out, a physically checked improved endpoint can still
+be offered via Use Best Fit; cancellation continues to discard it.
+
+**Verification:** paired archived-start controls used four bundle calls and no
+Sync registration. Weak-axis iterations fell from 171 to 161 with withheld shape
+RMSE 1.13417 → 1.13315 px; weak-mirror results stayed identical at 24 iterations
+and 1.41811 px withheld RMSE. All true focal lengths remained within their local
+intervals. The earlier private case changed at most 0.259% in focal length and
+0.016° in camera rotation between its 200-step endpoint and new accepted fit.
+The 95-test focused group passes, including the new archived weak-axis stopping
+regression and time-limited candidate retention. These controls do not establish
+universal confidence coverage or real-world truth. Further relaxation should
+still be tested against independent geometry and weak/invalid cases.
+
+**Previous correction: a missing Use Best Fit candidate and an opaque stop reason.**
+After a further Manual FOV edit, the then-current private capture reproduced the
 reported nonconvergence: the bundle reaches 200 iterations with no focal bound
 active. The last accepted step reduces the combined objective by about
-0.0000078%, still above the existing 0.0000001% relative-gain stopping threshold.
+0.0000078%, still above the former 0.0000001% relative-gain stopping threshold.
 That is a numerical stopping rule, not a required point RMSE or proof of bad
 geometry. Messages now distinguish the iteration limit from failure to find an
 improving step; endpoint diagnostics retain the objective and recent gains.
@@ -39,13 +62,12 @@ and evaluated projection checks without another solve or save: point RMSE
 1.82006 px in Blender versus 1.82004 numerically, maximum camera projection
 difference about 0.0020 px. The focused 88-test regression group passes.
 
-**Remaining numerical question:** whether a less strict stopping rule could
-accept useful settled fits earlier without weakening the independent accuracy
-and ambiguity controls. This change does not alter optimization or automatic
-calibration acceptance. Evaluate such a rule against geometry and parameter
-movement, not merely the already-small point residual or a longer iteration cap.
+**Follow-up status:** the less strict stopping rule is now implemented and tested
+above. The candidate-eligibility fix itself did not change optimization or
+calibration checks. Further changes need geometry and parameter-movement
+evidence, not merely a small point residual or a longer iteration cap.
 
-**Latest workflow fix: keep a useful fit without certifying its calibration.**
+**Earlier workflow fix: keep a useful fit without certifying its calibration.**
 Independent FOV estimation now retains a completed, improved candidate after
 convergence, focal-bound, noise-model or uncertainty refusal, provided it passes
 the existing physical geometry and per-camera deterioration checks. **Use Best
@@ -53,7 +75,7 @@ Fit** explicitly applies its calibrations, camera transforms and landmarks
 together through the guarded application path. Automatic acceptance is unchanged;
 the status keeps the refusal and says calibration is not validated. This closes
 the earlier all-or-nothing workflow gap. It does not establish correct real-world
-depth or replace checking unused features. Cancelled or time-limited jobs, unsupported/weak
+depth or replace checking unused features. Cancelled jobs, unsupported/weak
 startup and physically invalid or unimproved fits offer no candidate.
 
 `tests/test_focal_candidate.py` checks completed nonconvergence, bounds, physical
@@ -124,7 +146,8 @@ change the anchor frame. Accepted results persist the new anchor orientation in
 its private calibration with an identity root, so subsequent Sync input collection
 retains it. Noise, depth, focal-bound and uncertainty checks remain active. A frozen weak
 axis-plane case needed 171 iterations with the extra freedoms, so the ceiling
-is now 200 within the unchanged 30-second bundle time cap. Numerical conditioning
+rose to 200 at that checkpoint; the current limit is 400 as described above.
+The 30-second optimization cap remains. Numerical conditioning
 remains an improvement opportunity; the larger iteration allowance is not a speedup.
 
 An independent exact oracle keeps true geometry, cameras, picks and world priors

@@ -13,17 +13,17 @@ import json
 from pathlib import Path
 import sys
 import time
+from unittest.mock import patch
 
-import cv2
 import numpy as np
 
 
-def joint_report(inputs, startup):
+def joint_report(inputs, startup, *, max_iterations=None):
     """Run one production bundle from saved startup; never rerun Sync or apply."""
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
     from tools.synthetic_sync.solver import load_core
     core, sync = load_core()
-    from match_perspective.core.focal_bundle import fit_independent_focals
+    from match_perspective.core import focal_bundle
     from match_perspective.core.sync.request import json_values
     calibrations = {}
     for match in inputs['matches']:
@@ -45,14 +45,16 @@ def joint_report(inputs, startup):
               'mirror_pairs', 'mirror_plane', 'mirror_slack', 'mirror_landmark_id', 'parallel_pairs')
     started = time.monotonic()
     endpoints = []
-    result = fit_independent_focals(
-        calibrations, [sync.SyncObservation(**p) for p in inputs['observations']], initial,
-        line_observations=[sync.SyncLineObservation(**p) for p in inputs['line_observations']],
-        **{k: inputs[k] for k in fields if k in inputs},
-        cancel_check=lambda: time.monotonic() - started > 45.,
-        diagnostic_callback=endpoints.append)
+    iterations = focal_bundle.MAX_ITERATIONS if max_iterations is None else max_iterations
+    with patch.object(focal_bundle, 'MAX_ITERATIONS', iterations):
+        result = focal_bundle.fit_independent_focals(
+            calibrations, [sync.SyncObservation(**p) for p in inputs['observations']], initial,
+            line_observations=[sync.SyncLineObservation(**p) for p in inputs['line_observations']],
+            **{k: inputs[k] for k in fields if k in inputs},
+            cancel_check=lambda: time.monotonic() - started > 45.,
+            diagnostic_callback=endpoints.append)
     return dict(seconds=time.monotonic() - started, outcome=json_values(result),
-                focal_span=inputs.get('fx_span'),
+                focal_span=inputs.get('fx_span'), max_iterations=iterations,
                 endpoint=endpoints[-1] if endpoints else None,
                 full_sync_calls=0, bundle_calls=1, applied=False)
 
@@ -70,6 +72,7 @@ def _camera_matrix(match, scale=1.0):
 
 
 def _pnp(world, image, k):
+    import cv2
     if len(world) < 4:
         return None
     ok, r, t, inliers = cv2.solvePnPRansac(
@@ -104,6 +107,7 @@ def load(inputs_path, startup_path):
 
 def similarity_from_pnp(match, trial, scale=1.0):
     """Convert a shared-world PnP camera into this match's private-world similarity."""
+    import cv2
     rotation_fit = cv2.Rodrigues(np.asarray(trial['rotation_vector'], dtype=np.float64))[0]
     base = match['base_calibration']
     rotation_base = np.asarray(base['rotation_w2c'], dtype=np.float64)
@@ -115,6 +119,7 @@ def similarity_from_pnp(match, trial, scale=1.0):
 
 
 def _pair_consistency(a, b):
+    import cv2
     ids = sorted(set(a) & set(b))
     if len(ids) < 8:
         return {'shared': len(ids)}
@@ -147,14 +152,18 @@ def main():
     parser.add_argument('--out', type=Path, help='Write JSON report here')
     parser.add_argument('--joint', action='store_true', help='Run one joint fit from saved startup instead of diagnostic scans')
     parser.add_argument('--span-percent', type=float, help='Override focal range for this read-only joint trial')
-    args = parser.parse_args()
+    parser.add_argument('--max-iterations', type=int,
+                        help='Diagnostic joint-fit iteration cap (1–500); retains the time limit')
+    args = parser.parse_args(sys.argv[sys.argv.index('--') + 1:] if '--' in sys.argv else None)
     inputs, startup = load(args.inputs, args.startup)
+    if args.max_iterations is not None and (not args.joint or not 1 <= args.max_iterations <= 500):
+        parser.error('--max-iterations requires --joint and a value from 1 to 500')
     if args.span_percent is not None:
         if not args.joint or not 1 <= args.span_percent <= 80:
             parser.error('--span-percent requires --joint and a value from 1 to 80')
         inputs['fx_span'] = args.span_percent / 100.
     if args.joint:
-        output = json.dumps(joint_report(inputs, startup), indent=2)
+        output = json.dumps(joint_report(inputs, startup, max_iterations=args.max_iterations), indent=2)
         if args.out:
             args.out.write_text(output + '\n')
         else:

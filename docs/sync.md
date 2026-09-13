@@ -79,11 +79,16 @@ uses points alone, so its smaller point error can accompany worse constraints.
 
 “Converged” means nearby adjustments have become sufficiently unhelpful under
 the numerical stopping checks. It is separate from image accuracy and does not
-prove a global optimum or correct depth. Fitting currently has a 200-iteration
+prove a global optimum or correct depth. Fitting currently has a 400-iteration
 and 30-second limit after startup. A nonconvergence message identifies whether
 the iteration limit was reached or no improving step was found. Running longer
 is not guaranteed to produce a useful change, and reaching a lower point RMSE
 is not itself a convergence condition.
+The improvement tolerance is now `1e-7` instead of `1e-9`: for combined scores
+above one, that means a successful step improves the score by less than
+**0.00001%**. Below one, the same numerical tolerance is absolute. This stops
+the search earlier when further progress is negligible; all depth, constraint,
+noise and uncertainty checks still run before automatic application.
 
 If initial Sync omits a camera despite enough picks, this mode can now try a
 provisional pose against the reconstructed point cloud and then fit all cameras,
@@ -176,7 +181,9 @@ still apply; a lower combined score cannot bypass them.
 Check alignment on features you did not pick: this option gives you a usable
 modeling candidate, not evidence that its lens lengths or depth are correct.
 
-Cancelled or time-limited jobs, fits that made no improvement, failed geometry checks and
+If the fitting time limit is reached, an improved endpoint can still be offered
+through Use Best Fit after the physical checks. It is not automatically accepted.
+Cancelled jobs, fits that made no improvement, failed geometry checks and
 unsupported/weak startup setups do not offer this option. The candidate is
 temporary: it is cleared by a new lens job, file load or use. Changing numerical
 inputs or cameras makes it stale; clicking then asks you to refit without
@@ -251,7 +258,7 @@ The fitted anchor orientation is stored in its camera calibration, so the next
 Sync uses the corrected frame. This applies to **Estimate FOV from Landmarks**;
 ordinary Sync and VP-based refinement retain their existing anchor rules.
 
-The joint fit allows up to 200 iterations within its existing 30-second time
+The joint fit allows up to 400 iterations within its existing 30-second time
 limit; preliminary camera registration has separate work limits. Weak setups
 can need more iterations when orientation is fitted too.
 

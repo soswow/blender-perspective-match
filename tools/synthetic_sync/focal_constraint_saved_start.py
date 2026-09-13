@@ -26,7 +26,7 @@ PAIRS = (("weak-axis-removed", "weak-axis-hard"),
 
 
 def run(out: Path, source: Path, pairs: tuple[tuple[str, str], ...], *,
-        fixed_frame=False, max_iterations=None):
+        fixed_frame=False, max_iterations=None, relative_cost_tolerance=None):
     trial.SOURCE_PATHS = tuple(sorted(set(trial.SOURCE_PATHS + (
         Path("tools/synthetic_sync/focal_constraint_reliability.py"),
         Path("tools/synthetic_sync/focal_constraint_saved_start.py"),
@@ -39,12 +39,16 @@ def run(out: Path, source: Path, pairs: tuple[tuple[str, str], ...], *,
     load_core()
     from match_perspective.core import focal_bundle
     iterations = focal_bundle.MAX_ITERATIONS if max_iterations is None else max_iterations
-    metadata.update(fixed_frame=fixed_frame, max_iterations=iterations)
+    tolerance = (focal_bundle.RELATIVE_COST_TOLERANCE if relative_cost_tolerance is None
+                 else relative_cost_tolerance)
+    metadata.update(fixed_frame=fixed_frame, max_iterations=iterations,
+                    relative_cost_tolerance=tolerance)
     original_basis = focal_bundle.orientation_basis
 
     with (ExperimentBudget(out / "bundle-ledger.jsonl", metadata=metadata,
                            **trial.BUNDLE_LIMITS) as budget,
           patch.object(focal_bundle, "MAX_ITERATIONS", iterations),
+          patch.object(focal_bundle, "RELATIVE_COST_TOLERANCE", tolerance),
           patch.object(focal_bundle, "orientation_basis",
                        (lambda *_args: np.empty((0, 3))) if fixed_frame else original_basis)):
         for start_name, target_name in pairs:
@@ -61,7 +65,8 @@ def run(out: Path, source: Path, pairs: tuple[tuple[str, str], ...], *,
             trial_input = dict(start_name=start_name, target_name=target_name,
                                request=request, archived_initial_world=world,
                                pick_sigma_px=target_case["pick_sigma_px"],
-                               fixed_frame=fixed_frame, max_iterations=iterations)
+                               fixed_frame=fixed_frame, max_iterations=iterations,
+                               relative_cost_tolerance=tolerance)
             endpoints = []
             with budget.attempt(f"{start_name}:to:{target_name}", trial_input) as attempt:
                 outcome = focal_bundle.fit_independent_focals(
@@ -81,6 +86,7 @@ def run(out: Path, source: Path, pairs: tuple[tuple[str, str], ...], *,
                            initial_rmse_px=outcome.initial_rmse_px,
                            fitted_rmse_px=outcome.fitted_rmse_px,
                            fixed_frame=fixed_frame, max_iterations=iterations,
+                           relative_cost_tolerance=tolerance,
                            iterations=endpoints[-1]["iterations"] if endpoints else None)
             if outcome.accepted:
                 summary["independent"] = fixture.assess(target_case, record["fitted"])
@@ -103,11 +109,17 @@ if __name__ == "__main__":
                         help="Diagnostic control: disable the fitted common rotation")
     parser.add_argument("--max-iterations", type=int,
                         help="Diagnostic iteration cap (1–300); retains the time limit")
+    parser.add_argument("--relative-cost-tolerance", type=float,
+                        help="Diagnostic stopping threshold in (0, 1); recorded in ledger")
     options = parser.parse_args()
     if options.max_iterations is not None and not 1 <= options.max_iterations <= 300:
         parser.error("--max-iterations must be between 1 and 300")
+    if (options.relative_cost_tolerance is not None and
+            not 0 < options.relative_cost_tolerance < 1):
+        parser.error("--relative-cost-tolerance must lie between 0 and 1")
     pairs = tuple(tuple(pair) for pair in options.pair)
     if any(pair not in PAIRS for pair in pairs):
         raise ValueError("Pair is not in the frozen cross-start design")
     run(options.out, options.source, pairs, fixed_frame=options.fixed_frame,
-        max_iterations=options.max_iterations)
+        max_iterations=options.max_iterations,
+        relative_cost_tolerance=options.relative_cost_tolerance)

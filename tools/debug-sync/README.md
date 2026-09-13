@@ -38,6 +38,15 @@ cannot certify correspondences. `--joint` instead runs one complete production
 focal bundle from the saved startup, without another Sync or scene application.
 Optional `--span-percent 40` changes only that replay's search range. Keep the
 input/startup files and the `--out` report together as private artifacts.
+`--max-iterations 400` can override the diagnostic iteration cap (up to 500)
+without changing the time budget. Reports record the cap, stopping tolerance,
+endpoint objective and recent gains so iteration experiments can be distinguished.
+For a cached fully registered startup, the same joint command can run in
+Blender's numerical runtime: use `blender --factory-startup --disable-autoexec
+-b --python-exit-code 1 --python tools/debug-sync/probe_focal_startup.py --`,
+followed by the input/startup paths and `--joint --out ...`. This neither loads
+nor saves a blend and avoids another registration. OpenCV imports are deferred
+to the PnP/pair probes; incomplete-start pose recovery may still need OpenCV.
 
 To check application of a saved `--joint` candidate without another solver call:
 

@@ -185,8 +185,9 @@ improved completed fit only after physical and per-camera checks. Automatic
 acceptance remains separate. **Use Best Fit** applies that candidate through
 the same scene identity, input fingerprint and rollback boundary as accepted
 fits, keeps its calibration warning and reports before/after point RMSE. It
-does not publish local confidence intervals. Cancellation, time limits, invalid geometry,
-no improvement and failed startup do not produce this option. Actual Blender
+does not publish local confidence intervals. At that checkpoint cancellation,
+time limits, invalid geometry, no improvement and failed startup did not produce
+this option; the stopping-policy follow-up below adds time-limited candidates. Actual Blender
 Undo needs an interactive check; the native headless regression exercises the
 registered operator, stale edits and rollback, with controlled numerical output.
 
@@ -228,3 +229,51 @@ These results establish eligibility and application fidelity, not real-world
 calibration. The strict convergence tolerance is a separate measured opportunity;
 any relaxation needs independent shape, weak-evidence and parameter-stability
 checks before changing automatic acceptance.
+
+## Tested stopping tolerance and iteration headroom — 13 September 2026
+
+Production now uses `RELATIVE_COST_TOLERANCE=1e-7` instead of `1e-9` after an
+accepted step, normalized by `max(objective, 1)`. The iteration ceiling is 400;
+the optimization time budget remains 30 seconds. Depth, geometry, focal-bound,
+noise and uncertainty gates are unchanged. On time exhaustion, an improved
+physically checked endpoint can still be offered through Use Best Fit, with no
+additional pair-hint search. User cancellation continues to discard progress.
+
+Four paired bundle-only trials reused public archived starts and independent
+truth. Weak-axis uses `focal-constraint-reliability/run-04`, weak-mirror uses
+`run-01`. No Sync registration was repeated.
+
+| Control | Iterations, old → new | Point RMSE, old → new | Withheld shape RMSE, old → new |
+| --- | ---: | ---: | ---: |
+| Weak axis | 171 → 161 | 0.231935346 → 0.231935361 px | 1.13417 → 1.13315 px |
+| Weak mirror | 24 → 24 | 0.227990814 → same | 1.41811 → same |
+
+Both remain accepted with true focals inside every reported interval. Axis-plane
+RMS stays about 8.4e-9 world units; the mirror gap stays about 0.000122 world
+units. These two controls do not establish general confidence coverage.
+The new regression checks the weak-axis case with a 165-iteration test cap,
+independent withheld geometry, plane error and interval coverage; the old
+criterion required 171. The focused 95-test group, including existing weak,
+inconsistent and invalid-input controls and the new timeout regression, passes.
+
+Replay a paired control with new output directories and the appropriate archive:
+
+```sh
+python -m tools.synthetic_sync.focal_constraint_saved_start \
+  /tmp/focal-axis-new tools/synthetic_sync/cases/focal-constraint-reliability/run-04 \
+  --pair weak-axis-hard weak-axis-hard --relative-cost-tolerance 1e-7
+```
+
+Repeat with `1e-9` for the old criterion. The tool records the tolerance in both
+ledger metadata and the trial input, alongside source and endpoint artifacts.
+
+The earlier private 1.82 px case now passes at 164 iterations rather than
+refusing at 200. Compared with that 200-step endpoint, maximum focal change is
+0.259%, camera rotation change 0.016 degrees, and center displacement 0.160% of
+the reference baseline. A newer saved input with revised picks needs more
+headroom: 200 and 300 iterations still refuse, while 400 permits convergence at
+372 with 1.63016 px point RMSE. The bundle takes about 24 seconds in development
+Python and 27 seconds in Blender's runtime; both pass automatic acceptance.
+This establishes why the iteration cap also changed. One current full capture
+and four cached private bundle replays were used; no source blend was saved.
+The revised picks are not independent ground truth for real geometry.

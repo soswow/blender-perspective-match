@@ -70,6 +70,17 @@ class FocalCandidateTests(TestCase):
         self.assertEqual(result.reason, 'Cancelled')
         self.assertIsNone(result.candidate)
 
+    def test_time_limit_retains_an_improved_physical_candidate(self):
+        diagnostics = []
+        with mock.patch.object(focal_bundle.time, 'monotonic', return_value=0.) as clock:
+            def progress(step, *_):
+                if step == 2:
+                    clock.return_value = focal_bundle.MAX_SECONDS + 1.
+            result = self.fit(progress_callback=progress, diagnostic_callback=diagnostics.append)
+        self.assertIn('reached its time limit', result.reason)
+        self.assertEqual(diagnostics[0]['stop_reason'], 'time_limit')
+        self.check_candidate(result)
+
     def test_hard_geometry_failure_never_offers_a_candidate(self):
         from test_focal_orientation import OrientationFixtureTests
         # A post-fit hard-prior rejection is distinct from calibration refusal.

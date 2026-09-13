@@ -37,8 +37,9 @@ MAX_POINTS = 80
 MAX_LINES = 24
 MAX_LINE_STROKES = 96
 LINE_MIRROR_DIRECTION_HARD_SINE = 0.01
-MAX_ITERATIONS = 200
+MAX_ITERATIONS = 400
 MAX_SECONDS = 30.0
+RELATIVE_COST_TOLERANCE = 1.0e-7
 MIN_CANDIDATE_RELATIVE_GAIN = 1.0e-9
 FOCAL_BOUND_MARGIN = 1.0e-4
 MAX_LOG_METRIC_BASELINE_CHANGE = 10.0
@@ -835,7 +836,8 @@ def fit_independent_focals(
             if cancel_check and cancel_check():
                 return refuse("Cancelled")
             if time.monotonic() - start_time > MAX_SECONDS:
-                return refuse("Point focal fit reached its time limit")
+                stop_reason = "time_limit"
+                break
             if progress_callback:
                 progress_callback(iteration, MAX_ITERATIONS,
                                   "Estimating focal from landmarks" if line_ids else
@@ -855,15 +857,18 @@ def fit_independent_focals(
                 if cancel_check and cancel_check():
                     return refuse("Cancelled")
                 if time.monotonic() - start_time > MAX_SECONDS:
-                    return refuse("Point focal fit reached its time limit")
+                    stop_reason = "time_limit"
+                    break
                 try:
                     step = bounded_lm_step(
                         jac, residual, x, parameter_lower, parameter_upper, damping,
                         cancel_check=lambda: (bool(cancel_check and cancel_check()) or
                                               time.monotonic() - start_time > MAX_SECONDS))
                 except InterruptedError:
-                    return refuse("Cancelled" if cancel_check and cancel_check() else
-                                  "Point focal fit reached its time limit")
+                    if cancel_check and cancel_check():
+                        return refuse("Cancelled")
+                    stop_reason = "time_limit"
+                    break
                 trial_x = np.clip(x + step, parameter_lower, parameter_upper)
                 trial_residual, _, _ = residual_and_jacobian(trial_x, jacobian=False)
                 trial_cost = float(trial_residual @ trial_residual)
@@ -873,12 +878,14 @@ def fit_independent_focals(
                     damping = max(damping / 3.0, 1.0e-9)
                     accepted_step = True
                     relative_gains.append(relative_gain)
-                    if relative_gain < 1.0e-9:
+                    if relative_gain < RELATIVE_COST_TOLERANCE:
                         converged = True
                         stop_reason = "small_improvement"
                     break
                 damping *= 10.0
             iterations = iteration + 1
+            if stop_reason == "time_limit":
+                break
             if converged or not accepted_step:
                 converged = converged or not accepted_step and np.linalg.norm(gradient, ord=np.inf) < 1.0e-5
                 if not accepted_step:
@@ -903,6 +910,7 @@ def fit_independent_focals(
                 "iterations": iterations,
                 "converged": bool(converged),
                 "stop_reason": stop_reason,
+                "relative_cost_tolerance": RELATIVE_COST_TOLERANCE,
                 "initial_objective": float(initial_residual @ initial_residual),
                 "final_objective": float(endpoint_residual @ endpoint_residual),
                 "recent_relative_improvements": relative_gains[-10:],
@@ -939,6 +947,9 @@ def fit_independent_focals(
                 "Fitted focal reached the search bound for " + ", ".join(bounded) +
                 f"; candidate point RMSE {endpoint_rmse:.2f}px. "
                 "Check starting FOVs and image calibration before widening Lens Search %.")
+        elif stop_reason == "time_limit":
+            calibration_refusal = (
+                f"Point focal fit reached its time limit; candidate point RMSE {endpoint_rmse:.2f}px.")
         elif not converged:
             stopped = (f"reached the {MAX_ITERATIONS}-iteration limit" if stop_reason == "iteration_limit"
                        else f"no improving step found at iteration {iterations}")
@@ -1089,7 +1100,8 @@ def fit_independent_focals(
                 result_cals, sync_result, initial_rmse, fitted_rmse, "",
                 initial_objective, fitted_objective)
         if calibration_refusal:
-            hint = _conflict_hint(ids, observations, pick_sigma_px, cancel_check=cancel_check)
+            hint = ("" if stop_reason == "time_limit" else
+                    _conflict_hint(ids, observations, pick_sigma_px, cancel_check=cancel_check))
             if cancel_check and cancel_check():
                 return refuse("Cancelled")
             return refuse(calibration_refusal + hint, fitted=fitted_rmse, allow_candidate=True)
