@@ -32,7 +32,7 @@ def _inputs(name):
         calibration = geometry.Calibration(k, np.asarray(camera["rotation"], float),
                                            np.asarray(camera["center"], float))
         matches.append(lens_refine.MatchLensInput(
-            camera["id"], {}, k, base_calibration=calibration, freeze_focal=True))
+            camera["id"], {}, k, base_calibration=calibration, freeze_focal=False))
     observations = [sync.SyncObservation(**item) for item in case["request"]["observations"]]
     return case, matches, observations
 
@@ -168,7 +168,7 @@ class PointFocalBundleTests(TestCase):
                 self.assertIn(message, result.refusal_reason)
                 run.assert_not_called()
 
-    def test_mirrored_line_requires_picks_for_both_members_before_registration(self):
+    def test_mirrored_line_requires_represented_partner_before_registration(self):
         _case, matches, observations = _inputs("four-view")
         with mock.patch.object(lens_refine, "_run_sync") as run:
             outcome = lens_refine.refine_lenses_from_landmarks(
@@ -177,7 +177,7 @@ class PointFocalBundleTests(TestCase):
                 mirror_pairs=[("edge_a", "edge_b")],
                 mirror_plane=(np.zeros(3), np.array([1., 0., 0.])))
         self.assertFalse(outcome.improved)
-        self.assertIn("without two-view picks", outcome.refusal_reason)
+        self.assertIn("unrepresented landmark", outcome.refusal_reason)
         run.assert_not_called()
 
     def test_sparse_correspondence_conflict_does_not_accuse_when_full_fit_is_consistent(self):
@@ -433,17 +433,36 @@ class PointFocalBundleTests(TestCase):
         self.assertFalse(_fits_noise_model(np.asarray(errors), 83, 0.1))
         self.assertTrue(_fits_noise_model(np.asarray(errors), 83, 1.0))
 
-    def test_unsupported_constraints_and_same_lens_refuse_before_registration(self):
+    def test_supported_constraints_reach_registration_and_bad_line_refuses(self):
         _case, matches, observations = _inputs("four-view")
-        for option in (dict(share_lens=True), dict(known_world={"point_00": np.ones(3)}),
-                       dict(lock_rotation=True), dict(readonly_match_ids={"view_1"}),
-                       dict(line_observations=[sync.SyncLineObservation(
-                           "view_0", "edge_0", 0.0, 0.0, 1.0, 1.0)])):
-            with self.subTest(option=option), mock.patch.object(lens_refine, "_run_sync") as run:
+        refused = sync.SyncSolveResult(
+            similarities={}, landmarks={}, mean_reprojection_px=float("inf"),
+            per_match_rmse_px={}, per_landmark_rmse_px={},
+            message="Mocked initialization", success=False)
+        for option, forwarded in (
+            (dict(share_lens=True), None),
+            (dict(known_world={"point_00": np.ones(3)}), "known_world"),
+            (dict(lock_rotation=True), "lock_rotation"),
+            (dict(readonly_match_ids={"view_1"}), "readonly_match_ids"),
+        ):
+            with self.subTest(option=option), mock.patch.object(
+                    lens_refine, "_run_sync", return_value=refused) as run:
                 outcome = lens_refine.refine_lenses_from_landmarks(
                     matches, observations, anchor_id="view_0",
                     estimate_focal_from_points=True, **option)
                 self.assertTrue(outcome.point_focal_mode)
                 self.assertFalse(outcome.improved)
-                self.assertTrue(outcome.refusal_reason)
-                run.assert_not_called()
+                self.assertIn("Initial camera registration", outcome.refusal_reason)
+                run.assert_called_once()
+                if forwarded is not None:
+                    actual = (run.call_args.args[5] if forwarded == "known_world"
+                              else run.call_args.kwargs[forwarded])
+                    self.assertEqual(actual, option[forwarded])
+        with mock.patch.object(lens_refine, "_run_sync") as run:
+            outcome = lens_refine.refine_lenses_from_landmarks(
+                matches, observations, anchor_id="view_0",
+                estimate_focal_from_points=True,
+                line_observations=[sync.SyncLineObservation(
+                    "view_0", "edge_0", 0.0, 0.0, 1.0, 1.0)])
+            self.assertIn("two-view strokes", outcome.refusal_reason)
+            run.assert_not_called()

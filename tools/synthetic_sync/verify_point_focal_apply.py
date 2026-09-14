@@ -69,9 +69,7 @@ def check(out):
     for root in properties.iter_match_roots():
         root.pm_session.lines.clear()
         root.pm_session.origin_is_set = False
-    # An unsupported ground constraint must reach the numerical refusal
-    # without any automatic origin write during preparation.
-    space.landmarks[0].on_ground = True
+    # A free-scale point startup has no ground frame to establish.
     cached_root = properties.iter_match_roots()[0]
     cached = bpy.data.images.new("Generated cached undistorted plate", width=64, height=64)
     cached_root.pm_session.undistorted_image = cached
@@ -80,9 +78,7 @@ def check(out):
     cached_root.pm_session.undistorted_path = str(out / "generated-cache.png")
     cached_root.pm_session.view_undistorted = True
     scene._apply_camera_background(cached_root.pm_session)
-    with patch.object(scene, "ensure_origins_from_ground_landmarks",
-                      side_effect=AssertionError("Point mode prepared an origin")):
-        prep = scene.prepare_lens_refine(context)
+    prep = scene.prepare_lens_refine(context)
     assert prep.estimate_focal_from_points and prep.pick_sigma_px == 1.25
     assert prep.fx_span == 0.4
     assert all(not item.freeze_focal and not item.reorient_from_vp
@@ -207,6 +203,11 @@ def check(out):
         assert item.has_position and np.allclose(item.position, point, atol=1e-5)
     assert "approximate local 95%" in space.sync_status
     assert all(match_id in space.sync_status for match_id in intervals)
+    current_request = scene.collect_sync_request(context)
+    assert current_request.initial_solution is not None
+    assert (current_request.initial_solution.evidence_sha256 ==
+            current_request.evidence_sha256()), "Applied Refine lacks a certified continuation seed"
+    assert current_request.initial_solution.diagnostics is not None
 
     # Exercise the registered operator's real invoke/finish plumbing with a
     # stubbed refusal. No numerical entry point is called in this check.

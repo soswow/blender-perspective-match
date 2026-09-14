@@ -5,6 +5,14 @@ from __future__ import annotations
 import numpy as np
 
 
+def canonical_line_point(point: np.ndarray, direction: np.ndarray) -> np.ndarray:
+    """Represent an infinite line by its closest point to the local origin."""
+    unit = np.asarray(direction, float)
+    unit = unit / np.linalg.norm(unit)
+    point = np.asarray(point, float)
+    return point - float(point @ unit) * unit
+
+
 def line_frame(direction: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Return a stable orthonormal basis perpendicular to a unit direction."""
     axis = np.eye(3)[int(np.argmin(np.abs(direction)))]

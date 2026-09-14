@@ -255,6 +255,218 @@ class SyncReportTests(unittest.TestCase):
             self.assertEqual(exported.suffix, ".html")
             self.assertTrue(exported.is_file())
 
+    def test_applied_report_separates_point_and_line_error(self) -> None:
+        result = SimpleNamespace(
+            success=True, similarities={"anchor": object(), "side": object()},
+            landmarks={"point": object(), "line": object()},
+            mean_reprojection_px=2.0, point_rmse_px=2.0, line_rmse_px=7.5,
+            per_match_rmse_px={"anchor": 1.0, "side": 2.0},
+            per_match_point_rmse_px={"anchor": 1.0, "side": 2.0},
+            per_match_line_rmse_px={"side": 7.5},
+            per_landmark_rmse_px={"point": 2.0, "line": 7.5},
+        )
+        report = sync_report.build_sync_report(
+            operation="Solve Sync", source_name="generated.blend", result=result,
+            matches=[SimpleNamespace(match_id="anchor"), SimpleNamespace(match_id="side")],
+            observations=[_point("side", "point")],
+            line_observations=[SimpleNamespace(match_id="side", landmark_id="line")],
+            anchor_id="anchor", applied=True,
+            calibrations={"side": SimpleNamespace(hfov_degrees=51.25)},
+        )
+        self.assertEqual(report.point_rmse_px, 2.0)
+        self.assertEqual(report.line_rmse_px, 7.5)
+        self.assertEqual(report.matches[1].line_rmse_px, 7.5)
+        html = sync_report.render_sync_report_html(report)
+        self.assertIn("Applied to this scene", html)
+        self.assertIn("Point RMSE", html)
+        self.assertIn("Line RMSE", html)
+        self.assertNotIn("Solve RMSE", html)
+        self.assertIn("51.25° HFOV", html)
+
+    def test_refused_report_has_no_invented_errors(self) -> None:
+        report = sync_report.build_sync_report(
+            operation="Refine Lenses", source_name="generated.blend", result=None,
+            matches=[SimpleNamespace(match_id="anchor"), SimpleNamespace(match_id="side")], observations=[],
+            line_observations=[], anchor_id="anchor", applied=False,
+            evaluation_note="Focal fit refused",
+        )
+        self.assertIsNone(report.rmse_px)
+        html = sync_report.render_sync_report_html(report)
+        self.assertIn("Refine not applied", html)
+        self.assertIn("Not applied to this scene", html)
+        self.assertIn("Focal fit refused", html)
+        self.assertIn("<strong>—</strong>", html)
+        self.assertIn("Not assessed", html)
+        self.assertNotIn("could not register", html)
+
+    def test_partial_legacy_refine_describes_lens_application(self) -> None:
+        result = SimpleNamespace(
+            success=False, similarities={"anchor": object()}, landmarks={},
+            mean_reprojection_px=12.0, per_match_rmse_px={"anchor": 12.0},
+            per_landmark_rmse_px={}, message="Sync refused",
+        )
+        report = sync_report.build_sync_report(
+            operation="Refine Lenses", source_name="generated.blend", result=result,
+            matches=[SimpleNamespace(match_id="anchor")], observations=[],
+            line_observations=[], anchor_id="anchor", applied=False,
+            application_state="Lens settings applied; Sync geometry not applied",
+            calibrations={"anchor": SimpleNamespace(hfov_degrees=48.0)},
+        )
+        html = sync_report.render_sync_report_html(report)
+        self.assertIn("Lens settings applied; Sync geometry not applied", html)
+        self.assertNotIn("Not applied to this scene", html)
+        self.assertIn("48.00° HFOV", html)
+
+    def test_best_fit_report_stays_provisional(self) -> None:
+        result = SimpleNamespace(
+            success=True, similarities={"anchor": object()}, landmarks={},
+            mean_reprojection_px=2.0, per_match_rmse_px={"anchor": 2.0},
+            per_landmark_rmse_px={}, message="Provisional geometry",
+        )
+        report = sync_report.build_sync_report(
+            operation="Use Best Fit", source_name="generated.blend", result=result,
+            matches=[SimpleNamespace(match_id="anchor")], observations=[],
+            line_observations=[], anchor_id="anchor", applied=True,
+        )
+        self.assertEqual(report.outcome, "Provisional fit applied")
+        self.assertEqual(report.severity, "warning")
+
+    def test_common_removal_shows_same_support_objective_and_both_errors(self) -> None:
+        coverage = dict(
+            requested_point_picks=8, fitted_point_picks=7,
+            requested_line_strokes=3, fitted_line_strokes=2,
+            skipped_camera_ids=["side"], skipped_point_ids=[],
+            skipped_line_ids=["edge"], skipped_relation_ids=["parallel:edge:other"],
+        )
+        item = SimpleNamespace(
+            landmark_id="point", landmark_name="<suspect>", kind="point",
+            removed_relations=["mirror:point:edge", "plane:X:1:point"],
+            baseline_objective=120.0, candidate_objective=80.0,
+            baseline_point_rmse_px=2.0, candidate_point_rmse_px=3.0,
+            baseline_line_rmse_px=9.0, candidate_line_rmse_px=4.0,
+            baseline_valid=True, candidate_valid=True, reason="",
+            support_coverage=coverage,
+        )
+        common = SimpleNamespace(
+            items=[item], baseline_coverage=coverage, candidates_ranked=4,
+            incomplete=False, reason="",
+        )
+        result = SimpleNamespace(
+            success=True, similarities={"anchor": object(), "side": object()},
+            landmarks={"point": object()}, mean_reprojection_px=2.0,
+            per_match_rmse_px={"anchor": 2.0, "side": 2.0},
+            per_landmark_rmse_px={"point": 2.0},
+            common_leave_one_out=common,
+            leave_one_out=[("<suspect>", 8.0, 2.0)],
+        )
+        report = sync_report.build_sync_report(
+            operation="Investigate Problems", source_name="generated.blend",
+            matches=[SimpleNamespace(match_id="anchor"), SimpleNamespace(match_id="side")],
+            observations=[_point("anchor", "point", "<suspect>")],
+            line_observations=[SimpleNamespace(match_id="side", landmark_id="edge", landmark_name="<edge>")],
+            result=result, anchor_id="anchor", applied=False,
+            all_match_labels={"side": "Side camera"},
+        )
+        html = sync_report.render_sync_report_html(report)
+        self.assertIn("Independent removal checks", html)
+        self.assertIn("same surviving point and line evidence", html)
+        self.assertIn("120 → 80", html)
+        self.assertIn("2.00px → 3.00px", html)
+        self.assertIn("9.00px → 4.00px", html)
+        self.assertIn("mirror: &lt;suspect&gt;: &lt;edge&gt;", html)
+        self.assertIn("7/8 point picks fitted", html)
+        self.assertIn("2/3 line strokes fitted", html)
+        self.assertIn("skipped cameras: Side camera", html)
+        self.assertIn("4 ranked removal(s)", html)
+        self.assertIn("does not prove a pick or constraint is wrong", html)
+        self.assertNotIn("Some landmarks disproportionately affect", html)
+        self.assertNotIn("<suspect>", html)
+
+    def test_common_removal_refusal_and_incomplete_reason_are_explicit(self) -> None:
+        item = SimpleNamespace(
+            landmark_id="line", landmark_name="Line", kind="line",
+            removed_relations=[], baseline_objective=5.0,
+            candidate_objective=float("inf"),
+            baseline_point_rmse_px=1.0, candidate_point_rmse_px=0.0,
+            baseline_line_rmse_px=2.0, candidate_line_rmse_px=0.0,
+            baseline_valid=True, candidate_valid=False,
+            reason="Candidate lost camera support", support_coverage={},
+        )
+        result = SimpleNamespace(
+            success=True, similarities={"anchor": object()}, landmarks={},
+            mean_reprojection_px=1.0, per_match_rmse_px={"anchor": 1.0},
+            per_landmark_rmse_px={},
+            common_leave_one_out=SimpleNamespace(
+                items=[item], baseline_coverage=dict(
+                    requested_point_picks=2, fitted_point_picks=2,
+                    requested_line_strokes=1, fitted_line_strokes=1,
+                ), candidates_ranked=1, incomplete=True,
+                reason="Time budget reached before all removals",
+            ),
+        )
+        report = sync_report.build_sync_report(
+            operation="Investigate Problems", source_name="generated.blend",
+            matches=[SimpleNamespace(match_id="anchor")], observations=[],
+            line_observations=[], result=result, anchor_id="anchor", applied=False,
+        )
+        html = sync_report.render_sync_report_html(report)
+        self.assertEqual(report.outcome, "Investigation incomplete")
+        self.assertEqual(report.severity, "warning")
+        self.assertIn("Time budget reached before all removals", html)
+        self.assertIn("Before: valid · After: refused", html)
+        self.assertIn("Reason: Candidate lost camera support", html)
+        self.assertIn("5 → —", html)
+        self.assertNotIn("∞", html)
+
+    def test_joint_fit_partial_coverage_and_refusal_are_visible(self) -> None:
+        result = SimpleNamespace(
+            success=True, similarities={"anchor": object(), "side": object()},
+            landmarks={}, mean_reprojection_px=2.0,
+            per_match_rmse_px={"anchor": 2.0}, per_landmark_rmse_px={},
+            joint_support_coverage=dict(
+                requested_point_picks=10, fitted_point_picks=8,
+                requested_line_strokes=3, fitted_line_strokes=1,
+                skipped_camera_ids=["side"], skipped_point_ids=["point"],
+                skipped_line_ids=["edge"],
+                skipped_relation_ids=["mirror:point:edge"],
+            ),
+            joint_refusal_reason="Joint fit did not pass its support gate",
+        )
+        report = sync_report.build_sync_report(
+            operation="Solve Sync", source_name="generated.blend", result=result,
+            matches=[SimpleNamespace(match_id="anchor"), SimpleNamespace(match_id="side")],
+            observations=[_point("anchor", "point", "Point A")],
+            line_observations=[SimpleNamespace(match_id="side", landmark_id="edge", landmark_name="Edge B")],
+            anchor_id="anchor", applied=True,
+            all_match_labels={"side": "Side camera"},
+        )
+        html = sync_report.render_sync_report_html(report)
+        self.assertTrue(report.joint_support_partial)
+        self.assertEqual(report.severity, "warning")
+        self.assertIn("1/2 cameras fitted", html)
+        self.assertIn("8/10 point picks fitted", html)
+        self.assertIn("1/3 line strokes fitted", html)
+        self.assertIn("skipped cameras: Side camera", html)
+        self.assertIn("skipped relations: mirror: Point A: Edge B", html)
+        self.assertIn("Joint fit used partial evidence", html)
+        self.assertIn("Joint fit did not pass its support gate", html)
+        self.assertIn("Applied to this scene", html)
+
+    def test_last_report_stale_state_is_written_for_open_and_export(self) -> None:
+        report = self._partial_report()
+        with TemporaryDirectory() as directory:
+            path = sync_report.write_temp_report(
+                report, temp_root=directory, scene_uid=4, request_sha256="first",
+            )
+            self.assertFalse(sync_report.refresh_last_report(4, "first"))
+            self.assertTrue(sync_report.refresh_last_report(4, "changed"))
+            self.assertIn("Stale: scene inputs or cameras changed", path.read_text())
+            output = sync_report.export_last_report(Path(directory) / "export.html")
+            self.assertIn("Stale:", output.read_text())
+            self.assertFalse(sync_report.refresh_last_report(4, "first"))
+            self.assertNotIn("Stale: scene inputs", path.read_text())
+            sync_report.clear_last_report()
+
 
 if __name__ == "__main__":
     unittest.main()

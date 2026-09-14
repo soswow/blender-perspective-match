@@ -61,6 +61,7 @@ def verify(out: Path) -> None:
         )
 
     trial = result()
+    trial.calibrations = {anchor.name: scene.calibration_from_settings(anchor.pm_session)}
     assert scene._free_mirror_origin_offset(bpy.context, trial, anchor) is not None
 
     anchor.pm_session.origin_is_set = True
@@ -120,6 +121,11 @@ def verify(out: Path) -> None:
         for key, root in roots.items()
     ]
     applied = scene._apply_sync_solve_result(bpy.context, trial, matches)
+    np.testing.assert_allclose(
+        applied.calibrations[anchor.name].camera_center,
+        scene.calibration_from_settings(anchor.pm_session).camera_center,
+        atol=1e-7,
+    )
     after = projected(applied)
     for match_id in before:
         for landmark_id in before[match_id]:

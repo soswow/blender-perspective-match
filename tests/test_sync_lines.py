@@ -650,6 +650,8 @@ class LineSyncTests(unittest.TestCase):
             fixed_match_ids={"anchor", "near"},
             parallel_pairs=None,
             line_segments={},
+            initial_line_segments={},
+            seed_unchanged=False,
         )
         solve_module._rebuild_free_line_segments(locked_state)
         self.assertIn("edge", locked_state.line_segments)
@@ -669,6 +671,8 @@ class LineSyncTests(unittest.TestCase):
             fixed_match_ids={"anchor", "near"},
             parallel_pairs=None,
             line_segments=dict(locked_state.line_segments),
+            initial_line_segments={},
+            seed_unchanged=False,
         )
         solve_module._rebuild_free_line_segments(recovered_state)
         recovered_rms = _rms(recovered_state.line_segments["edge"], true_sim)

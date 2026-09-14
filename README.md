@@ -12,7 +12,7 @@ Native port of the manual workflow from Perspective Match Studio — no Electron
 - Adjusted Camera mode keeps live Blender or third-party pose/FOV edits when revisiting a match; a drifted Perspective Match camera offers Restore Stored or Capture Live instead of showing stale landmark px errors
 - Principal point from three VPs or manual offset; undistort from imported OpenCV D or estimated Fitzgibbon λ
 - Ground origin pick; multi-match sync via landmarks, Known 3D Empties (optional Known 3D Slack), Is in Plane buckets, Is Mirror Of pairs across a shared plane positioned by an Empty or a live point landmark, and AprilTag 25h9 / 36h10 (locked/imported K plus shared ground landmarks across 3+ images can replace VP lines)
-- Diagnose produces self-contained local HTML diagnostics with camera connectivity, match status, ranked landmark errors, and permanent report export
+- Solve Sync and Refine Lenses save local HTML reports with point and line errors, camera coverage, constraints, and permanent export; Open Last Report shows the latest result without solving again
 - Match state saved in the `.blend`
 
 ## Requirements

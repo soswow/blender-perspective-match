@@ -523,7 +523,7 @@ class PointFocalConstraintModelTests(TestCase):
                 self.assertEqual(run_bundle.call_args.kwargs["mirror_plane"],
                                  case["request"]["mirror_plane"])
 
-    def test_public_point_route_refuses_unsupported_inputs_before_sync(self):
+    def test_public_point_route_forwards_supported_priors_and_refuses_malformed_inputs(self):
         case = fixtures.generate("mirror-hard-offcenter")
         request = case["request"]
         matches = []
@@ -542,18 +542,52 @@ class PointFocalConstraintModelTests(TestCase):
                       estimate_focal_from_points=True, pick_sigma_px=case["pick_sigma_px"],
                       mirror_pairs=request["mirror_pairs"],
                       mirror_plane=request["mirror_plane"])
-        variants = (
-            ("one-view", one_view, {}, "at least two camera picks"),
+        supported = (
+            ("one-view", one_view, {}, "observations"),
+            ("Known 3D", observations, {"known_world": {"base_00": np.zeros(3)}},
+             "known_world"),
+            ("ground", ground, {}, "observations"),
+            ("pose lock", observations, {"lock_translation": True}, "lock_translation"),
+        )
+        refused = sync.SyncSolveResult(
+            similarities={}, landmarks={}, mean_reprojection_px=float("inf"),
+            per_match_rmse_px={}, per_landmark_rmse_px={},
+            message="Mocked initialization", success=False)
+        for label, picks, changes, forwarded in supported:
+            with self.subTest(label=label), mock.patch.object(
+                    lens_refine, "_run_sync", return_value=refused) as run_sync:
+                result = lens_refine.refine_lenses_from_landmarks(
+                    matches, picks, **{**common, **changes})
+                self.assertIn("Initial camera registration", result.refusal_reason)
+                run_sync.assert_called_once()
+                expected = picks if forwarded == "observations" else changes[forwarded]
+                actual = (run_sync.call_args.args[2] if forwarded == "observations"
+                          else run_sync.call_args.args[5] if forwarded == "known_world"
+                          else run_sync.call_args.kwargs[forwarded])
+                self.assertEqual(actual, expected)
+        cad_line = {"cad_edge": (np.array((-0.3, 0.0, 0.3)),
+                                 np.array((0.3, 0.0, 0.7)))}
+        one_stroke = [sync.SyncLineObservation(
+            "view_0", "mirror_edge", 120.0, 140.0, 260.0, 230.0)]
+        with mock.patch.object(lens_refine, "_run_sync", return_value=refused) as run_sync:
+            result = lens_refine.refine_lenses_from_landmarks(
+                matches, observations,
+                **{**common,
+                   "known_lines": cad_line,
+                   "line_observations": one_stroke,
+                   "mirror_pairs": [*request["mirror_pairs"],
+                                    ("mirror_edge", "cad_edge")]})
+            self.assertIn("Initial camera registration", result.refusal_reason)
+            run_sync.assert_called_once()
+            self.assertEqual(run_sync.call_args.args[6], cad_line)
+            self.assertEqual(run_sync.call_args.args[3], one_stroke)
+        malformed = (
             ("missing Mirror Empty", observations, {"mirror_plane": None}, "Mirror Empty"),
             ("unknown mirror member", observations,
-             {"mirror_pairs": [("base_00", "absent")]}, "without two-view picks"),
+             {"mirror_pairs": [("base_00", "absent")]}, "unrepresented landmark"),
             ("line", observations, {"line_observations": [object()]}, "Invalid line landmarks"),
-            ("Known 3D", observations, {"known_world": {"base_00": np.zeros(3)}},
-             "Known 3D"),
-            ("ground", ground, {}, "On Ground"),
-            ("pose lock", observations, {"lock_translation": True}, "pose locks"),
         )
-        for label, picks, changes, expected in variants:
+        for label, picks, changes, expected in malformed:
             with self.subTest(label=label), mock.patch.object(lens_refine, "_run_sync") as run_sync:
                 result = lens_refine.refine_lenses_from_landmarks(
                     matches, picks, **{**common, **changes})

@@ -776,7 +776,7 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             status = row.row(align=True)
             status.enabled = False
             status.label(
-                text=operators.diagnose_sync_activity_label() or "Diagnosing…",
+                text=operators.diagnose_sync_activity_label() or "Investigating…",
                 icon="TIME",
             )
             row.operator(
@@ -787,16 +787,11 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
         else:
             row.operator_context = "INVOKE_DEFAULT"
             row.operator("perspective_match.solve_sync", icon="FILE_REFRESH")
-            row.operator(
-                "perspective_match.diagnose_sync",
-                text="Diagnose",
-                icon="INFO",
-            )
             row.operator("perspective_match.clear_sync", text="Clear", icon="X")
         report_row = sync_body.row(align=True)
         report_row.operator(
             "perspective_match.open_sync_report",
-            text="Open Report",
+            text="Open Last Report",
             icon="URL",
         )
         report_row.operator(
@@ -804,6 +799,19 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             text="Export",
             icon="EXPORT",
         )
+        if operators.last_report_is_stale(context):
+            sync_body.label(text="Last report is stale; run Solve or Refine again", icon="ERROR")
+        advanced_header, advanced_body = _section(
+            sync_body, "PM_sync_advanced_diagnostics", "Advanced diagnostics",
+            "INFO", default_closed=True,
+        )
+        if advanced_body is not None:
+            advanced_body.operator_context = "INVOKE_DEFAULT"
+            advanced_body.operator(
+                "perspective_match.diagnose_sync",
+                text="Investigate Problems",
+                icon="VIEWZOOM",
+            )
         # Full-width rows — avoid property-split pushing controls to mid-panel.
         lock_row = sync_body.row(align=True)
         lock_row.use_property_split = False

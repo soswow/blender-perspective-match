@@ -5,13 +5,13 @@ When several matches show the same scene, register them into one Blender world.
 ## Overview
 
 1. Match each still on its own (VP lines; Origin optional), or start with camera calibration and shared point picks using one of the no-VP workflows below. Origins do **not** need to match across stills.
-2. Choose an **Anchor** match — that world is shared space. Each match has **Enable sync for current match** (on by default); turn it off to exclude that still from Solve Sync / Diagnose / Refine Lenses. **This Camera** chooses how a non-anchor match participates: **Solve** (default) lets Sync move the camera and 3D; **Lock Pose** keeps the current root transform (location, rotation, and scale) while its picks still constrain landmarks and the other cameras; **Fit Only** skips pairwise and only fits this camera against 3D from the other matches. The Anchor is already fixed, so the row is disabled there. After **Solve Sync**, the Enable row shows **Synced** or **Not synced** for the active match: whether this still was registered in the last run. A later run that skips it (or **Clear**) removes the check.
+2. Choose an **Anchor** match — that world is shared space. Each match has **Enable sync for current match** (on by default); turn it off to exclude that still from Solve Sync / Investigate Problems / Refine Lenses. **This Camera** chooses how a non-anchor match participates: **Solve** (default) lets Sync move the camera and 3D; **Lock Pose** keeps the current root transform (location, rotation, and scale) while its picks still constrain landmarks and the other cameras; **Fit Only** skips pairwise and only fits this camera against 3D from the other matches. The Anchor is already fixed, so the row is disabled there. After **Solve Sync**, the Enable row shows **Synced** or **Not synced** for the active match: whether this still was registered in the last run. A later run that skips it (or **Clear**) removes the check.
 3. Add landmarks for features visible in two or more stills (≥5 shared 2D picks), **or** link **Known 3D** Blender objects (≥3) and pick them in the other stills. Optional: pair one-sided features with **Is Mirror Of** and one scene **Mirror Empty**.
 4. Pick each landmark in every still where it is visible. With the **Perspective Match** sidebar tab open and the view through the active match camera, **Ctrl+Cmd+A** (macOS; **Ctrl+Win+A** on Windows/Linux) starts **Pick in Active Match**. Optional: enable **Snap to AprilTag** (under **Pick in Active Match**) so a point click on a small or blurry marker snaps to the tag centre — the intersection of the dark quadrilateral's diagonals — without needing the marker to decode.
 5. Optional: tag **On Ground** on point landmarks in the anchor, or rely on Known 3D, to pin absolute scale.
 6. **Solve Sync** writes a rigid (or similarity) transform onto non-anchor root Empties. Landmark px errors are vs each still's stored camera. If the Blender camera object was moved off that pose, the Camera section warns and hides those numbers until **Restore Stored** or **Capture Live**.
 
-Use **Lock Pose** after a good solve when you want to add or tune landmarks without letting a trusted match drift. The lock uses the live root Empty transform at the start of each operation and applies to Solve Sync, Diagnose, and the sync solves inside Refine Lenses. It is an exact freeze, not a warm start: **Solve** and **Fit Only** matches are solved from their correspondences, without treating the current root placement as a pose prior. Leave **Solve** selected when Sync should refine that camera. **Fit Only** skips pairwise and resects against the cloud built from the remaining matches. For **line** landmarks, two or more pose-locked picks on the same edge still pin helper length so a far still cannot stretch the mesh; the infinite 3D line itself is the best-conditioned intersection of the strokes (a locked near-duplicate view cannot pin it at the wrong depth). After Solve Sync places a recovered still, free lines are re-intersected so that still’s stroke can pin depth instead of keeping the locked-pair miss — only when This Camera is Solve or Lock Pose. A mirrored partner is refit from every posed stroke that may move 3D (near-duplicate locked views are dropped), so Is Mirror Of cannot put the helper back on the locked-only depth. Stills you are still tuning then move to that line. **Clear Sync** still resets every root transform explicitly.
+Use **Lock Pose** after a good solve when you want to add or tune landmarks without letting a trusted match drift. The lock uses the live root Empty transform at the start of each operation and applies to Solve Sync, Investigate Problems, and Refine Lenses. It is an exact freeze, not a warm start: **Solve** and **Fit Only** matches may start from their current solution, but their current root placement is not a pose constraint. Leave **Solve** selected when Sync should refine that camera. **Fit Only** skips pairwise and resects against the cloud built from the remaining matches. For **line** landmarks, two or more pose-locked picks on the same edge still pin helper length so a far still cannot stretch the mesh; the infinite 3D line itself is the best-conditioned intersection of the strokes (a locked near-duplicate view cannot pin it at the wrong depth). After Solve Sync places a recovered still, free lines are re-intersected so that still’s stroke can pin depth instead of keeping the locked-pair miss — only when This Camera is Solve or Lock Pose. A mirrored partner is refit from every posed stroke that may move 3D (near-duplicate locked views are dropped), so Is Mirror Of cannot put the helper back on the locked-only depth. Stills you are still tuning then move to that line. **Clear Sync** still resets every root transform explicitly.
 
 Why not “any corresponding points”? Photogrammetry / SfM solves relative orientation and baseline *direction* from enough 2D↔2D matches — and so does this sync. Absolute baseline **length** stays free when dropping the second camera into an already-metric Blender world (classic stereo scale ambiguity), so pairwise pose validation does not use an absolute Blender-unit baseline cutoff. During each two-view pose fit, Sync holds one arbitrary baseline length fixed so noisy picks cannot make the ray-distance fit look better by shrinking the cameras together; this does not supply metric scale. **Known 3D** Empties, On Ground picks, or a later ruler pin that one DOF; without them, a depth heuristic chooses a plausible scale. The result’s **constraints** list describes the available geometric evidence. Unknown shared planes, free image lines and parallel directions can improve shape or pose while leaving absolute size undetermined. Constraint counts do not prove metric accuracy.
 
@@ -75,7 +75,8 @@ strokes and geometric constraints, using their weights and slack settings. The
 solver does not know the true FOVs or a final error value in advance. Point RMSE
 is one part of that score: satisfying a plane or mirror relation can slightly
 increase point error while improving the combined fit. Startup registration
-uses points alone, so its smaller point error can accompany worse constraints.
+provides an initial estimate; its headline point error does not measure the
+complete point, line and constraint objective.
 
 “Converged” means nearby adjustments have become sufficiently unhelpful under
 the numerical stopping checks. It is separate from image accuracy and does not
@@ -151,21 +152,27 @@ that assumption, not a guarantee of correct geometry or a search for every
 possible solution. Inspect features you did not pick, and add translated views
 or better-spread picks when the ranges remain broad.
 
-This mode supports 3–32 cameras and 8–80 point landmarks, with at
-least eight picks per camera and at least two views per point. It requires
-square-pixel pinhole calibration, zero distortion and a fixed principal point.
-The camera ceiling is a resource guard for the current dense numerical fit,
-not a mathematical maximum. All participating views are fitted jointly; no
-overlapping batches are necessary within this limit. Larger sets may take
-longer to register, and the subsequent focal fit retains its time limit.
-It refuses unsupported constraints instead of ignoring them: Known 3D, On
-Ground, VP strokes, pose locks and Fit Only belong to the existing Sync/lens
-workflows. It does
-not estimate distortion or unknown crop offsets. If the shared picks can be
-explained by planar geometry or rotation without reliable depth evidence, the
-mode declines to change the cameras. A successful result applies the jointly
-fitted cameras, points and lines together; a refusal initially leaves the existing scene intact.
+Joint fitting keeps the principal point and supplied distortion coefficients
+fixed. It preserves the focal aspect ratio when changing focal scale, including
+imported nonsquare calibration. Known 3D points and lines, On Ground, camera
+roles and pose locks retain their Sync meanings. VP-derived calibrations can
+supply the starting camera orientation. These features are not discarded to
+make a focal fit eligible.
+
+Free self-calibration still needs sufficient independent information about
+camera motion and object depth. Known geometry and pose constraints can supply
+information that free image correspondences lack; acceptance checks the active
+fit rather than assuming every point must be a free two-view landmark. A good
+pixel fit alone does not establish focal certainty. The fitter does not estimate
+distortion or unknown crop offsets. An accepted result applies its fitted
+calibrations, cameras, points, and lines together; a refusal leaves the current
+joint solution intact until an eligible best fit is explicitly chosen.
 Without an external reference, scale remains arbitrary.
+
+Free-focal fitting is bounded to 32 cameras and 80 reconstructed points, plus
+the line limits below. Fixed-focal Solve can fit larger graphs in blocks, with
+a memory and time limit. Resource refusals and excluded evidence are reported;
+they do not silently remove constraints to obtain a successful fit.
 
 **Use Best Fit** appears after a completed fit if its combined error improved and
 it passed the physical geometry and per-camera deterioration checks, but
@@ -191,26 +198,26 @@ overwriting your edits. After using it, Refine Lenses can start a fresh search
 around the new focal lengths; this is not a guarantee that another run improves
 the result or resolves a repeatedly saturated bound.
 
-Line strokes supplement the shared point picks; they do not replace the eight
-point picks required per camera for startup and the depth-evidence check. The
+Line strokes contribute alongside shared point picks and known geometry. The
 fit uses distance to an infinite projected line: mark any clearly visible
 portion of the same straight edge, in either drawing direction. Endpoints do
 not need to identify the same physical locations across images. Assumed Pick
 Error also applies to the perpendicular error of each stroke endpoint.
 Ordinary free lines and line-to-line **Is Mirror Of** pairs are supported.
-This first implementation allows up to 24 lines and 96 strokes per fit.
+Free-focal fitting allows up to 24 lines and 96 strokes per fit; these are
+resource limits, not requirements for a well-determined reconstruction.
 A line needs two-view strokes, or a reconstructed mirror partner to supply its
-geometry. Known 3D lines and mixed point/line mirror pairs remain unsupported.
+geometry. Known 3D lines supply fixed geometry; mixed point/line mirror pairs are invalid.
 Degenerate or inconsistent line evidence can
 cause a refusal even when the point-only fit would pass.
 
 Line **Is in Plane** and **Is Parallel To** also participate in this joint fit:
 
-- Put a line and at least one picked point in the same **X/Y/Z #** group to
-  establish the shared coordinate. For **Free #**, include at least three
-  non-collinear picked points in that group. Each supporting point still needs
-  two-view picks. The supporting plane follows those points during fitting;
-  they do not become Known 3D. Line-only plane groups are not supported here yet.
+- A line plane needs independently located members in the same group: one
+  member for **X/Y/Z #**, or three non-collinear members for **Free #**. Fitted
+  points and fixed Known 3D line references can provide this support. Free
+  lines cannot establish their own supporting plane. A plane supported by
+  fitted points follows them during fitting; they do not become Known 3D.
 - A plane constrains both the line's position and direction. **Plane Slack**
   softens position, while the line must still run along the plane. Plane Slack
   is not an angular tolerance.
@@ -228,19 +235,17 @@ they cannot guarantee recovery from a wrong principal point or lens model.
 Use Free planes and line-to-line parallelism when world orientation is unknown;
 X/Y/Z planes and axes assert that the object is already aligned to those world
 directions in the anchor frame.
-The independent focal fit currently holds the anchor camera's orientation
-fixed. If that orientation is only an initial guess, a valid equal-height
-relation on the object may disagree with Blender's world Z. Changing focal
-length alone cannot generally repair that frame mismatch. A Free plane
-expresses coplanarity without asserting world alignment; use it only when
-that matches the intended evidence, not to discard a known physical direction.
+A Free plane expresses coplanarity without asserting world alignment. Use it
+when that matches the intended evidence. Changing focal length alone cannot
+generally repair a mismatch between a guessed starting frame and a known world
+direction; the joint fit can adjust the observable orientation freedoms below.
 
 Point landmarks may use **Is in Plane** (X/Y/Z or Free) and **Is Mirror Of**
 with a supplied **Mirror Empty** or an on-plane **Mirror Landmark**. Plane Slack and Mirror Slack keep their
 existing meanings: plane membership can be softened, and Mirror Slack lets
 the effective mirror plane slide along its normal relative to the selected object or live landmark.
-Each member still needs picks in at least two cameras; the one-view constrained
-reconstruction available in ordinary Sync is not part of this FOV mode.
+A one-view point can participate when current Known 3D, ground, or a supported
+hard plane determines its depth. Fit Only views cannot supply that depth.
 Point-only Free groups need four members to constrain coplanarity; point-only
 axis groups need two. Point-supported line planes use the requirements above.
 Plane and mirror relations are enforced in the joint fit after preliminary
@@ -255,8 +260,9 @@ the relations do not measure retain a starting-frame convention; two points in
 one axis bucket constrain less rotation than a fully supported plane. Free
 coplanarity and line-to-line parallelism alone keep the original anchor orientation.
 The fitted anchor orientation is stored in its camera calibration, so the next
-Sync uses the corrected frame. This applies to **Estimate FOV from Landmarks**;
-ordinary Sync and VP-based refinement retain their existing anchor rules.
+Sync uses the corrected frame. The common final fit uses these orientation
+freedoms with either fixed or free focals. Explicit camera locks and world
+references can remove those freedoms.
 
 The joint fit allows up to 400 iterations within a 60-second time
 limit; preliminary camera registration has separate work limits. Weak setups
@@ -272,7 +278,7 @@ image alignment. A landmark can supply the plane position, but its orientation m
 supplied. Inferring that orientation from mirror pairs remains a separate
 workflow question.
 
-The eight-pick minimum is an eligibility rule, not an accuracy guarantee.
+Passing the eligibility and uncertainty checks is not an accuracy guarantee.
 Frozen tests include successful exact and noisy 12- and 16-landmark sets with
 partial overlap, but noisy focal errors can still approach 10% while lying
 inside the reported intervals. More points on the same weak part of the object
@@ -284,7 +290,7 @@ wrong landmark, prove a mismatch, or change whether a result is accepted.
 
 ### Calibrated ground-only workflow (no VP lines)
 
-When the anchor has no usable VP solve, **Solve Sync** and **Diagnose** can initialize its ground frame directly from calibrated views:
+When the anchor has no usable VP solve, cold **Solve Sync** and **Refine Lenses** can initialize its ground frame directly from calibrated views. A usable applied solution retains its fitted frame:
 
 1. Give the anchor and at least two supporting matches (three images total) a complete locked K — Manual FOV, imported camera-info YAML, or 1-point mode. Imported `fx`, `fy`, `cx`, `cy`, distortion, and plate dimensions are all used.
 2. Mark at least four well-spread, non-collinear point landmarks **On Ground** and pick the same landmarks in each image. Five or six are recommended so a bad pick can be rejected.
@@ -302,7 +308,7 @@ Each landmark keeps a stable `item_id` plus a `creation_index` (add order). UI h
 - **Font** toggle: show landmark names next to picks on the plate.
 - Click a pick on the plate to select it in the list (while the **Perspective Match** sidebar tab is open). The selected pick draws in red. **On Ground** picks draw in magenta; Known 3D picks in cyan.
 - **Duplicate**: copies type / On Ground / Is in Plane / Use in Sync / Sync Weight, clears Known 3D links, parallel links, mirror links, picks, and solved positions. The new name flips a trailing left/right or top/bottom, or increments a trailing ` 3`-style number, when that name is free; otherwise it appends `copy`.
-- **Use in Sync**: exclude a landmark from Solve Sync / Diagnose without deleting picks. With **Landmark Empties** on, that also removes its helper from `PM_Sync_Landmarks`.
+- **Use in Sync**: exclude a landmark from solving and investigation without deleting picks. With **Landmark Empties** on, that also removes its helper from `PM_Sync_Landmarks`.
 - **Sync Weight**: how strongly this landmark pulls Solve Sync (default 1). Raise it on a couple of well-placed picks that sit far from the others so a cluster of easier landmarks cannot ignore them. Combines with per-still **Pick Confidence** (High ×4, Low ×0.25). Boosted landmarks also skip the usual “this pick looks like an outlier” downweight. Weight influences pose refinement and candidate ranking; camera acceptance and mismatched-pick diagnostics remain in raw image pixels.
 
 ### Find AprilTags
@@ -336,12 +342,12 @@ keeps the plane through the fitted reference; positive slack allows a normal
 offset from it. Moving an orientation object does not move the plane; rotating
 it changes the supplied normal. The solve never moves that object.
 
-Ordinary Sync needs the reference picked in at least two cameras allowed to
-contribute 3D, or explicitly linked as Known 3D. Point-FOV fitting needs at least
-two picked views and retains its existing point-only restrictions. Missing,
+The reference needs picks in at least two cameras allowed to contribute 3D,
+or an explicit Known 3D reference. The same reference identity and support
+rules apply to joint focal fitting. Missing,
 excluded, line or paired references are refused rather than replaced with a
 static plane. Rename/reorder keeps the selection by landmark identity; after
-deleting it, choose a replacement. Diagnose keeps the reference in place during
+deleting it, choose a replacement. Investigation keeps the reference in place during
 leave-one-out checks because removing it would change the mirror model.
 
 A free reconstructed landmark supplies position, not orientation or measured scale. The normal
@@ -370,9 +376,12 @@ A point or line landmark can join an **Is in Plane** bucket: **X**, **Y**, or **
 
 With **Plane Slack = 0**, a point picked in one **Solve** or **Lock Pose** camera can also be placed using its plane bucket. X/Y/Z need at least one other reconstructed member to establish the shared coordinate; Free needs at least three other non-collinear members to establish the plane. The camera must already be placed. A grazing ray, an intersection behind the camera, insufficient support, or a Fit Only pick does not supply a new point this way. This route currently handles points and hard planes only.
 
-Diagnose labels these points **Plane + one view**. Their depth follows your plane constraint; a small pick error does not independently verify it. A pick in another camera allowed to contribute 3D adds a separate geometric check. Removing the plane or making the only contributing camera Fit Only removes the point unless other evidence determines it.
+The report labels these points **Plane + one view**. Their depth follows your plane constraint; a small pick error does not independently verify it. A pick in another camera allowed to contribute 3D adds a separate geometric check. Removing the plane or making the only contributing camera Fit Only removes the point unless other evidence determines it.
 
 A hard plane established independently by other reconstructed geometry also helps fit existing free lines, including mirrored pairs. The line is fitted within the plane using its strokes. A compatible world-axis or Known 3D **Is Parallel To** direction remains fixed while fitting a free line inside that plane; incompatible directions cannot be enforced together. Compatible planes on mirrored partners preserve both plane membership and reflection. Free lines and points whose depth comes from that plane alone do not count as independent plane support for this check. This does not add reconstruction of an ordinary line with only one stroke.
+
+The common final fit keeps the whole infinite line parallel to its hard plane.
+Changing which portion is displayed cannot introduce a new plane violation.
 
 Mirrored lines also retain a compatible **Is Parallel To** direction supplied by a world axis or a **Known 3D** edge. When a supported hard plane applies, reconstruction keeps that direction, plane membership and reflection together. A fixed direction alone does not determine the line's position: nearly coincident reflected strokes can still produce a **Weak 3D line support** warning. Nonzero Plane Slack does not turn the plane into a hard depth reference.
 
@@ -398,7 +407,9 @@ its own pick errors if its evidence conflicts with the rest. This check protects
 existing point fits; it does not establish that every camera or 3D feature is
 accurate.
 
-**Solve Sync** seeds pairwise pose then runs a joint bundle-adjustment over Empty transforms + landmarks (Huber-weighted, with extra influence on poorly covered regions of each still so a cluster of central picks cannot ignore a few near the edge that pin camera distance). Raise **Sync Weight** on a landmark when those automatic boosts are not enough. Pairwise growth starts from the geometrically strongest still pair (spread, overlap, parallax, pair RMSE) and adds the easiest next camera — never alphabetical names, and not every still vs the Anchor just because it shares five picks. With only free 2D points and no pose locks, it connects the pair's better-spread member to the Anchor first, then compares each later direct-Anchor pose with bridges through registered views so a few matching pixels cannot pull the graph apart. The Anchor remains the shared world. 3D landmarks are triangulated from all registered rays, with near-parallel views downweighted, behind-camera views dropped, and a short reprojection polish. Options between Solve Sync and Refine Lenses:
+**Solve Sync** uses a usable current solution as its starting point. With unchanged captured evidence, it retains that solution if a proposed replacement loses support, fails geometric checks, or worsens the common point/line/constraint objective. Changed evidence can use the old poses as a starting guess, but is evaluated against the new picks and constraints.
+
+For a cold or incomplete start, Sync seeds pairwise pose then runs a joint bundle-adjustment over Empty transforms + landmarks (Huber-weighted, with extra influence on poorly covered regions of each still so a cluster of central picks cannot ignore a few near the edge that pin camera distance). Raise **Sync Weight** on a landmark when those automatic boosts are not enough. Pairwise growth starts from the geometrically strongest still pair (spread, overlap, parallax, pair RMSE) and adds the easiest next camera — never alphabetical names, and not every still vs the Anchor just because it shares five picks. With only free 2D points and no pose locks, it connects the pair's better-spread member to the Anchor first, then compares each later direct-Anchor pose with bridges through registered views so a few matching pixels cannot pull the graph apart. The Anchor remains the shared world. 3D landmarks are triangulated from all registered rays, with near-parallel views downweighted, behind-camera views dropped, and a short reprojection polish. Options between Solve Sync and Refine Lenses:
 
 - **Lock Rotation** — keep each Empty’s rotation on a 90° world-axis jump (identity, ±90°, 180° about X/Y/Z, including an X/Y swap); only solve translation/scale. Use when VP axes already match across stills so a free solve would only add a few degrees of noise.
 - **Lock Translation** — keep Empty translation fixed; only solve rotation/scale.
@@ -408,15 +419,38 @@ accurate.
 - **Plane Slack** — how far **Is in Plane** landmarks may leave their shared plane (scene units). 0 (the default) pins them. A small value lets a slightly warped wall or table flex.
 - **Mirror Empty / Plane / Mirror Slack** — one object whose chosen local face is the shared mirror for every **Is Mirror Of** pair. Slack 0 pins the plane to the Empty; a small value lets it slide along the normal. The Empty is not moved. Mirror Slack sits beside Plane Slack.
 
-**Diagnose** measures sync quality without moving cameras, then opens a self-contained local HTML report in the default browser. The report leads with actionable problems, shows an interactive camera-overlap graph (pan, zoom, drag; hover a link for the shared-point count), names the best available registration route and its shared-point deficit, lists every match in a sortable table, and provides a searchable error-ranked landmark table. Technical solver text and constraint counts stay available in collapsible sections. **Open Report** reopens the newest temporary report; **Export** saves that single portable HTML file permanently. Reports use Blender's configured temporary directory, contain no remote resources, and are not uploaded.
+**Solve Sync** and **Refine Lenses** save a self-contained local HTML report
+when an operation finishes. They do not open the browser automatically.
+**Open Last Report** opens the latest report without running another solve;
+**Export** saves a permanent copy. Reports contain no remote resources and are
+not uploaded.
 
-Diagnose checks that its Sync inputs and active scene still match when the background job finishes. If picks, constraints, camera roles or other solver inputs changed, it keeps the current landmark errors and asks you to run Diagnose again. Unrelated modeling edits do not invalidate the job. Loading another file cancels the old Diagnose, Solve Sync and Refine Lenses jobs and allows a new job to start; old completion/cancel callbacks cannot take over the new job.
+The report identifies the operation and whether its result was applied. Point
+and line errors are separate, with per-camera details, camera and landmark
+coverage, constraint warnings, an interactive camera-overlap graph, and a
+searchable landmark table. Error numbers on the visible landmarks belong to
+the applied result. A failed fit or a diagnostic trial does not replace those
+numbers with errors from different cameras or geometry. After input edits, the
+saved report is marked outdated; it still describes the captured result.
 
-**Solve Sync** registers cameras in the same background way: the Solve row shows the current stage (including how many cameras are already posed) and elapsed time, and **Esc** or **Cancel** stops it. There is no cursor progress overlay. If picks, constraints, camera roles or other solver inputs change while it runs, it keeps the current cameras and asks you to run Solve Sync again. Unrelated modeling edits do not invalidate the job. Scripted `execute()` still runs blocking on the main thread. **Iterate Known 3D** still steps one blocking Solve Sync round per timer tick.
+**Investigate Problems** is an optional diagnostic operation. It uses the same
+final fitter, then can temporarily omit individual landmarks to assess their
+influence. Each comparison scores the same surviving evidence before and after
+the trial, with separate point, line and combined scores. The report lists any
+relations removed with a feature; improvement does not prove the feature is
+wrong. These checks are limited to five candidates and 60 seconds, and report
+incomplete work explicitly. The trial is not applied. This operation is not
+needed to obtain the report from the last Solve or Refine operation.
 
-When error is high, Diagnose also runs leave-one-out checks on the worst landmarks. It runs in the background: the Diagnose row shows the current solve stage and elapsed time, and **Esc** or **Cancel** stops it. There is no cursor progress overlay, because most of the work happens before the first coarse stage completes. Leave-one-out keeps the camera graph accepted by the base solve, so a rejected still is not globally re-registered five more times. HTML reports belong to **Diagnose** only; **Solve Sync** keeps its normal Blender status and does not create or open a report. **Clear** resets sync transforms and forgets the current report link. Diagnose and Solve Sync cache each still-pair pose so a second run skips the expensive pairwise search when those two cameras' shared picks, Known 3D, and private K/pose are unchanged; **Clear** drops that cache. Independent still pairs on the first run are solved in parallel.
+Solve, Refine, and investigation run in the background with activity and elapsed
+time in the sidebar. **Esc** or **Cancel** stops the active operation. Changed
+picks, constraints, camera roles, or other numerical inputs invalidate a
+pending result; unrelated modeling edits do not. Loading another file retires
+the old jobs so late callbacks cannot overwrite the new scene. **Clear** resets
+Sync transforms and forgets the current report link. Scripted execution remains
+available without modal window-manager plumbing.
 
-**Refine Lenses** searches focal length to lower reprojection error across supported point picks. The **Same Lens** checkbox and **%** field sit above the button. **Same Lens** (on by default) applies one scale to every still — use this when they share a physical camera / imported YAML; it does not need VP lines. Off normally uses a per-still VP search (re-orients from VP lines, skips 1-point / weak-VP stills). Coupled polish and Solve Sync follow, retaining the same plane groups, Plane Slack and other geometric constraints as Solve Sync. Alternatively, enable **Estimate FOV from Landmarks** for the independent no-VP workflow above; that mode applies the joint camera/point fit directly and supports point plane/mirror relations, with the limits above. Both run in a background thread — watch the progress slider, press **Esc** or **Cancel** to stop. The % field is the ± search window around current fx (default 18 for the existing searches, 40 for point FOV estimation). Disable unrelated matches or landmarks before refining a subset. Matches in **Adjusted Camera** mode are skipped so the button stays available for the others.
+**Refine Lenses** searches focal length to lower reprojection error across supported point picks. The **Same Lens** checkbox and **%** field sit above the button. **Same Lens** (on by default) applies one scale to every still — use this when they share a physical camera / imported YAML; it does not need VP lines. Off normally uses a per-still VP search (re-orients from VP lines, skips 1-point / weak-VP stills). Coupled polish and Solve Sync follow, retaining the same plane groups, Plane Slack and other geometric constraints as Solve Sync. Alternatively, enable **Estimate FOV from Landmarks** for the independent no-VP workflow above; that mode applies the common joint camera, point and line fit directly, with the supported constraints and resource limits above. Both run in a background thread — watch the progress slider, press **Esc** or **Cancel** to stop. The % field is the ± search window around current fx (default 18 for the existing searches, 40 for point FOV estimation). Disable unrelated matches or landmarks before refining a subset. Matches in **Adjusted Camera** mode are skipped so the button stays available for the others.
 
 For the existing shared/VP searches, the lens score includes recovered stills whose errors may be excluded from Solve Sync’s joint headline. Once a successful candidate exists, later candidates must keep its registered cameras and reconstructed points/lines and remain successful. An initially refused solve can still improve its lenses, even if Sync continues to refuse. Line-only searches retain their existing line score. Point FOV estimation automatically applies only an accepted joint result; **Use Best Fit** explicitly applies an eligible provisional candidate with its warning.
 
@@ -430,15 +464,15 @@ The eye icon on **Sync Matches** toggles landmark picks on the plate (same patte
 
 ## Debugging a bad or rejected sync
 
-- **Rejected (~40+ px)** — no pose fits your picks. Status / **Diagnose** lists the worst landmarks — re-pick those features in *both* stills.
-- **Plenty of picks, still rejected** — On Ground is load-bearing. Only landmarks that actually lie on the ground plane should be On Ground. A still that cannot lock is skipped so the others can still sync. After the remaining cameras lock, that still is retried as PnP against their triangulated 3D (floor tags alone if off-plane picks disagree). Diagnose / Solve Sync name the skipped match, and if one pick disagrees with the other stills they name that landmark (uncheck **Use in Sync** or re-pick it). A photo looking straight down at the ground is registered from those On Ground picks (plane homography); generic 2D↔2D pose is a poor fit there even when the tags are correct. If a portrait locked K was copied onto a landscape still of the same pixel count, Import YAML / copy keep the calibrated focal length (axes swap). Solve Sync sets fy=fx when they differ by more than 20%.
-- **Accepted but camera looks wrong** with RMSE still a few–tens of px — wrong local minimum or soft constraints. Prefer **Diagnose**, fix the worst landmarks, **Clear**, then **Solve Sync** again. If a few picks far from the main cluster look sacrificed while the rest sit perfectly, raise those landmarks' **Sync Weight** (try 4–8) and solve again. Matches without Origin but with On Ground picks get an auto Origin on Sync; if tilt persists, add an elevated (off-ground) landmark or a 4th ground pick.
+- **Rejected (~40+ px)** — no pose fits your picks. Status / **Open Last Report** lists the worst landmarks — re-pick those features in *both* stills.
+- **Plenty of picks, still rejected** — On Ground is load-bearing. Only landmarks that actually lie on the ground plane should be On Ground. A still that cannot lock is skipped so the others can still sync. After the remaining cameras lock, that still is retried as PnP against their triangulated 3D (floor tags alone if off-plane picks disagree). The report and Solve Sync name the skipped match, and if one pick disagrees with the other stills they name that landmark (uncheck **Use in Sync** or re-pick it). A photo looking straight down at the ground is registered from those On Ground picks (plane homography); generic 2D↔2D pose is a poor fit there even when the tags are correct. If a portrait locked K was copied onto a landscape still of the same pixel count, Import YAML / copy keep the calibrated focal length (axes swap). Cold registration repairs a stored fx/fy stretch above 20%; continuation keeps the accepted calibration.
+- **Accepted but camera looks wrong** with RMSE still a few–tens of px — wrong local minimum or soft constraints. Open the last report and review the largest residuals. Use **Investigate Problems** for additional trials; correct the evidence and solve again. **Clear** forces a fresh registration if the current geometry is unusable. If a few picks far from the main cluster look sacrificed while the rest sit perfectly, raise those landmarks' **Sync Weight** (try 4–8) and solve again. Matches without Origin but with On Ground picks get an auto Origin on Sync; if tilt persists, add an elevated (off-ground) landmark or a 4th ground pick.
 - **Flipped the object for underside photos** — On Ground is one shared plane. Table tags from the flipped session must not be On Ground if the original table tags already pin Z=0. Side tags glued to the object *are* the same 3D points and do connect the graphs. After a physical flip, a camera that photographed the underside is placed *below* the original ground looking up (object frame), not above the table in room coordinates.
 - **List shows ~1px but the Empty is far from the pick** — the px number is RMSE across the stills that participated in the last solve, not the currently viewed still. Landmarks that only appear on recovered / hanging stills used to keep a stale number; Solve Sync now triangulates those tags and poses the hanging still from them. If the Empty is still off, switch to that still and compare this match's residual under **Pick Confidence**.
-- **One landmark huge, others fine** — that pick is mismatched (same ID / feature on a different physical point). Uncheck **Use in Sync** and re-run Diagnose. If a still was skipped, Diagnose names the pick on that still.
+- **One landmark huge, others fine** — check whether the same ID identifies a different physical point in one still. Review its picks and use **Investigate Problems** to assess its influence. A large residual can also reflect conflicting constraints or calibration; it does not prove that one click is wrong.
 - **Many landmarks all high** — FOV or VP solve is likely off on one match; try **Iterate Known 3D** (Use Known 3D on that still) or **Refine Lenses**, or re-refine that camera manually.
-- **Sync broke after adding one landmark** — turn off **Use in Sync** on the new one and Diagnose again.
+- **Sync broke after adding one landmark** — inspect the new feature in **Open Last Report**, or use **Investigate Problems** to compare a trial without it.
 - **Known 3D warn (Empty vs anchor pick)** — the Empty moved or the anchor camera changed; re-run **Landmarks from Selected**.
 - **Landmarks jump on the plate when panning one still** — that match Empty was shrunk to a point (typical for a below-ground camera). Switch to the match or re-run **Solve Sync**; the camera should stay below-ground, but overlay picks stay on the photo.
 - **A free line should follow a world axis** — set **Is Parallel To** to X Axis, Y Axis, or Z Axis. For two arbitrary parallel edges, link the bad free line to a better-fitting free line or a Known 3D edge.
-- **Weak 3D line support** — the strokes and geometric constraints supply nearly coincident supporting planes, so small pick errors can move or rotate the reconstructed line substantially despite a good pixel fit. Solve Sync names these lines; Diagnose marks their rows and reports the best supporting-plane angle. Mirror pairs include reflected views in this check. An independently established hard shared plane counts when the reconstructed line actually lies in it. Try longer strokes or a stroke from a more distinct viewing angle, using a camera in **Solve** or **Lock Pose**. Fit Only strokes do not supply reconstruction support or clear this warning. Known 3D lines and their reflected partners get geometry directly and are exempt. This warning preserves the solved geometry; it is a sensitivity indicator, not a confidence interval or proof that unflagged lines are correct.
+- **Weak 3D line support** — the strokes and geometric constraints supply nearly coincident supporting planes, so small pick errors can move or rotate the reconstructed line substantially despite a good pixel fit. Solve Sync names these lines; the report marks their rows and reports the best supporting-plane angle. Mirror pairs include reflected views in this check. An independently established hard shared plane counts when the reconstructed line actually lies in it. Try longer strokes or a stroke from a more distinct viewing angle, using a camera in **Solve** or **Lock Pose**. Fit Only strokes do not supply reconstruction support or clear this warning. Known 3D lines and their reflected partners get geometry directly and are exempt. This warning preserves the solved geometry; it is a sensitivity indicator, not a confidence interval or proof that unflagged lines are correct.

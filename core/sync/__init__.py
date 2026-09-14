@@ -4,7 +4,8 @@ Each match keeps its VP solve in a private world. Sync finds a rigid Empty
 transform ``X_shared = R X_private + t`` (scale 1) per non-anchor match, and
 falls back to a similarity with free scale when a rigid pose cannot lock.
 
-Pipeline (keep AGENTS.md in sync if this changes): register pairwise
+Initializer pipeline (keep AGENTS.md in sync if this changes): reuse supported
+current geometry when available, then register pairwise
 (strongest-pair seed, then easiest-next camera; Fit Only stills skipped)
 with shared-ground scale from registered cameras allowed to contribute 3D
 → seed missing one-view points from supported hard plane buckets
@@ -17,8 +18,11 @@ BA of recovered cameras → thaw 3D from recovered stills that may move 3D
 → rebuild free 3D lines from those cameras → report.
 
 Package layout: ``constants``, ``types``, ``projection``, ``pose``, ``ground``,
-``lines``, ``mirrors``, ``planes``, ``ba``, ``solve``, ``request``. ``from match_perspective.core import sync``
-still exposes the same names as the former single module, including test helpers.
+``lines``, ``mirrors``, ``planes``, ``ba``, ``solve``, ``request``, ``investigate``.
+Scene Solve follows initialization with the common fixed-focal final fit;
+investigation compares bounded common-fit trials without applying them.
+``from match_perspective.core import sync`` still exposes the same names as
+the former single module, including test helpers.
 """
 
 from __future__ import annotations

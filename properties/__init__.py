@@ -1625,8 +1625,9 @@ class PMWorkspace(bpy.types.PropertyGroup):
     estimate_focal_from_points: bpy.props.BoolProperty(
         name="Estimate FOV from Landmarks",
         description=(
-            "Estimate each still's FOV jointly from shared points and line strokes when "
-            "Same Lens is off; shared points are required for startup; uses no VP lines. "
+            "Fit each still's FOV, pose, points, and lines jointly when Same Lens "
+            "is off; current landmark constraints remain active. VP lines can "
+            "supply a starting calibration but are not fitting residuals. "
             "Principal points stay fixed: check Manual PP Offsets before fitting"
         ),
         default=False,
@@ -1801,6 +1802,9 @@ class PMWorkspace(bpy.types.PropertyGroup):
         update=_redraw,
     )
     sync_status: bpy.props.StringProperty(default="")
+    sync_solution_evidence_sha256: bpy.props.StringProperty(default="", options={"HIDDEN"})
+    sync_solution_geometry_sha256: bpy.props.StringProperty(default="", options={"HIDDEN"})
+    sync_solution_result_json: bpy.props.StringProperty(default="", options={"HIDDEN"})
     work_mode: bpy.props.EnumProperty(
         name="Tool",
         items=(

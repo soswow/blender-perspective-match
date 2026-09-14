@@ -117,3 +117,8 @@ TRIANGULATION_GN_STEPS = 4
 TRIANGULATION_ANGLE_WEIGHT_FLOOR = 1.0e-3
 # Rays with direction cosine above this share one stereo weight (same viewpoint).
 TRIANGULATION_PARALLEL_COSINE = 0.995
+
+# Investigate Problems bounds its shared-fit counterfactual work separately
+# from the ordinary Solve Sync route.
+DIAGNOSE_COMMON_MAX_CANDIDATES = 5
+DIAGNOSE_COMMON_MAX_SECONDS = 60.0

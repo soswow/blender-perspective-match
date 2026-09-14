@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Solve Sync and independent Refine Lenses use a common final point, line and constraint fit, with Solve keeping focal lengths fixed.
+- Solve Sync and Refine Lenses save reports automatically; Open Last Report replaces the everyday Diagnose workflow.
 - Solve Sync runs in the background with live stage and elapsed time in the sidebar; Esc or Cancel stops it.
 - Diagnose shows live solve activity and elapsed time in the sidebar instead of a stuck 0.00 cursor overlay.
 - Solve Sync and Refine Lenses run faster by reusing calculations and reducing thread overhead during camera registration.
@@ -20,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Estimate FOV from Points supports up to 32 cameras in one joint fit; Assumed Pick Error explains its role in noise checks and FOV uncertainty.
 
 ### Added
+- Independent FOV fitting supports Known 3D points and lines, Ground, camera roles and locks, and existing distortion and pixel-aspect calibration.
 - Use Best Fit can apply improved independent FOV results as provisional cameras and landmarks when calibration cannot be validated.
 - Independent FOV fitting supports line Is in Plane with picked point members, and Is Parallel To another line or a world axis, including combinations with line mirrors.
 - Independent FOV estimation can jointly fit free and mirrored line landmarks alongside shared points; the option is now called Estimate FOV from Landmarks.
@@ -28,6 +31,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Point-based FOV refinement supports Is in Plane and point mirror pairs with a supplied Mirror Empty.
 
 ### Fixed
+- Mirrored-line scoring no longer changes when a different portion of the same infinite line is displayed.
+- Solve Sync retains valid stored camera rotations after Blender rounds their values and can recover when a saved solution needs registration again.
+- Repeated solves preserve outlier weights when picks and constraints are unchanged.
+- Newly applied camera transforms are evaluated before recording the solution used by the next Solve Sync.
+- Fitted lines remain in hard shared planes along their entire displayed length.
+- Solve Sync continues the applied camera and landmark solution and retains it when a replacement loses support or worsens the combined fit.
+- Investigation reports no longer replace the visible solution's landmark errors with errors from an unapplied trial.
 - With a free vertical landmark mirror plane and no picked Origin, accepted Sync fits place reconstructed landmarks above the Anchor's world origin.
 - Mirrored line landmarks show the mirror icon in the landmark list, including when they also have a parallel link.
 - Use Best Fit remains available when fitting lines and constraints improves the combined result while point error rises; the status explains that tradeoff and the button location.

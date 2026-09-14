@@ -180,7 +180,7 @@ def verify_diagnose_ownership(case, out):
                     raise AssertionError("Diagnose application attempted preparation")
                 rejected = (status == {"CANCELLED"} and not publish.called and landmark.rmse_px == 73.0
                             and failure.called and isinstance(failure.call_args.args[1], scene.StaleSyncResult))
-                accepted = status == {"FINISHED"} and publish.called and landmark.rmse_px != 73.0
+                accepted = status == {"FINISHED"} and publish.called and landmark.rmse_px == 73.0
                 expected_changed = action not in {"unchanged", "unrelated_object"}
                 if changed != expected_changed or not (rejected if expected_changed else accepted):
                     violations.append(f"{action}: changed={changed}, status={status}, published={publish.called}, rmse={landmark.rmse_px}")

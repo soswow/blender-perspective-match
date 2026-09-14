@@ -142,6 +142,46 @@ class SyncMatchInput:
 
 
 @dataclass
+class SyncAppliedDiagnostics:
+    """Visible numerical report retained with an applied solution."""
+
+    mean_reprojection_px: float
+    per_match_rmse_px: dict[str, float]
+    per_landmark_rmse_px: dict[str, float]
+    point_rmse_px: float | None
+    line_rmse_px: float | None
+    per_match_point_rmse_px: dict[str, float]
+    per_match_line_rmse_px: dict[str, float]
+    message: str
+    line_support_angles_deg: dict[str, float]
+    weak_line_ids: list[str]
+    plane_seeded_landmark_ids: list[str]
+    downweighted_landmark_ids: list[str]
+    bundle_adjusted: bool
+    inconsistent_picks: list[tuple[str, str, float]]
+    joint_initial_objective: float | None = None
+    joint_final_objective: float | None = None
+    joint_constraint_gaps: dict[str, float] = field(default_factory=dict)
+    joint_mirror_offset_m: float = 0.0
+    joint_support_coverage: dict[str, object] = field(default_factory=dict)
+    joint_refusal_reason: str = ""
+    # Exact effective point weights for a certified applied common fit.
+    joint_point_weights: list[tuple[str, str, float]] | None = None
+
+
+@dataclass
+class SyncSolutionSeed:
+    """Persisted live solution in the anchor frame, with applied-input provenance."""
+
+    calibrations: dict[str, core.Calibration]
+    similarities: dict[str, SimilarityTransform]
+    landmarks: dict[str, np.ndarray]
+    line_segments: dict[str, tuple[np.ndarray, np.ndarray]]
+    evidence_sha256: str
+    diagnostics: SyncAppliedDiagnostics | None = None
+
+
+@dataclass
 class GroundPlaneInitialization:
     """Calibrated planar initialization rooted in the anchor camera frame."""
 
@@ -185,6 +225,9 @@ class SyncSolveResult:
     bundle_adjusted: bool = False
     # Leave-one-out Diagnose: (name, with_rmse, without_rmse) for worst picks.
     leave_one_out: list[tuple[str, float, float]] = field(default_factory=list)
+    # Bounded same-evidence point/line/objective investigation; kept separate
+    # from the applied result and intentionally not persisted as provenance.
+    common_leave_one_out: object | None = None
     # Skipped still whose other picks fit: (match_id, landmark_name, error_px).
     inconsistent_picks: list[tuple[str, str, float]] = field(default_factory=list)
     # Small supporting-plane separation makes free-line 3D sensitive to pick noise.
@@ -192,3 +235,17 @@ class SyncSolveResult:
     weak_line_ids: list[str] = field(default_factory=list)
     # Depth supplied by a shared plane and one location-enabled camera pick.
     plane_seeded_landmark_ids: list[str] = field(default_factory=list)
+    # Final unweighted pixel errors, separated by observation kind for reports.
+    point_rmse_px: float | None = None
+    line_rmse_px: float | None = None
+    per_match_point_rmse_px: dict[str, float] = field(default_factory=dict)
+    per_match_line_rmse_px: dict[str, float] = field(default_factory=dict)
+    # A fixed-focal continuation may change private poses, including the anchor.
+    calibrations: dict[str, core.Calibration] = field(default_factory=dict)
+    joint_initial_objective: float | None = None
+    joint_final_objective: float | None = None
+    joint_constraint_gaps: dict[str, float] = field(default_factory=dict)
+    joint_mirror_offset_m: float = 0.0
+    joint_support_coverage: dict[str, object] = field(default_factory=dict)
+    joint_refusal_reason: str = ""
+    joint_point_weights: list[tuple[str, str, float]] | None = None

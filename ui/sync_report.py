@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from html import escape
 import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -50,6 +51,9 @@ def _edge_tooltip(name_a: str, name_b: str, shared_points: int) -> str:
 
 _REPORT_KEEP_COUNT = 10
 _last_report_path: Path | None = None
+_last_report: SyncDiagnosticReport | None = None
+_last_report_scene_uid: int | None = None
+_last_report_request_sha256: str = ""
 
 
 @dataclass(frozen=True)
@@ -70,6 +74,8 @@ class ReportMatch:
     label: str
     status: str
     rmse_px: float | None
+    point_rmse_px: float | None
+    line_rmse_px: float | None
     point_picks: int
     line_picks: int
     ground_picks: int
@@ -104,6 +110,25 @@ class ReportEdge:
     shared_points: int
 
 
+@dataclass(frozen=True)
+class ReportCommonLeaveOneOut:
+    """One independent candidate compared on the same surviving evidence."""
+
+    name: str
+    kind: str
+    removed_relations: tuple[str, ...]
+    baseline_objective: float | None
+    candidate_objective: float | None
+    baseline_point_rmse_px: float | None
+    candidate_point_rmse_px: float | None
+    baseline_line_rmse_px: float | None
+    candidate_line_rmse_px: float | None
+    baseline_valid: bool
+    candidate_valid: bool
+    reason: str
+    support: str
+
+
 @dataclass
 class SyncDiagnosticReport:
     """Serializable presentation model shared by HTML and compact Blender UI."""
@@ -115,7 +140,21 @@ class SyncDiagnosticReport:
     severity: str
     enabled_matches: int
     registered_matches: int
-    rmse_px: float
+    rmse_px: float | None
+    point_rmse_px: float | None = None
+    line_rmse_px: float | None = None
+    applied: bool = True
+    application_state: str = ""
+    stale: bool = False
+    evaluation_note: str = ""
+    focal_summary: list[str] = field(default_factory=list)
+    common_leave_one_out: list[ReportCommonLeaveOneOut] = field(default_factory=list)
+    common_leave_one_out_ranked: int = 0
+    common_leave_one_out_incomplete: bool = False
+    common_leave_one_out_reason: str = ""
+    common_leave_one_out_baseline_support: str = ""
+    joint_support_summary: str = ""
+    joint_support_partial: bool = False
     issues: list[ReportIssue] = field(default_factory=list)
     matches: list[ReportMatch] = field(default_factory=list)
     landmarks: list[ReportLandmark] = field(default_factory=list)
@@ -160,6 +199,59 @@ def _landmark_names(
         else:
             names.setdefault(landmark_id, landmark_id[:8])
     return names
+
+
+def _finite_score(value: object, valid: bool) -> float | None:
+    if not valid or value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _relation_label(value: object, names: Mapping[str, str]) -> str:
+    return ": ".join(names.get(part, part) for part in str(value).split(":"))
+
+
+def _coverage_summary(
+    coverage: Mapping[str, object] | None,
+    names: Mapping[str, str],
+    labels: Mapping[str, str],
+) -> str:
+    if not coverage:
+        return "Coverage unavailable"
+    point_fit = int(coverage.get("fitted_point_picks", 0))
+    point_requested = int(coverage.get("requested_point_picks", 0))
+    line_fit = int(coverage.get("fitted_line_strokes", 0))
+    line_requested = int(coverage.get("requested_line_strokes", 0))
+    bits = [
+        f"{point_fit}/{point_requested} point picks fitted",
+        f"{line_fit}/{line_requested} line strokes fitted",
+    ]
+    for key, title, formatter in (
+        ("skipped_camera_ids", "skipped cameras", lambda value: labels.get(value, value)),
+        ("skipped_point_ids", "skipped points", lambda value: names.get(value, value)),
+        ("skipped_line_ids", "skipped lines", lambda value: names.get(value, value)),
+        ("skipped_relation_ids", "skipped relations", lambda value: _relation_label(value, names)),
+    ):
+        values = coverage.get(key) or ()
+        if values:
+            bits.append(f"{title}: " + ", ".join(formatter(str(value)) for value in values))
+    return "; ".join(bits)
+
+
+def _joint_coverage_summary(
+    coverage: Mapping[str, object], names: Mapping[str, str],
+    labels: Mapping[str, str], enabled_ids: Sequence[str],
+) -> str:
+    skipped = {str(item) for item in coverage.get("skipped_camera_ids", ())}
+    fitted = len(set(enabled_ids) - skipped)
+    return (
+        f"{fitted}/{len(enabled_ids)} cameras fitted; "
+        + _coverage_summary(coverage, names, labels)
+    )
 
 
 def _observation_sets(
@@ -242,6 +334,11 @@ def build_sync_report(
     excluded_landmarks: int = 0,
     warnings: Sequence[str] = (),
     notes: Sequence[str] = (),
+    applied: bool = True,
+    application_state: str = "",
+    evaluation_note: str = "",
+    calibrations: Mapping[str, object] | None = None,
+    plane_groups: Sequence[object] = (),
 ) -> SyncDiagnosticReport:
     """Build a report model from one solver result and its frozen inputs."""
     known_world = known_world or {}
@@ -251,7 +348,9 @@ def build_sync_report(
     disabled_ids = {str(item) for item in disabled_match_ids}
     fixed_ids = {str(item) for item in fixed_match_ids}
     registered_ids = {str(item) for item in getattr(result, "similarities", {})}
-    if not bool(getattr(result, "success", False)):
+    if result is None:
+        registered_ids = set()
+    elif not bool(getattr(result, "success", False)):
         # Failed core results intentionally carry identity transforms for safe
         # callers; those are not successful registrations for the report.
         registered_ids = {anchor_id} if anchor_id in enabled_ids else set()
@@ -285,6 +384,8 @@ def build_sync_report(
     for match_id in dict.fromkeys((*enabled_ids, *sorted(disabled_ids))):
         if match_id in disabled_ids:
             status = "disabled"
+        elif result is None:
+            status = "unassessed"
         elif match_id == anchor_id:
             status = "anchor"
         elif match_id in registered_ids:
@@ -300,12 +401,17 @@ def build_sync_report(
             lines_by_match.get(match_id, set()) & known_line_ids
         )
         rmse = getattr(result, "per_match_rmse_px", {}).get(match_id)
+        point_errors = getattr(result, "per_match_point_rmse_px", None)
+        point_rmse = (point_errors.get(match_id) if point_errors is not None else rmse)
+        line_rmse = getattr(result, "per_match_line_rmse_px", {}).get(match_id)
         report_matches.append(
             ReportMatch(
                 match_id=match_id,
                 label=labels[match_id],
                 status=status,
                 rmse_px=None if rmse is None else float(rmse),
+                point_rmse_px=None if point_rmse is None else float(point_rmse),
+                line_rmse_px=None if line_rmse is None else float(line_rmse),
                 point_picks=len(picked_ids),
                 line_picks=len(lines_by_match.get(match_id, set())),
                 ground_picks=ground_counts.get(match_id, 0),
@@ -318,6 +424,46 @@ def build_sync_report(
         )
 
     names = _landmark_names(observations, line_observations)
+    joint_coverage = getattr(result, "joint_support_coverage", None)
+    joint_support_partial = bool(joint_coverage) and (
+        int(joint_coverage.get("fitted_point_picks", 0))
+        < int(joint_coverage.get("requested_point_picks", 0))
+        or int(joint_coverage.get("fitted_line_strokes", 0))
+        < int(joint_coverage.get("requested_line_strokes", 0))
+        or any(joint_coverage.get(key) for key in (
+            "skipped_camera_ids", "skipped_point_ids", "skipped_line_ids",
+            "skipped_relation_ids",
+        ))
+    )
+    joint_support_summary = (
+        _joint_coverage_summary(joint_coverage, names, labels, enabled_ids)
+        if joint_coverage else ""
+    )
+    common = getattr(result, "common_leave_one_out", None)
+    common_items = []
+    if common is not None:
+        for item in getattr(common, "items", ()):
+            baseline_valid = bool(getattr(item, "baseline_valid", False))
+            candidate_valid = bool(getattr(item, "candidate_valid", False))
+            common_items.append(ReportCommonLeaveOneOut(
+                name=str(getattr(item, "landmark_name", "") or
+                         names.get(str(getattr(item, "landmark_id", "")), "Unnamed landmark")),
+                kind=str(getattr(item, "kind", "landmark")),
+                removed_relations=tuple(
+                    _relation_label(relation, names)
+                    for relation in getattr(item, "removed_relations", ())
+                ),
+                baseline_objective=_finite_score(getattr(item, "baseline_objective", None), baseline_valid),
+                candidate_objective=_finite_score(getattr(item, "candidate_objective", None), candidate_valid),
+                baseline_point_rmse_px=_finite_score(getattr(item, "baseline_point_rmse_px", None), baseline_valid),
+                candidate_point_rmse_px=_finite_score(getattr(item, "candidate_point_rmse_px", None), candidate_valid),
+                baseline_line_rmse_px=_finite_score(getattr(item, "baseline_line_rmse_px", None), baseline_valid),
+                candidate_line_rmse_px=_finite_score(getattr(item, "candidate_line_rmse_px", None), candidate_valid),
+                baseline_valid=baseline_valid,
+                candidate_valid=candidate_valid,
+                reason=str(getattr(item, "reason", "") or ""),
+                support=_coverage_summary(getattr(item, "support_coverage", None), names, labels),
+            ))
     matches_by_landmark: dict[str, set[str]] = {}
     point_ids: set[str] = set()
     for observation in observations:
@@ -354,7 +500,9 @@ def build_sync_report(
 
     skipped = [item for item in report_matches if item.status == "skipped"]
     success = bool(getattr(result, "success", False))
-    if not success:
+    if result is None:
+        outcome, severity = f"{operation} not applied", "warning"
+    elif not success:
         outcome, severity = "Sync failed", "error"
     elif skipped:
         outcome, severity = "Partial sync", "warning"
@@ -364,8 +512,34 @@ def build_sync_report(
         outcome, severity = "Sync completed with weak line geometry", "warning"
     else:
         outcome, severity = "Sync complete", "success"
+    if operation == "Use Best Fit" and applied:
+        outcome, severity = "Provisional fit applied", "warning"
+    elif operation == "Refine Lenses" and applied and outcome == "Sync complete":
+        outcome = "Refine complete"
+    if not applied:
+        if operation == "Investigate Problems":
+            outcome = "Investigation complete" if success else "Investigation found no solution"
+        elif operation == "Refine Lenses":
+            outcome = ("Lens settings applied; Sync not applied"
+                       if application_state else "Refine not applied")
+        elif operation == "Solve Sync":
+            outcome = "Sync refused"
 
     issues: list[ReportIssue] = []
+    if joint_support_partial:
+        issues.append(ReportIssue(
+            "warning", "Joint fit used partial evidence", joint_support_summary,
+            "Review the omitted features and constraints before treating the fit as complete.",
+        ))
+        severity = "warning" if severity == "success" else severity
+    joint_refusal_reason = str(getattr(result, "joint_refusal_reason", "") or "")
+    if joint_refusal_reason:
+        issues.append(ReportIssue(
+            "warning", "Joint fit was refused", joint_refusal_reason,
+            ("The report describes the retained camera result and why the joint fit was not used."
+             if success else "No joint camera geometry was applied; review the refusal before trying again."),
+        ))
+        severity = "warning" if severity == "success" else severity
     if plane_seeded:
         issues.append(ReportIssue(
             "info", "Some points use a plane to determine depth",
@@ -435,10 +609,12 @@ def build_sync_report(
             )
         )
 
-    rmse_px = float(getattr(result, "mean_reprojection_px", 0.0))
-    if rmse_px > HIGH_ERROR_PX:
+    raw_rmse = getattr(result, "mean_reprojection_px", None)
+    rmse_px = None if raw_rmse is None else float(raw_rmse)
+    if rmse_px is not None and rmse_px > HIGH_ERROR_PX:
         worst = ", ".join(
-            f"{item.name} {item.rmse_px:.0f}px" for item in report_landmarks[:3]
+            f"{item.name} {item.rmse_px:.0f}px"
+            for item in [entry for entry in report_landmarks if entry.kind == "point"][:3]
         )
         issues.append(
             ReportIssue(
@@ -452,7 +628,7 @@ def build_sync_report(
     helpful_leave_one_out = [
         (str(name), float(with_rmse), float(without_rmse))
         for name, with_rmse, without_rmse in getattr(result, "leave_one_out", ())
-        if float(without_rmse) < float(with_rmse)
+        if common is None and float(without_rmse) < float(with_rmse)
     ]
     if helpful_leave_one_out:
         bits = ", ".join(
@@ -467,6 +643,16 @@ def build_sync_report(
                 "Re-check these picks before excluding or downweighting them.",
             )
         )
+
+    if common is not None and bool(getattr(common, "incomplete", False)):
+        reason = str(getattr(common, "reason", "") or "Some candidate removals were not evaluated")
+        issues.append(ReportIssue(
+            "warning", "Investigation incomplete", reason,
+            "An untested removal has no result in this report; review the available evidence before changing picks or constraints.",
+        ))
+        severity = "warning" if severity == "success" else severity
+        if operation == "Investigate Problems":
+            outcome = "Investigation incomplete"
 
     for warning in warnings:
         issues.append(
@@ -501,7 +687,19 @@ def build_sync_report(
         "Free lines": len(all_line_ids - known_line_ids),
         "Parallel constraints": len(parallel_pairs),
         "Mirror pairs": len(mirror_pairs),
+        "Plane memberships": len(plane_groups),
     }
+
+    focal_summary = []
+    for match_id, calibration in (calibrations or {}).items():
+        hfov = getattr(calibration, "hfov_degrees", None)
+        if hfov is not None:
+            focal_summary.append(f"{labels.get(match_id, friendly_match_name(match_id))}: {float(hfov):.2f}° HFOV")
+    focal_summary.sort()
+    point_rmse = getattr(result, "point_rmse_px", None)
+    line_rmse = getattr(result, "line_rmse_px", None)
+    if not hasattr(result, "point_rmse_px") and observations and rmse_px is not None:
+        point_rmse = rmse_px
 
     return SyncDiagnosticReport(
         operation=str(operation),
@@ -512,6 +710,21 @@ def build_sync_report(
         enabled_matches=len(enabled_ids),
         registered_matches=len(registered_ids & set(enabled_ids)),
         rmse_px=rmse_px,
+        point_rmse_px=None if point_rmse is None else float(point_rmse),
+        line_rmse_px=None if line_rmse is None else float(line_rmse),
+        applied=bool(applied),
+        application_state=str(application_state),
+        evaluation_note=str(evaluation_note),
+        focal_summary=focal_summary,
+        common_leave_one_out=common_items,
+        common_leave_one_out_ranked=max(int(getattr(common, "candidates_ranked", 0)), 0),
+        common_leave_one_out_incomplete=bool(getattr(common, "incomplete", False)),
+        common_leave_one_out_reason=str(getattr(common, "reason", "") or ""),
+        common_leave_one_out_baseline_support=_coverage_summary(
+            getattr(common, "baseline_coverage", None), names, labels
+        ) if common is not None else "",
+        joint_support_summary=joint_support_summary,
+        joint_support_partial=joint_support_partial,
         issues=issues,
         matches=report_matches,
         landmarks=report_landmarks,
@@ -532,7 +745,7 @@ def compact_status(report: SyncDiagnosticReport, *, opened: bool = False) -> str
         report.operation,
         report.outcome,
         f"{report.registered_matches}/{report.enabled_matches} cameras",
-        f"{report.rmse_px:.2f}px",
+        _format_error(report.rmse_px),
     ]
     if report.attention_count:
         bits.append(
@@ -540,7 +753,13 @@ def compact_status(report: SyncDiagnosticReport, *, opened: bool = False) -> str
             f"{'s' if report.attention_count != 1 else ''}"
         )
     bits.append("Report opened" if opened else "Report ready")
+    if report.stale:
+        bits.append("Stale")
     return " · ".join(bits)
+
+
+def _format_error(value: float | None) -> str:
+    return "—" if value is None else f"{value:.2f}px"
 
 
 def _status_label(status: str) -> str:
@@ -549,11 +768,13 @@ def _status_label(status: str) -> str:
         "synced": "Synced",
         "skipped": "Skipped",
         "disabled": "Disabled",
+        "unassessed": "Not assessed",
     }.get(status, status.title())
 
 
 def _status_rank(status: str) -> int:
-    return {"anchor": 0, "synced": 1, "skipped": 2, "disabled": 3}.get(status, 9)
+    return {"anchor": 0, "synced": 1, "skipped": 2, "disabled": 3,
+            "unassessed": 4}.get(status, 9)
 
 
 def _vendor_js(name: str) -> str:
@@ -750,8 +971,9 @@ def _render_issues(report: SyncDiagnosticReport) -> str:
 def _render_match_rows(report: SyncDiagnosticReport) -> str:
     rows = []
     for item in report.matches:
-        rmse = "—" if item.rmse_px is None else f"{item.rmse_px:.2f}px"
-        rmse_sort = "" if item.rmse_px is None else f"{item.rmse_px:.8f}"
+        rmse_sort = "" if item.point_rmse_px is None else f"{item.point_rmse_px:.8f}"
+        point_rmse = _format_error(item.point_rmse_px)
+        line_rmse = _format_error(item.line_rmse_px)
         best = (
             f"{escape(item.best_reference)} · "
             f"{escape(_shared_point_summary(item.best_shared_points))}"
@@ -767,7 +989,8 @@ def _render_match_rows(report: SyncDiagnosticReport) -> str:
             f'{"<span class=\"lock\">Locked</span>" if item.locked else ""}</td>'
             f'<td><span class="pill {escape(item.status)}">'
             f'{escape(_status_label(item.status))}</span></td>'
-            f'<td class="number">{rmse}</td><td class="number">{item.point_picks}</td>'
+            f'<td class="number">{point_rmse}</td><td class="number">{line_rmse}</td>'
+            f'<td class="number">{item.point_picks}</td>'
             f'<td class="number">{item.line_picks}</td><td class="number">'
             f'{item.usable_3d_points}</td><td>{best}</td></tr>'
         )
@@ -795,6 +1018,49 @@ def _render_landmark_rows(report: SyncDiagnosticReport) -> str:
     return "".join(rows)
 
 
+def _render_common_leave_one_out(report: SyncDiagnosticReport) -> str:
+    if not report.common_leave_one_out_baseline_support:
+        return ""
+    cards = []
+    for item in report.common_leave_one_out:
+        relations = ", ".join(item.removed_relations) if item.removed_relations else "None"
+        baseline_state = "valid" if item.baseline_valid else "refused"
+        candidate_state = "valid" if item.candidate_valid else "refused"
+        reason = (f'<p class="meta">Reason: {escape(item.reason)}</p>'
+                  if item.reason else "")
+        cards.append(
+            '<article class="loo-item">'
+            f'<h3>{escape(item.name)} <span class="pill">{escape(item.kind.title())}</span></h3>'
+            '<div class="mini-grid">'
+            f'<div class="mini-card"><span>Combined objective</span><strong>{_format_objective(item.baseline_objective)} → {_format_objective(item.candidate_objective)}</strong></div>'
+            f'<div class="mini-card"><span>Point RMSE</span><strong>{_format_error(item.baseline_point_rmse_px)} → {_format_error(item.candidate_point_rmse_px)}</strong></div>'
+            f'<div class="mini-card"><span>Line RMSE</span><strong>{_format_error(item.baseline_line_rmse_px)} → {_format_error(item.candidate_line_rmse_px)}</strong></div>'
+            '</div>'
+            f'<p class="meta">Before: {baseline_state} · After: {candidate_state}</p>'
+            f'<p class="meta">Removed relations: {escape(relations)}</p>'
+            f'<p class="meta">Remaining support: {escape(item.support)}</p>'
+            f'{reason}</article>'
+        )
+    incomplete = (
+        f'<p class="issue warning">Incomplete: {escape(report.common_leave_one_out_reason or "Some removals were not evaluated")}</p>'
+        if report.common_leave_one_out_incomplete else ""
+    )
+    body = "".join(cards) if cards else '<p class="muted">No removals were evaluated.</p>'
+    return (
+        '<section><h2>Independent removal checks</h2>'
+        '<p class="meta">Before and after score the same surviving point and line evidence. '
+        'The combined objective also includes constraints. Removing a feature can remove its defining relations. '
+        'A lower score shows a different fit on this reduced model; it does not prove a pick or constraint is wrong.</p>'
+        f'<p class="meta">Baseline support: {escape(report.common_leave_one_out_baseline_support)} · '
+        f'{report.common_leave_one_out_ranked} ranked removal(s)</p>'
+        f'{incomplete}<div class="loo-items">{body}</div></section>'
+    )
+
+
+def _format_objective(value: float | None) -> str:
+    return "—" if value is None else f"{value:.5g}"
+
+
 def render_sync_report_html(report: SyncDiagnosticReport) -> str:
     """Render a portable offline HTML diagnostic report."""
     severity_label = {
@@ -808,6 +1074,24 @@ def render_sync_report_html(report: SyncDiagnosticReport) -> str:
     )
     notes = "".join(f"<li>{escape(item)}</li>" for item in report.notes)
     notes_block = f'<ul class="notes">{notes}</ul>' if notes else '<p class="muted">None.</p>'
+    joint_support_block = (
+        f'<p class="meta" style="margin-top:12px">Joint fit coverage: {escape(report.joint_support_summary)}</p>'
+        if report.joint_support_summary else ""
+    )
+    application = (report.application_state or
+                   ("Applied to this scene" if report.applied else "Not applied to this scene"))
+    if report.stale:
+        application += " · Stale: scene inputs or cameras changed after this report"
+    if report.evaluation_note:
+        application += " · " + report.evaluation_note
+    focal_block = ""
+    if report.focal_summary:
+        focal_block = (
+            '<details class="section" open><summary>Camera FOV in this result</summary><ul class="notes">'
+            + "".join(f"<li>{escape(item)}</li>" for item in report.focal_summary)
+            + "</ul></details>"
+        )
+    common_leave_one_out_block = _render_common_leave_one_out(report)
     html_text = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -885,6 +1169,11 @@ def render_sync_report_html(report: SyncDiagnosticReport) -> str:
     .mini-grid {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }}
     .mini-card {{ display:flex; justify-content:space-between; gap:12px; padding:12px; background:var(--surface2);
       border:1px solid var(--line); border-radius:10px; }} .mini-card span,.muted {{ color:var(--muted); }}
+    .loo-items {{ display:grid; gap:12px; margin-top:14px; }} .loo-item {{ border:1px solid var(--line);
+      border-radius:12px; padding:14px; background:var(--surface2); }} .loo-item h3 {{ margin:0 0 10px; }}
+    .loo-item .mini-grid {{ margin-bottom:10px; }} .loo-item .mini-card {{ flex-direction:column; gap:3px; }}
+    .loo-item .mini-card strong {{ font-variant-numeric:tabular-nums; }}
+    .loo-item p {{ margin-top:5px; }}
     .notes {{ margin:0; padding-left:22px; }} pre {{ white-space:pre-wrap; overflow-wrap:anywhere; background:var(--surface2);
       border:1px solid var(--line); border-radius:10px; padding:14px; color:var(--muted); }}
     footer {{ color:var(--muted); text-align:center; margin-top:24px; font-size:12px; }}
@@ -905,14 +1194,17 @@ def render_sync_report_html(report: SyncDiagnosticReport) -> str:
   </header>
   <div class="hero"><div class="hero-top"><span class="state {escape(report.severity)}">{escape(severity_label)}</span>
     <span class="meta">{report.attention_count} item{'s' if report.attention_count != 1 else ''} need attention</span></div>
+    <p class="meta" style="margin-top:12px">{escape(application)}</p>
     <div class="summary-grid">
       <div class="stat"><span>Cameras registered</span><strong>{report.registered_matches}/{report.enabled_matches}</strong></div>
-      <div class="stat"><span>Overall RMSE</span><strong>{report.rmse_px:.2f}px</strong></div>
-      <div class="stat"><span>Landmarks measured</span><strong>{len(report.landmarks)}</strong></div>
+      <div class="stat"><span>Point RMSE</span><strong>{_format_error(report.point_rmse_px)}</strong></div>
+      <div class="stat"><span>Line RMSE</span><strong>{_format_error(report.line_rmse_px)}</strong></div>
       <div class="stat"><span>Pose locks</span><strong>{report.locked_matches}</strong></div>
     </div>
+    {joint_support_block}
   </div>
   <section><h2>Needs attention</h2><div class="issues">{_render_issues(report)}</div></section>
+  {common_leave_one_out_block}
   <section><h2>Camera connectivity</h2><p class="meta" style="margin-bottom:12px">
     The overlap backbone shows ordinary point landmarks shared between photos. Metric 2D↔3D
     and Known 3D line routes are summarized in the match table and issue cards.</p>
@@ -920,7 +1212,8 @@ def render_sync_report_html(report: SyncDiagnosticReport) -> str:
   <section><h2>Matches</h2><div class="table-wrap"><table id="match-table"><thead><tr>
     <th><button type="button" data-sort="label" data-type="text">Match</button></th>
     <th><button type="button" data-sort="status" data-type="number">Status</button></th>
-    <th class="number"><button type="button" data-sort="rmse" data-type="number">RMSE</button></th>
+    <th class="number"><button type="button" data-sort="rmse" data-type="number">Point RMSE</button></th>
+    <th class="number">Line RMSE</th>
     <th class="number"><button type="button" data-sort="points" data-type="number">Point picks</button></th>
     <th class="number"><button type="button" data-sort="lines" data-type="number">Lines</button></th>
     <th class="number"><button type="button" data-sort="usable" data-type="number">Usable 3D</button></th>
@@ -931,6 +1224,7 @@ def render_sync_report_html(report: SyncDiagnosticReport) -> str:
     <div class="table-wrap"><table id="landmark-table"><thead><tr><th>Landmark</th><th>Kind</th>
     <th class="number"><button type="button" id="sort-rmse">RMSE ↓</button></th><th>Observed in</th></tr></thead>
     <tbody>{_render_landmark_rows(report)}</tbody></table></div></section>
+  {focal_block}
   <details class="section" open><summary>Constraint inventory</summary><div class="mini-grid">{constraint_cards}</div>
     <p class="meta" style="margin-top:12px">{report.disabled_matches} match(es) sync-disabled ·
     {report.excluded_landmarks} landmark(s) excluded from sync ·
@@ -1106,9 +1400,11 @@ def write_temp_report(
     *,
     temp_root: str | Path | None = None,
     keep: int = _REPORT_KEEP_COUNT,
+    scene_uid: int | None = None,
+    request_sha256: str = "",
 ) -> Path:
     """Write one unique report and retain only recent reports for this process."""
-    global _last_report_path
+    global _last_report_path, _last_report, _last_report_scene_uid, _last_report_request_sha256
     directory = _temp_report_directory(temp_root)
     directory.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
@@ -1121,6 +1417,9 @@ def write_temp_report(
     temporary.write_text(render_sync_report_html(report), encoding="utf-8")
     temporary.replace(path)
     _last_report_path = path
+    _last_report = report
+    _last_report_scene_uid = scene_uid
+    _last_report_request_sha256 = str(request_sha256)
 
     candidates = sorted(
         directory.glob("*.html"),
@@ -1135,6 +1434,31 @@ def write_temp_report(
     return path
 
 
+def refresh_last_report(scene_uid: int | None, request_sha256: str) -> bool:
+    """Mark the last report stale when its scene or numerical inputs differ."""
+    report = _last_report
+    path = last_report_path()
+    if report is None or path is None:
+        return False
+    stale = (
+        _last_report_scene_uid is not None
+        and (
+            scene_uid != _last_report_scene_uid
+            or request_sha256 != _last_report_request_sha256
+        )
+    )
+    if report.stale != stale:
+        report.stale = stale
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(render_sync_report_html(report), encoding="utf-8")
+        temporary.replace(path)
+    return stale
+
+
+def last_report_stale() -> bool:
+    return bool(last_report_path() is not None and _last_report is not None and _last_report.stale)
+
+
 def last_report_path() -> Path | None:
     """Newest report produced in this loaded add-on process, if it still exists."""
     if _last_report_path is None or not _last_report_path.is_file():
@@ -1144,8 +1468,11 @@ def last_report_path() -> Path | None:
 
 def clear_last_report() -> None:
     """Forget the last report without deleting the browser's temporary file."""
-    global _last_report_path
+    global _last_report_path, _last_report, _last_report_scene_uid, _last_report_request_sha256
     _last_report_path = None
+    _last_report = None
+    _last_report_scene_uid = None
+    _last_report_request_sha256 = ""
 
 
 def export_last_report(destination: str | Path) -> Path:

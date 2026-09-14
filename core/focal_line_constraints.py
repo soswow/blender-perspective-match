@@ -10,11 +10,16 @@ from .sync.constants import WORLD_AXIS_DIRECTIONS
 
 LINE_RELATION_DIRECTION_RESIDUAL_PX = 200.0
 LINE_RELATION_DIRECTION_HARD_SINE = 0.01
+LINE_HARD_PLANE_MIN_TANGENT = 1.0e-8
 
 
-def validate_line_relations(point_ids, line_ids, plane_groups, parallel_pairs):
+def validate_line_relations(point_ids, line_ids, plane_groups, parallel_pairs, *,
+                            known_line_ids=()):
     """Validate supported references before registration; never discard a relation."""
     point_set, line_set = set(point_ids), set(line_ids)
+    known_line_set = set(known_line_ids)
+    if not known_line_set <= line_set:
+        raise ValueError("Known 3D line support contains an unsupported landmark")
     groups = normalize_plane_groups(plane_groups)
     if len(groups) != len(plane_groups or ()):
         raise ValueError("Plane relations contain invalid or duplicate members")
@@ -26,12 +31,13 @@ def validate_line_relations(point_ids, line_ids, plane_groups, parallel_pairs):
         if not lines:
             continue
         points = [key for key in members if key in point_set]
+        fixed_lines = [key for key in members if key in known_line_set]
         minimum = 3 if axis == "FREE" else 1
-        if len(points) < minimum:
+        if len(points) + len(fixed_lines) < minimum:
             raise ValueError(
                 f"Line Is in Plane {axis} #{bucket} needs "
-                f"{'three non-collinear point members' if axis == 'FREE' else 'a point member'} "
-                "in the same group, with two-view picks")
+                f"{'three non-collinear fixed members' if axis == 'FREE' else 'a fixed member'} "
+                "in the same group (a fitted point or Known 3D line)")
         supported.append((axis, points, lines))
     pairs, seen = [], set()
     for pair in parallel_pairs or ():
@@ -52,6 +58,8 @@ class LineFocalConstraints:
     """Geometric priors in the anchor-camera/unit-baseline coordinate frame."""
 
     groups: list[tuple[np.ndarray | None, list[int], list[int]]]
+    support_line_indices: list[list[int]]
+    support_line_points: dict[int, np.ndarray]
     pairs: list[tuple[int, int | np.ndarray]]
     plane_spring: float
     baseline_world: float
@@ -59,15 +67,22 @@ class LineFocalConstraints:
 
     @classmethod
     def from_inputs(cls, point_ids, line_ids, *, plane_groups, parallel_pairs,
-                    anchor_rotation, plane_spring, baseline_world, hard_plane):
+                    anchor_rotation, plane_spring, baseline_world, hard_plane,
+                    known_line_ids=(), known_line_positions=None):
+        known = set(known_line_ids)
         groups, pairs = validate_line_relations(
-            point_ids, line_ids, plane_groups, parallel_pairs)
+            point_ids, line_ids, plane_groups, parallel_pairs,
+            known_line_ids=known)
         points = {key: i for i, key in enumerate(point_ids)}
         lines = {key: i for i, key in enumerate(line_ids)}
         axes = {axis: anchor_rotation @ np.eye(3)[i] for i, axis in enumerate("XYZ")}
         return cls([
             (axes.get(axis), [points[key] for key in members], [lines[key] for key in edges])
             for axis, members, edges in groups],
+            [[lines[key] for key in edges if key in known]
+             for _axis, _members, edges in groups],
+            {lines[key]: np.asarray(value, float) for key, value in
+             (known_line_positions or {}).items() if key in lines},
             [(lines[left], lines[right] if right in lines else
               anchor_rotation @ WORLD_AXIS_DIRECTIONS[right]) for left, right in pairs],
             plane_spring, baseline_world, hard_plane)
@@ -80,20 +95,50 @@ class LineFocalConstraints:
     def point_indices(self):
         return {i for _normal, members, _lines in self.groups for i in members}
 
-    @staticmethod
-    def _plane(points, normal, members):
+    def _plane(self, points, geometry, normal, members, support_lines):
+        locations = [points[member] for member in members]
+        locations.extend(self.support_line_points.get(line, geometry[line][0])
+                         for line in support_lines)
+        locations = np.asarray(locations, dtype=float)
         if normal is not None:
-            return np.mean(points[members], axis=0), normal
-        plane = fit_free_plane(points[members])
+            return np.mean(locations, axis=0), normal
+        plane = fit_free_plane(locations)
         if plane is None:
-            raise ValueError("Line Is in Plane Free needs non-collinear point members")
+            raise ValueError("Line Is in Plane Free needs non-collinear fixed members")
         return plane
+
+    def hard_direction_normals(self, points, geometry):
+        """Return defining normals for fitted lines in hard plane groups."""
+        if not self.hard_plane:
+            return {}
+        normals = {}
+        for (normal, members, lines), support_lines in zip(self.groups, self.support_line_indices):
+            _origin, normal = self._plane(points, geometry, normal, members, support_lines)
+            for line in lines:
+                if line not in support_lines:
+                    normals[line] = normal
+        return normals
+
+    def constrain_hard_directions(self, points, geometry):
+        """Use an in-plane infinite line throughout fitting and result emission."""
+        normals = self.hard_direction_normals(points, geometry)
+        if not normals:
+            return geometry
+        constrained = list(geometry)
+        for line, normal in normals.items():
+            position, direction = geometry[line]
+            tangent = direction - normal * float(normal @ direction)
+            length = float(np.linalg.norm(tangent))
+            if length < LINE_HARD_PLANE_MIN_TANGENT:
+                raise ValueError("Line direction is normal to its hard plane")
+            constrained[line] = (position, tangent / length)
+        return constrained
 
     def residual(self, points, geometry):
         """Plane position/direction and parallel direction rows, not extra picks."""
         rows = []
-        for normal, members, lines in self.groups:
-            origin, normal = self._plane(points, normal, members)
+        for (normal, members, lines), support_lines in zip(self.groups, self.support_line_indices):
+            origin, normal = self._plane(points, geometry, normal, members, support_lines)
             for line in lines:
                 position, direction = geometry[line]
                 # Projection vectors remove the arbitrary sign of an SVD plane
@@ -109,8 +154,8 @@ class LineFocalConstraints:
     def world_gaps(self, points, geometry):
         """Maximum hard position gap and direction sine for final acceptance."""
         distance, sine = 0.0, 0.0
-        for normal, members, lines in self.groups:
-            origin, normal = self._plane(points, normal, members)
+        for (normal, members, lines), support_lines in zip(self.groups, self.support_line_indices):
+            origin, normal = self._plane(points, geometry, normal, members, support_lines)
             for line in lines:
                 position, direction = geometry[line]
                 if self.hard_plane:

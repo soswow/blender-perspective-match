@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 from typing import Callable
 
 import numpy as np
@@ -81,6 +81,7 @@ from .types import (
     SyncLineObservation,
     SyncMatchInput,
     SyncObservation,
+    SyncSolutionSeed,
     SyncSolveResult,
 )
 
@@ -96,6 +97,120 @@ def _report_progress(
 ) -> None:
     if progress_callback is not None:
         progress_callback(label)
+
+
+def _validated_solution_seed(
+    seed: SyncSolutionSeed | None,
+    match_map: dict[str, SyncMatchInput],
+    anchor_id: str,
+    point_observations: dict[str, list[SyncObservation]],
+    line_ids: set[str],
+) -> tuple[dict[str, SimilarityTransform], dict[str, np.ndarray], dict[str, tuple[np.ndarray, np.ndarray]]]:
+    """Keep finite, compatible portions of a persisted solution as a warm start."""
+    if seed is None or anchor_id not in seed.similarities:
+        return {}, {}, {}
+    anchor = seed.similarities[anchor_id]
+    if (
+        abs(float(anchor.scale) - 1.0) > 1.0e-5
+        or np.linalg.norm(np.asarray(anchor.rotation) - np.eye(3)) > 1.0e-4
+        or np.linalg.norm(np.asarray(anchor.translation)) > 1.0e-4
+    ):
+        return {}, {}, {}
+    similarities = {}
+    for match_id, item in seed.similarities.items():
+        if match_id not in match_map or match_id not in seed.calibrations:
+            continue
+        rotation = np.asarray(item.rotation, dtype=np.float64)
+        translation = np.asarray(item.translation, dtype=np.float64)
+        scale = float(item.scale)
+        if (
+            rotation.shape != (3, 3) or translation.shape != (3,)
+            or not np.isfinite(rotation).all() or not np.isfinite(translation).all()
+            or not np.isfinite(scale) or not 1.0e-9 < scale < 1.0e9
+            or np.linalg.norm(rotation.T @ rotation - np.eye(3)) > 1.0e-3
+            or np.linalg.det(rotation) < 0.999
+        ):
+            continue
+        similarities[match_id] = SimilarityTransform(scale, rotation.copy(), translation.copy())
+    if anchor_id not in similarities:
+        return {}, {}, {}
+    landmarks = {}
+    for landmark_id, value in seed.landmarks.items():
+        point = np.asarray(value, dtype=np.float64)
+        if landmark_id in point_observations and point.shape == (3,) and np.isfinite(point).all():
+            landmarks[landmark_id] = point.copy()
+    segments = {}
+    for landmark_id, value in seed.line_segments.items():
+        segment = np.asarray(value, dtype=np.float64)
+        if (
+            landmark_id in line_ids and segment.shape == (2, 3)
+            and np.isfinite(segment).all()
+            and np.linalg.norm(segment[1] - segment[0]) > 1.0e-9
+        ):
+            segments[landmark_id] = (segment[0].copy(), segment[1].copy())
+    # A manually changed calibration or grossly incompatible pick graph must
+    # register afresh. A few edited observations may still use the good pose.
+    errors_by_match: dict[str, list[float]] = {}
+    for landmark_id, items in point_observations.items():
+        point = landmarks.get(landmark_id)
+        if point is None:
+            continue
+        for observation in items:
+            similarity = similarities.get(observation.match_id)
+            if similarity is None:
+                continue
+            projected = project_private_point(
+                similarity.inverse_point(point),
+                match_map[observation.match_id].calibration,
+            )
+            error = float("inf") if projected is None else float(np.linalg.norm(
+                np.asarray(projected) - np.array((observation.u, observation.v))
+            ))
+            errors_by_match.setdefault(observation.match_id, []).append(error)
+    for match_id, errors in errors_by_match.items():
+        if match_id == anchor_id or len(errors) < 3:
+            continue
+        finite = np.asarray(errors, dtype=np.float64)
+        if (
+            np.mean(np.isfinite(finite)) < 0.8
+            or float(np.median(finite)) > 2.0 * ACCEPT_RMSE_PX
+        ):
+            similarities.pop(match_id, None)
+    return similarities, landmarks, segments
+
+
+def solution_result_from_seed(seed: SyncSolutionSeed) -> SyncSolveResult | None:
+    """Rebuild exact applied reporting alongside a persisted numerical solution."""
+    diagnostics = seed.diagnostics
+    if diagnostics is None:
+        return None
+    return SyncSolveResult(
+        similarities=deepcopy(seed.similarities),
+        landmarks=deepcopy(seed.landmarks),
+        line_segments=deepcopy(seed.line_segments),
+        calibrations=deepcopy(seed.calibrations),
+        mean_reprojection_px=float(diagnostics.mean_reprojection_px),
+        per_match_rmse_px=dict(diagnostics.per_match_rmse_px),
+        per_landmark_rmse_px=dict(diagnostics.per_landmark_rmse_px),
+        point_rmse_px=diagnostics.point_rmse_px,
+        line_rmse_px=diagnostics.line_rmse_px,
+        per_match_point_rmse_px=dict(diagnostics.per_match_point_rmse_px),
+        per_match_line_rmse_px=dict(diagnostics.per_match_line_rmse_px),
+        message=str(diagnostics.message),
+        line_support_angles_deg=dict(diagnostics.line_support_angles_deg),
+        weak_line_ids=list(diagnostics.weak_line_ids),
+        plane_seeded_landmark_ids=list(diagnostics.plane_seeded_landmark_ids),
+        downweighted_landmark_ids=list(diagnostics.downweighted_landmark_ids),
+        bundle_adjusted=bool(diagnostics.bundle_adjusted),
+        inconsistent_picks=list(diagnostics.inconsistent_picks),
+        joint_initial_objective=diagnostics.joint_initial_objective,
+        joint_final_objective=diagnostics.joint_final_objective,
+        joint_constraint_gaps=dict(diagnostics.joint_constraint_gaps),
+        joint_mirror_offset_m=float(diagnostics.joint_mirror_offset_m),
+        joint_support_coverage=deepcopy(diagnostics.joint_support_coverage),
+        joint_refusal_reason=str(diagnostics.joint_refusal_reason),
+        joint_point_weights=deepcopy(diagnostics.joint_point_weights),
+    )
 
 
 def _connected_match_ids(
@@ -427,6 +542,8 @@ class _SolveState:
     line_segments: dict[str, tuple[np.ndarray, np.ndarray]] = field(
         default_factory=dict
     )
+    initial_line_segments: dict[str, tuple[np.ndarray, np.ndarray]] = field(default_factory=dict)
+    seed_unchanged: bool = False
     recovered: list[str] = field(default_factory=list)
     peeled_similarities: dict[str, SimilarityTransform] = field(default_factory=dict)
     skip_notes: dict[str, str] = field(default_factory=dict)
@@ -546,10 +663,18 @@ class _SolveState:
         # location view could triangulate.
         for landmark_id, point in metric_points.items():
             rebuilt.setdefault(landmark_id, point)
-        rebuilt.update(retained_landmarks or {})
+        rebuilt.update({
+            landmark_id: point.copy()
+            for landmark_id, point in (retained_landmarks or {}).items()
+            if (self.seed_unchanged or landmark_id in rebuilt)
+            and landmark_id in self.observations_by_landmark
+            and landmark_id not in consistent
+            and landmark_id not in self.known_world
+        })
         self.landmarks = rebuilt
         self.consistent_metric = consistent
         _rebuild_free_line_segments(self)
+        self.initial_line_segments = {}
         _attach_mirror_landmarks(self)
         ground_ids = {
             observation.landmark_id
@@ -930,6 +1055,13 @@ def _rebuild_free_line_segments(state: _SolveState) -> None:
         if landmark_id in segments:
             continue
         posed_items = [item for item in items if item.match_id in state.similarities]
+        seeded = state.initial_line_segments.get(landmark_id)
+        if seeded is not None and posed_items and (
+            state.seed_unchanged or len({item.match_id for item in posed_items}) >= 2
+        ):
+            segments[landmark_id] = (seeded[0].copy(), seeded[1].copy())
+            state.landmarks[landmark_id] = 0.5 * (seeded[0] + seeded[1])
+            continue
         anchor_ids = _line_anchor_match_ids(posed_items, state.fixed_match_ids)
         reconstructed = _reconstruct_line_from_observations(
             posed_items,
@@ -1413,6 +1545,7 @@ def solve_landmark_sync(
     known_lines: dict[str, tuple[np.ndarray, np.ndarray]] | None = None,
     parallel_pairs: list[tuple[str, str]] | None = None,
     initial_similarities: dict[str, SimilarityTransform] | None = None,
+    initial_solution: SyncSolutionSeed | None = None,
     fixed_similarities: dict[str, SimilarityTransform] | None = None,
     lock_rotation: bool = False,
     lock_translation: bool = False,
@@ -1457,6 +1590,15 @@ def solve_landmark_sync(
     with axis X/Y/Z/FREE and bucket 1..10; ``plane_slack`` is how far those
     members may leave the shared plane.
     """
+    seed_unchanged = False
+    if initial_solution is not None:
+        from .request import SyncSolveRequest
+
+        input_values = locals().copy()
+        current_request = SyncSolveRequest(**{
+            item.name: input_values[item.name] for item in fields(SyncSolveRequest)
+        })
+        seed_unchanged = initial_solution.evidence_sha256 == current_request.evidence_sha256()
     _check_cancelled(cancel_check)
     _report_progress(progress_callback, "Preparing sync graph")
     if ground_slack is None:
@@ -1686,7 +1828,12 @@ def solve_landmark_sync(
 
     _check_cancelled(cancel_check)
     _report_progress(progress_callback, "Registering cameras")
-    registration_seeds = dict(initial_similarities or {})
+    seed_similarities, seed_landmarks, seed_segments = _validated_solution_seed(
+        initial_solution, match_map, anchor_id,
+        observations_by_landmark, set(line_observations_by_landmark),
+    )
+    registration_seeds = dict(seed_similarities)
+    registration_seeds.update(initial_similarities or {})
     registration_seeds.update(fixed_similarities)
     if location_match_ids is None:
         resolved_location = None
@@ -1728,7 +1875,7 @@ def solve_landmark_sync(
         free_point_graph_only=not (
             known_world or known_lines or line_observations_by_landmark
             or parallel_pairs or mirror_pairs or plane_groups
-            or fixed_similarities or readonly_ids or initial_similarities
+            or fixed_similarities or readonly_ids or initial_similarities or seed_similarities
             or lock_rotation or lock_translation
             or (resolved_location is not None and resolved_location != set(match_map))
             or any(observation.on_ground for observation in usable_observations)
@@ -1812,12 +1959,18 @@ def solve_landmark_sync(
         connected=connected,
         location_match_ids=resolved_location,
         readonly_match_ids=readonly_ids,
+        initial_line_segments=seed_segments,
+        seed_unchanged=seed_unchanged,
+        peeled_similarities={
+            match_id: registration_seeds[match_id]
+            for match_id in readonly_unlocked if match_id in registration_seeds
+        },
     )
     # 1. register (done)  2. peel weak cameras  3. BA  4. peel  5. resect
     _check_cancelled(cancel_check)
     _report_progress(progress_callback, "Triangulating landmarks")
     try:
-        state.rebuild_landmarks()
+        state.rebuild_landmarks(retained_landmarks=seed_landmarks)
         peeled = _peel_cameras_above_rmse(state)
     except ValueError as error:
         if mirror_landmark_id is None or not str(error).startswith("Mirror reference point lost"):
@@ -2409,6 +2562,7 @@ def solve_landmark_sync(
     line_error_values: list[float] = []
     weighted_line_error_values: list[float] = []
     per_line_sse: dict[str, list[float]] = {}
+    per_match_line_sse: dict[str, list[float]] = {}
     for landmark_id, items in line_observations_by_landmark.items():
         if landmark_id in line_segments:
             point_a, point_b = line_segments[landmark_id]
@@ -2469,6 +2623,7 @@ def solve_landmark_sync(
                 # Keep lines visible in per-landmark Diagnose, not in pose reject.
                 per_landmark_sse.setdefault(observation.landmark_id, []).append(squared)
                 per_match_sse.setdefault(observation.match_id, []).append(squared)
+                per_match_line_sse.setdefault(observation.match_id, []).append(squared)
             weighted_line_error_values.extend(value * value for value in weighted)
 
     # Parallel pairs: report residual angle after enforcement (should be ~0°).
@@ -2764,6 +2919,10 @@ def solve_landmark_sync(
         landmarks=landmarks,
         mean_reprojection_px=mean_rmse,
         per_match_rmse_px=per_match_rmse,
+        point_rmse_px=_rmse(point_sse) if point_sse else None,
+        line_rmse_px=_rmse(line_error_values) if line_error_values else None,
+        per_match_point_rmse_px={key: _rmse(values) for key, values in per_match_point_sse.items() if values},
+        per_match_line_rmse_px={key: _rmse(values) for key, values in per_match_line_sse.items() if values},
         per_landmark_rmse_px=per_landmark_rmse,
         message=message,
         success=True,
@@ -2773,6 +2932,7 @@ def solve_landmark_sync(
         plane_seeded_landmark_ids=plane_seeded_ids,
         downweighted_landmark_ids=downweighted_ids,
         bundle_adjusted=bool(did_bundle_adjust),
+        joint_mirror_offset_m=float(state.mirror_offset),
         inconsistent_picks=[
             (match_id, name, error)
             for match_id, picks in state.inconsistent_picks.items()

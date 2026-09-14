@@ -7,6 +7,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import bpy
@@ -35,13 +36,21 @@ def _workspace(context: bpy.types.Context):
     return properties.workspace(context)
 
 
-def _write_diagnose_report(
+def _write_sync_report(
     context: bpy.types.Context,
     result,
     *,
     prep,
+    operation: str,
+    applied: bool,
+    request=None,
+    calibrations=None,
+    evaluation_note: str = "",
+    application_state: str = "",
 ):
-    """Build, write, open, and publish one Diagnose HTML report."""
+    """Publish an existing result and the scene evidence it actually describes."""
+    if request is None:
+        request = scene.collect_sync_request(context)
     roots = properties.iter_match_roots()
     labels = {
         root.name: sync_report.friendly_match_name(scene.match_prefix(root))
@@ -53,48 +62,146 @@ def _write_diagnose_report(
         if not getattr(root.pm_session, "sync_enabled", True)
     }
     notes = []
-    if prep.ground_frame_note:
+    if getattr(prep, "ground_frame_note", ""):
         notes.append(prep.ground_frame_note)
-    if prep.auto_origin_notes:
+    if getattr(prep, "auto_origin_notes", ()):
         notes.append("Auto origin: " + ", ".join(prep.auto_origin_notes))
 
     source_name = Path(bpy.data.filepath).name if bpy.data.filepath else "Untitled.blend"
     report = sync_report.build_sync_report(
-        operation="Diagnose",
+        operation=operation,
         source_name=source_name,
-        matches=prep.matches,
-        observations=prep.observations,
-        line_observations=prep.line_observations,
+        matches=request.matches,
+        observations=request.observations,
+        line_observations=request.line_observations or (),
         result=result,
-        anchor_id=prep.anchor_id,
-        known_world=prep.known_world,
-        known_lines=prep.known_lines,
-        parallel_pairs=prep.parallel_pairs,
-        mirror_pairs=prep.mirror_pairs,
+        anchor_id=request.anchor_id,
+        known_world=request.known_world,
+        known_lines=request.known_lines,
+        parallel_pairs=request.parallel_pairs or (),
+        mirror_pairs=request.mirror_pairs or (),
+        plane_groups=request.plane_groups or (),
         all_match_labels=labels,
         disabled_match_ids=disabled_ids,
-        fixed_match_ids=set(prep.fixed_similarities),
-        excluded_landmarks=prep.excluded_landmarks,
-        warnings=prep.warnings,
+        fixed_match_ids=set(request.fixed_similarities or {}),
+        excluded_landmarks=getattr(prep, "excluded_landmarks", 0),
+        warnings=getattr(prep, "warnings", ()),
         notes=notes,
+        applied=applied,
+        application_state=application_state,
+        evaluation_note=evaluation_note,
+        calibrations=calibrations,
     )
     report_path = sync_report.write_temp_report(
         report,
         temp_root=(bpy.app.tempdir or None),
-    )
-    opened = False
-    try:
-        opened = "FINISHED" in bpy.ops.wm.url_open(
-            url=report_path.resolve().as_uri()
-        )
-    except Exception as error:
-        print(f"Perspective Match: could not open sync report: {error}")
-    _workspace(context).sync_status = sync_report.compact_status(
-        report,
-        opened=opened,
+        scene_uid=int(context.scene.session_uid),
+        request_sha256=scene.collect_sync_request(context).to_record()["sha256"],
     )
     properties.tag_viewport_redraw(context)
-    return report, report_path, opened
+    return report, report_path, False
+
+
+def _write_diagnose_report(context: bpy.types.Context, result, *, prep):
+    """Publish independent investigation evidence without touching applied status."""
+    return _write_sync_report(
+        context, result, prep=prep, operation="Investigate Problems",
+        applied=False, request=prep,
+        evaluation_note="Independent diagnostic solve; visible geometry was not changed",
+    )
+
+
+def _refresh_report_staleness(context: bpy.types.Context) -> bool:
+    """Compare the last report with live numerical evidence without preparing it."""
+    if sync_report.last_report_path() is None:
+        return False
+    try:
+        request_sha256 = scene.collect_sync_request(context).to_record()["sha256"]
+    except (ValueError, ReferenceError, RuntimeError):
+        request_sha256 = ""
+    return sync_report.refresh_last_report(
+        int(context.scene.session_uid), request_sha256,
+    )
+
+
+def last_report_is_stale(_context: bpy.types.Context) -> bool:
+    """Return the stale state last checked by Open or Export Report."""
+    return sync_report.last_report_stale()
+
+
+def _publish_report_or_warn(operator, context, result, *, prep, operation, applied,
+                            calibrations=None, evaluation_note="", request=None,
+                            application_state=""):
+    """A report I/O error must not roll back an already applied numerical result."""
+    try:
+        return _write_sync_report(
+            context, result, prep=prep, operation=operation, applied=applied,
+            calibrations=calibrations, evaluation_note=evaluation_note,
+            request=request, application_state=application_state,
+        )[0]
+    except Exception as error:
+        operator.report({"WARNING"}, f"Could not write sync report: {error}")
+        return None
+
+
+def _refine_report_note(refine_result, applied: bool) -> str:
+    if applied:
+        return ""
+    reason = str(getattr(refine_result, "refusal_reason", "") or
+                 getattr(refine_result, "message", "") or "No accepted fit")
+    if getattr(refine_result, "candidate", None) is not None:
+        reason += "; Use Best Fit is available for review"
+    return "Focal fit not applied: " + reason
+
+
+def _lens_report_request(prep, calibrations=None):
+    """Use frozen lens inputs for a refused fit's coverage and constraints."""
+    calibrations = calibrations or {}
+    matches = [SimpleNamespace(
+        match_id=item.match_id,
+        calibration=calibrations.get(item.match_id) or getattr(item, "base_calibration", None),
+    ) for item in getattr(prep, "lens_inputs", ())]
+    return SimpleNamespace(
+        matches=matches, observations=getattr(prep, "observations", ()),
+        line_observations=getattr(prep, "line_observations", ()),
+        anchor_id=getattr(prep, "anchor_id", ""),
+        known_world=getattr(prep, "known_world", {}),
+        known_lines=getattr(prep, "known_lines", {}),
+        parallel_pairs=getattr(prep, "parallel_pairs", ()),
+        mirror_pairs=getattr(prep, "mirror_pairs", ()),
+        plane_groups=getattr(prep, "plane_groups", ()),
+        fixed_similarities=getattr(prep, "fixed_similarities", {}),
+    )
+
+
+def _live_refine_calibrations(prep):
+    """Read the final camera calibrations, including any anchor-frame shift."""
+    match_ids = {item.match_id for item in getattr(prep, "lens_inputs", ())}
+    return {
+        root.name: scene.calibration_from_settings(root.pm_session)
+        for root in properties.iter_match_roots() if root.name in match_ids
+    }
+
+
+def _publish_refine_report(operator, context, refine_result, prep, sync_result):
+    applied = bool(sync_result is not None and sync_result.success and
+                   not getattr(refine_result, "refusal_reason", ""))
+    legacy_sync_refused = bool(
+        not prep.estimate_focal_from_points and sync_result is not None
+        and not sync_result.success
+    )
+    calibrations = _live_refine_calibrations(prep) if applied or legacy_sync_refused else None
+    note = (
+        "Sync geometry refused: " + sync_result.message
+        if legacy_sync_refused else _refine_report_note(refine_result, applied)
+    )
+    return _publish_report_or_warn(
+        operator, context, sync_result, prep=prep, operation="Refine Lenses",
+        applied=applied, calibrations=calibrations, evaluation_note=note,
+        request=None if applied else _lens_report_request(prep, calibrations),
+        application_state=("Lens settings applied; Sync geometry not applied"
+                           if legacy_sync_refused else ""),
+    )
 
 
 def _pm_controls_camera(context: bpy.types.Context) -> bool:
@@ -3518,6 +3625,7 @@ class PM_OT_solve_sync(bpy.types.Operator):
     _prep = None
     _result_box = None
     _cancel_event = None
+    _previous_sync_status = ""
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
@@ -3536,10 +3644,11 @@ class PM_OT_solve_sync(bpy.types.Operator):
         global _solve_sync_progress, _solve_sync_result_box
 
         workspace = _workspace(context)
+        self._previous_sync_status = workspace.sync_status
         try:
             prep = scene.prepare_diagnose_sync(context)
         except Exception as error:
-            workspace.sync_status = str(error)
+            workspace.sync_status = self._previous_sync_status
             return _report_exception(self, error)
 
         cancel_event = threading.Event()
@@ -3615,7 +3724,7 @@ class PM_OT_solve_sync(bpy.types.Operator):
 
         if result_box.get("error") is not None:
             error = result_box["error"]
-            workspace.sync_status = str(error)
+            workspace.sync_status = self._previous_sync_status
             properties.tag_viewport_redraw(context)
             return _report_exception(
                 self,
@@ -3623,22 +3732,35 @@ class PM_OT_solve_sync(bpy.types.Operator):
             )
 
         if cancelled or result_box.get("cancelled"):
-            workspace.sync_status = "Solve Sync cancelled"
+            workspace.sync_status = self._previous_sync_status
             properties.tag_viewport_redraw(context)
             self.report({"WARNING"}, "Solve Sync cancelled")
             return {"CANCELLED"}
 
         result = result_box.get("result")
         if result is None:
-            workspace.sync_status = "Solve Sync cancelled"
+            workspace.sync_status = self._previous_sync_status
             properties.tag_viewport_redraw(context)
             return {"CANCELLED"}
 
         try:
             applied = scene.apply_solve_sync_result(context, self._prep, result)
+        except scene.SyncSolveRejected as error:
+            _publish_report_or_warn(
+                self, context, error.result, prep=self._prep,
+                operation="Solve Sync", applied=False,
+                evaluation_note="The evaluated camera geometry was refused",
+                request=self._prep,
+            )
+            workspace.sync_status = self._previous_sync_status
+            return _report_exception(self, ValueError(f"Solve Sync not applied: {error}"))
         except Exception as error:
-            workspace.sync_status = str(error)
+            workspace.sync_status = self._previous_sync_status
             return _report_exception(self, error)
+        _publish_report_or_warn(
+            self, context, applied, prep=self._prep,
+            operation="Solve Sync", applied=True,
+        )
         settings = properties.active_session(context)
         if settings is not None:
             settings.error = ""
@@ -3679,16 +3801,27 @@ class PM_OT_solve_sync(bpy.types.Operator):
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         workspace = _workspace(context)
+        previous_sync_status = workspace.sync_status
         try:
-            result = scene.solve_and_apply_sync(context)
-        except Exception as error:
-            message = (
-                f"Sync internal error (missing {error})"
-                if isinstance(error, KeyError)
-                else str(error)
+            prep = scene.prepare_diagnose_sync(context)
+            numerical = scene.run_solve_sync(prep)
+            result = scene.apply_solve_sync_result(context, prep, numerical)
+        except scene.SyncSolveRejected as error:
+            _publish_report_or_warn(
+                self, context, error.result, prep=prep,
+                operation="Solve Sync", applied=False,
+                evaluation_note="The evaluated camera geometry was refused",
+                request=prep,
             )
-            workspace.sync_status = message
+            workspace.sync_status = previous_sync_status
+            return _report_exception(self, ValueError(f"Solve Sync not applied: {error}"))
+        except Exception as error:
+            workspace.sync_status = previous_sync_status
             return _report_exception(self, error)
+        _publish_report_or_warn(
+            self, context, result, prep=prep,
+            operation="Solve Sync", applied=True,
+        )
         # Clear a previous failure banner on success.
         settings = properties.active_session(context)
         if settings is not None:
@@ -3720,15 +3853,14 @@ class PM_OT_cancel_solve_sync(bpy.types.Operator):
 
 
 class PM_OT_diagnose_sync(bpy.types.Operator):
-    """Report sync quality without moving match Empties."""
+    """Investigate a separate solve without changing the applied match status."""
 
     bl_idname = "perspective_match.diagnose_sync"
-    bl_label = "Diagnose"
+    bl_label = "Investigate Problems"
     bl_description = (
-        "Run the sync solver and open a local HTML report with camera connectivity, "
-        "per-landmark RMSE, and Known 3D checks without applying a pose. Auto-sets missing "
-        "origins and, with locked K plus 4+ shared On Ground picks across 3+ "
-        "images, can initialize orientation like Solve Sync. Runs in the "
+        "Run an independent diagnostic solve and prepare a local HTML report with camera "
+        "connectivity, point/line error, and Known 3D checks without changing the scene. "
+        "Runs in the "
         "background — Esc or Cancel to stop"
     )
     bl_options = {"REGISTER"}
@@ -3737,6 +3869,7 @@ class PM_OT_diagnose_sync(bpy.types.Operator):
     _prep = None
     _result_box = None
     _cancel_event = None
+    _previous_sync_status = ""
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
@@ -3748,7 +3881,7 @@ class PM_OT_diagnose_sync(bpy.types.Operator):
 
         workspace = _workspace(context)
         try:
-            prep = scene.prepare_diagnose_sync(context)
+            prep = scene.prepare_diagnose_sync(context, prepare_scene=False)
         except Exception as error:
             workspace.sync_status = str(error)
             return _report_exception(self, error)
@@ -3763,7 +3896,7 @@ class PM_OT_diagnose_sync(bpy.types.Operator):
         }
         with _diagnose_sync_lock:
             if _diagnose_sync_running:
-                self.report({"WARNING"}, "Diagnose already running")
+                self.report({"WARNING"}, "Investigation already running")
                 return {"CANCELLED"}
             _diagnose_sync_cancel = cancel_event
             _diagnose_sync_running = True
@@ -3773,7 +3906,8 @@ class PM_OT_diagnose_sync(bpy.types.Operator):
         self._prep = prep
         self._result_box = result_box
         self._cancel_event = cancel_event
-        workspace.sync_status = "Diagnose running… Esc to cancel"
+        self._previous_sync_status = workspace.sync_status
+        workspace.sync_status = "Investigating problems… Esc to cancel"
         properties.tag_viewport_redraw(context)
 
         def _on_progress(step: int, total: int, label: str) -> None:
@@ -3830,7 +3964,7 @@ class PM_OT_diagnose_sync(bpy.types.Operator):
 
         if result_box.get("error") is not None:
             error = result_box["error"]
-            workspace.sync_status = str(error)
+            workspace.sync_status = self._previous_sync_status
             properties.tag_viewport_redraw(context)
             return _report_exception(
                 self,
@@ -3838,14 +3972,14 @@ class PM_OT_diagnose_sync(bpy.types.Operator):
             )
 
         if cancelled or result_box.get("cancelled"):
-            workspace.sync_status = "Diagnose cancelled"
+            workspace.sync_status = self._previous_sync_status
             properties.tag_viewport_redraw(context)
-            self.report({"WARNING"}, "Diagnose cancelled")
+            self.report({"WARNING"}, "Investigation cancelled")
             return {"CANCELLED"}
 
         result = result_box.get("result")
         if result is None:
-            workspace.sync_status = "Diagnose cancelled"
+            workspace.sync_status = self._previous_sync_status
             properties.tag_viewport_redraw(context)
             return {"CANCELLED"}
 
@@ -3857,8 +3991,9 @@ class PM_OT_diagnose_sync(bpy.types.Operator):
                 prep=self._prep,
             )
         except Exception as error:
-            workspace.sync_status = str(error)
+            workspace.sync_status = self._previous_sync_status
             return _report_exception(self, error)
+        workspace.sync_status = self._previous_sync_status
         settings = properties.active_session(context)
         if settings is not None:
             settings.error = ""
@@ -3874,7 +4009,7 @@ class PM_OT_diagnose_sync(bpy.types.Operator):
         workspace = _workspace(context)
         if event.type == "ESC" and event.value == "PRESS":
             request_diagnose_sync_cancel()
-            workspace.sync_status = "Cancelling Diagnose…"
+            workspace.sync_status = "Cancelling investigation…"
             properties.tag_viewport_redraw(context)
             return {"RUNNING_MODAL"}
 
@@ -3884,7 +4019,7 @@ class PM_OT_diagnose_sync(bpy.types.Operator):
         progress = _diagnose_sync_progress
         label = str(progress.get("label") or "Starting…")
         activity = diagnose_sync_activity_label() or label
-        workspace.sync_status = f"Diagnose · {activity} elapsed"
+        workspace.sync_status = f"Investigate Problems · {activity} elapsed"
         properties.tag_viewport_redraw(context)
         if not _diagnose_sync_result_box.get("done"):
             return {"PASS_THROUGH"}
@@ -3904,8 +4039,9 @@ class PM_OT_diagnose_sync(bpy.types.Operator):
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         workspace = _workspace(context)
+        previous_sync_status = workspace.sync_status
         try:
-            prep = scene.prepare_diagnose_sync(context)
+            prep = scene.prepare_diagnose_sync(context, prepare_scene=False)
             result = scene.run_diagnose_sync(prep)
             scene.apply_diagnose_sync_result(context, prep, result)
             report, _path, opened = _write_diagnose_report(
@@ -3914,8 +4050,9 @@ class PM_OT_diagnose_sync(bpy.types.Operator):
                 prep=prep,
             )
         except Exception as error:
-            workspace.sync_status = str(error)
+            workspace.sync_status = previous_sync_status
             return _report_exception(self, error)
+        workspace.sync_status = previous_sync_status
         level = {"INFO"} if report.severity == "success" else {"WARNING"}
         self.report(level, sync_report.compact_status(report, opened=opened))
         return {"FINISHED"}
@@ -3925,8 +4062,8 @@ class PM_OT_cancel_diagnose_sync(bpy.types.Operator):
     """Stop the running Diagnose background job."""
 
     bl_idname = "perspective_match.cancel_diagnose_sync"
-    bl_label = "Cancel Diagnose"
-    bl_description = "Cancel the running Diagnose solve (Esc also works)"
+    bl_label = "Cancel Investigation"
+    bl_description = "Cancel the running investigation (Esc also works)"
     bl_options = {"REGISTER"}
 
     @classmethod
@@ -3937,9 +4074,9 @@ class PM_OT_cancel_diagnose_sync(bpy.types.Operator):
         if not request_diagnose_sync_cancel():
             return {"CANCELLED"}
         workspace = _workspace(context)
-        workspace.sync_status = "Cancelling Diagnose…"
+        workspace.sync_status = "Cancelling investigation…"
         properties.tag_viewport_redraw(context)
-        self.report({"INFO"}, "Cancelling Diagnose…")
+        self.report({"INFO"}, "Cancelling investigation…")
         return {"FINISHED"}
 
 
@@ -4111,6 +4248,8 @@ class PM_OT_refine_lenses(bpy.types.Operator):
                 getattr(refine_result, "candidate", None) is not None):
             _lens_best_fit = {"prep": prep, "result": refine_result}
 
+        _publish_refine_report(self, context, refine_result, prep, sync_result)
+
         settings = properties.active_session(context)
         if settings is not None:
             settings.error = ""
@@ -4189,6 +4328,7 @@ class PM_OT_refine_lenses(bpy.types.Operator):
         if (prep.estimate_focal_from_points and not refine_result.improved and
                 getattr(refine_result, "candidate", None) is not None):
             _lens_best_fit = {"prep": prep, "result": refine_result}
+        _publish_refine_report(self, context, refine_result, prep, sync_result)
         settings = properties.active_session(context)
         if settings is not None:
             settings.error = ""
@@ -4224,7 +4364,7 @@ class PM_OT_use_best_focal_fit(bpy.types.Operator):
         if pending is None or not lens_best_fit_is_available(context):
             return {"CANCELLED"}
         try:
-            scene.apply_lens_refine_result(
+            _, sync_result = scene.apply_lens_refine_result(
                 context, pending["result"], pending["prep"], use_candidate=True)
         except scene.StaleSyncResult as error:
             _lens_best_fit = None
@@ -4233,6 +4373,13 @@ class PM_OT_use_best_focal_fit(bpy.types.Operator):
         except Exception as error:
             return _report_exception(self, error)
         _lens_best_fit = None
+        candidate = pending["result"].candidate
+        _publish_report_or_warn(
+            self, context, sync_result, prep=pending["prep"],
+            operation="Use Best Fit", applied=True,
+            calibrations=_live_refine_calibrations(pending["prep"]),
+            evaluation_note="Provisional focal fit applied by choice",
+        )
         self.report({"WARNING"}, _workspace(context).sync_status)
         return {"FINISHED"}
 
@@ -4511,27 +4658,29 @@ class PM_OT_clear_sync(bpy.types.Operator):
 
 
 class PM_OT_open_sync_report(bpy.types.Operator):
-    """Open the most recently generated sync diagnostic report."""
+    """Open the last locally generated Solve, Refine, or investigation report."""
 
     bl_idname = "perspective_match.open_sync_report"
-    bl_label = "Open Report"
-    bl_description = "Open the latest self-contained sync diagnostic HTML report"
+    bl_label = "Open Last Report"
+    bl_description = "Open the latest local Solve, Refine, or investigation report"
     bl_options = {"REGISTER"}
 
     @classmethod
     def poll(cls, _context: bpy.types.Context) -> bool:
         return sync_report.last_report_path() is not None
 
-    def execute(self, _context: bpy.types.Context) -> set[str]:
+    def execute(self, context: bpy.types.Context) -> set[str]:
         path = sync_report.last_report_path()
         if path is None:
             self.report({"WARNING"}, "No sync diagnostic report is available")
             return {"CANCELLED"}
+        _refresh_report_staleness(context)
         result = bpy.ops.wm.url_open(url=path.resolve().as_uri())
         if "FINISHED" not in result:
             self.report({"WARNING"}, "Could not open the sync diagnostic report")
             return {"CANCELLED"}
-        self.report({"INFO"}, "Opened sync diagnostic report")
+        self.report({"INFO"}, "Opened last report" +
+                    (" (stale)" if sync_report.last_report_stale() else ""))
         return {"FINISHED"}
 
 
@@ -4556,8 +4705,9 @@ class PM_OT_export_sync_report(bpy.types.Operator, ExportHelper):
             self.filepath = f"{blend_name}-sync-diagnostics.html"
         return ExportHelper.invoke(self, context, event)
 
-    def execute(self, _context: bpy.types.Context) -> set[str]:
+    def execute(self, context: bpy.types.Context) -> set[str]:
         try:
+            _refresh_report_staleness(context)
             output = sync_report.export_last_report(self.filepath)
         except Exception as error:
             return _report_exception(self, error)

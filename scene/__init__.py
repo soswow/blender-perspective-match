@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, fields, replace
+import json
 from pathlib import Path
 from typing import Callable
 
@@ -1513,6 +1515,9 @@ class PinSyncSnapshot:
     landmarks: list
     scene_camera: object
     render_size: tuple
+    sync_solution_evidence_sha256: str = ""
+    sync_solution_geometry_sha256: str = ""
+    sync_solution_result_json: str = ""
 
 
 def capture_pin_sync_snapshot(
@@ -1577,6 +1582,9 @@ def capture_pin_sync_snapshot(
         scene_camera=context.scene.camera,
         render_size=(context.scene.render.resolution_x, context.scene.render.resolution_y,
                      context.scene.render.resolution_percentage),
+        sync_solution_evidence_sha256=str(space.sync_solution_evidence_sha256),
+        sync_solution_geometry_sha256=str(space.sync_solution_geometry_sha256),
+        sync_solution_result_json=str(space.sync_solution_result_json),
     )
 
 
@@ -1584,6 +1592,10 @@ def restore_pin_sync_snapshot(
     context: bpy.types.Context, snapshot: PinSyncSnapshot, *, restore_plates: bool = False
 ) -> None:
     """Restore state without solving; restore_plates requires retained image IDs."""
+    space = properties.workspace(context)
+    space.sync_solution_evidence_sha256 = snapshot.sync_solution_evidence_sha256
+    space.sync_solution_geometry_sha256 = snapshot.sync_solution_geometry_sha256
+    space.sync_solution_result_json = snapshot.sync_solution_result_json
     for root in properties.iter_match_roots():
         stored = snapshot.cameras.get(root.name)
         if stored is None:
@@ -3665,29 +3677,165 @@ class DiagnoseSyncPrep(SyncSolveRequest):
     source_request_sha256: str
 
 
+def _live_sync_solution_seed(
+    context: bpy.types.Context,
+    matches: list,
+    evidence_sha256: str,
+    diagnostics=None,
+):
+    """Read persisted registered geometry and fingerprint its live camera state."""
+    from ..core.sync.types import SyncSolutionSeed
+
+    match_map = {item.match_id: item for item in matches}
+    roots = {
+        root.name: root for root in properties.iter_match_roots()
+        if root.name in match_map
+        and bool(root.pm_session.sync_last_ok)
+        and bool(root.pm_session.sync_is_applied)
+    }
+    anchor = properties.anchor_root(context)
+    if anchor is None or anchor.name not in roots or len(roots) < 2:
+        return None, ""
+    if any(matched_camera_has_drifted(root.pm_session) for root in roots.values()):
+        return None, ""
+    similarities = {name: similarity_from_root(root) for name, root in roots.items()}
+    if not evidence_sha256:
+        # Older .blend files have no provenance stamp. Accept only the stored
+        # applied pose itself as an unproven warm start, never an incumbent.
+        for name, root in roots.items():
+            stored = _similarity_from_session(root.pm_session)
+            live_matrix = similarities[name].matrix()
+            stored_matrix = stored.matrix()
+            if np.linalg.norm(live_matrix - stored_matrix) > 1.0e-4 * max(
+                np.linalg.norm(stored_matrix), 1.0,
+            ):
+                return None, ""
+    calibrations = {name: deepcopy(match_map[name].calibration) for name in roots}
+    landmarks = {}
+    line_segments = {}
+    for landmark in properties.workspace(context).landmarks:
+        if not landmark.has_position:
+            continue
+        landmark_id = str(landmark.item_id)
+        if landmark.kind == "LINE" and landmark.has_line_segment:
+            ends = (
+                np.asarray(landmark.position, dtype=np.float64),
+                np.asarray(landmark.position_b, dtype=np.float64),
+            )
+            if not all(np.isfinite(end).all() for end in ends):
+                return None, ""
+            line_segments[landmark_id] = ends
+            landmarks[landmark_id] = 0.5 * (ends[0] + ends[1])
+        else:
+            point = np.asarray(landmark.position, dtype=np.float64)
+            if not np.isfinite(point).all():
+                return None, ""
+            landmarks[landmark_id] = point
+    if not landmarks and not line_segments:
+        return None, ""
+    seed = SyncSolutionSeed(
+        calibrations=calibrations, similarities=similarities,
+        landmarks=landmarks, line_segments=line_segments,
+        evidence_sha256=evidence_sha256,
+        diagnostics=diagnostics,
+    )
+    geometry_sha256 = request_fingerprint(json_values(dict(
+        calibrations=calibrations, similarities=similarities,
+        landmarks=landmarks, line_segments=line_segments,
+    )))
+    return seed, geometry_sha256
+
+
+def _stamp_sync_solution(context: bpy.types.Context, result) -> None:
+    """Persist provenance only after cameras and geometry have been applied."""
+    request = collect_sync_request(context)
+    evidence = request.evidence_sha256()
+    seed, geometry_sha256 = _live_sync_solution_seed(context, request.matches, evidence)
+    space = properties.workspace(context)
+    space.sync_solution_evidence_sha256 = evidence if seed is not None else ""
+    space.sync_solution_geometry_sha256 = geometry_sha256
+    if seed is None:
+        space.sync_solution_result_json = ""
+    else:
+        from ..core.sync.types import SyncAppliedDiagnostics
+
+        diagnostics = SyncAppliedDiagnostics(
+            mean_reprojection_px=float(result.mean_reprojection_px),
+            per_match_rmse_px=dict(result.per_match_rmse_px),
+            per_landmark_rmse_px=dict(result.per_landmark_rmse_px),
+            point_rmse_px=result.point_rmse_px,
+            line_rmse_px=result.line_rmse_px,
+            per_match_point_rmse_px=dict(result.per_match_point_rmse_px),
+            per_match_line_rmse_px=dict(result.per_match_line_rmse_px),
+            message=str(result.message),
+            line_support_angles_deg=dict(result.line_support_angles_deg),
+            weak_line_ids=list(result.weak_line_ids),
+            plane_seeded_landmark_ids=list(result.plane_seeded_landmark_ids),
+            downweighted_landmark_ids=list(result.downweighted_landmark_ids),
+            bundle_adjusted=bool(result.bundle_adjusted),
+            inconsistent_picks=list(result.inconsistent_picks),
+            joint_initial_objective=result.joint_initial_objective,
+            joint_final_objective=result.joint_final_objective,
+            joint_constraint_gaps=dict(result.joint_constraint_gaps),
+            joint_mirror_offset_m=float(result.joint_mirror_offset_m),
+            joint_support_coverage=deepcopy(result.joint_support_coverage),
+            joint_refusal_reason=str(result.joint_refusal_reason),
+            joint_point_weights=deepcopy(result.joint_point_weights),
+        )
+        space.sync_solution_result_json = json.dumps(json_values(diagnostics), allow_nan=False)
+
+
 def collect_sync_request(context: bpy.types.Context) -> SyncSolveRequest:
     """Read current Sync evidence without automatic origin or ground preparation."""
     anchor = properties.anchor_root(context)
     if anchor is None:
         raise ValueError("Choose an anchor match first")
     matches, observations, known_world, line_observations, known_lines, parallel_pairs = build_sync_problem(context)
-    return SyncSolveRequest(
+    request = SyncSolveRequest(
         matches=matches, observations=observations, known_world=known_world,
         line_observations=line_observations, known_lines=known_lines,
         parallel_pairs=parallel_pairs, anchor_id=anchor.name,
         **collect_sync_solve_kwargs(context),
     )
+    space = properties.workspace(context)
+    if space.sync_solution_evidence_sha256 and space.sync_solution_geometry_sha256:
+        diagnostics = None
+        try:
+            if space.sync_solution_result_json:
+                from ..core.sync.request import _decode_diagnostics
+
+                diagnostics = _decode_diagnostics(json.loads(space.sync_solution_result_json))
+        except (ValueError, TypeError, KeyError):
+            diagnostics = None
+        seed, geometry_sha256 = _live_sync_solution_seed(
+            context, matches, str(space.sync_solution_evidence_sha256), diagnostics,
+        )
+        if seed is not None and geometry_sha256 == str(space.sync_solution_geometry_sha256):
+            request.initial_solution = seed
+    elif not space.sync_solution_evidence_sha256 and not space.sync_solution_geometry_sha256:
+        seed, _geometry_sha256 = _live_sync_solution_seed(context, matches, "")
+        request.initial_solution = seed
+    return request
 
 
-def prepare_diagnose_sync(context: bpy.types.Context) -> DiagnoseSyncPrep:
-    """Prepare Solve Sync/Diagnose inputs, including automatic ground/origin setup."""
+def prepare_diagnose_sync(
+    context: bpy.types.Context, *, prepare_scene: bool = True,
+) -> DiagnoseSyncPrep:
+    """Collect Diagnose/Sync inputs, optionally preparing automatic origins."""
     space = properties.workspace(context)
     anchor = properties.anchor_root(context)
     if anchor is None:
         raise ValueError("Choose an anchor match first")
 
-    ground_frame_note = ensure_ground_frame_from_landmarks(context)
-    auto_origin_notes = ensure_origins_from_ground_landmarks(context)
+    live_seed = collect_sync_request(context).initial_solution if prepare_scene else None
+    ground_frame_note = (
+        ensure_ground_frame_from_landmarks(context)
+        if prepare_scene and live_seed is None else ""
+    )
+    auto_origin_notes = (
+        ensure_origins_from_ground_landmarks(context)
+        if prepare_scene and live_seed is None else []
+    )
     warnings = known_anchor_pick_warnings(context)
     request = collect_sync_request(context)
     matches = request.matches
@@ -3728,15 +3876,150 @@ def run_solve_sync(
     cancel_check: Callable[[], bool] | None = None,
     progress_callback: Callable[[str], None] | None = None,
 ):
-    """Run the bpy-free Solve Sync; safe for a worker thread."""
+    """Initialize Sync geometry, then fit its supported graph jointly."""
     from ..core import sync as sync_module
+    from ..core.focal_bundle import refine_fixed_focals
+    from ..core.joint_fit_score import JointFitScorer, supported_joint_request
+    from ..core.sync.request import SyncSolveRequest
+    from ..core.sync.solve import solution_result_from_seed
+    from ..core.sync.types import SyncCancelled
 
-    return sync_module.solve_landmark_sync(
-        **prep.solver_kwargs(),
-        use_pose_cache=True,
-        cancel_check=cancel_check,
-        progress_callback=progress_callback,
+    request = SyncSolveRequest.from_record(prep.to_record())
+    seed = request.initial_solution
+    same_applied_evidence = bool(
+        seed is not None
+        and seed.diagnostics is not None
+        and seed.evidence_sha256 == request.evidence_sha256()
     )
+    initializer = None
+    used_applied_seed = False
+    applied_seed_refusal = ""
+    if same_applied_evidence:
+        initializer = solution_result_from_seed(seed)
+        if initializer is not None:
+            supported, coverage = supported_joint_request(request, initializer)
+            frozen = seed.diagnostics.joint_point_weights
+            if frozen is None and supported.observations:
+                applied_seed_refusal = "Applied joint weights are unavailable"
+                initializer = None
+            else:
+                score = JointFitScorer(
+                    supported, initializer, calibrations=initializer.calibrations,
+                    frozen_point_weights=frozen,
+                ).score(initializer, calibrations=initializer.calibrations)
+                if (
+                    not score.valid
+                    or request.anchor_id not in {item.match_id for item in supported.matches}
+                    or len(supported.matches) < 2
+                ):
+                    applied_seed_refusal = score.reason or "Applied geometry lost support"
+                    initializer = None
+                else:
+                    used_applied_seed = True
+                    initializer.joint_support_coverage = coverage
+                    if progress_callback is not None:
+                        progress_callback("Using the applied Sync geometry and weights")
+            if initializer is None and progress_callback is not None:
+                progress_callback(applied_seed_refusal + "; reinitializing")
+
+    if initializer is None:
+        initializer = sync_module.solve_landmark_sync(
+            **prep.solver_kwargs(),
+            use_pose_cache=True,
+            cancel_check=cancel_check,
+            progress_callback=progress_callback,
+        )
+        if not initializer.success:
+            return initializer
+        # The registration initializer can repair an implausible pixel aspect.
+        # The joint stage and final apply must use exactly those repaired K's.
+        request.matches = deepcopy(prep.matches)
+        if not initializer.calibrations:
+            initializer.calibrations = {
+                item.match_id: deepcopy(item.calibration) for item in request.matches
+            }
+
+    supported, coverage = supported_joint_request(request, initializer)
+    scorer = JointFitScorer(
+        supported, initializer, calibrations=initializer.calibrations,
+        frozen_point_weights=(seed.diagnostics.joint_point_weights
+                              if used_applied_seed else None),
+    )
+    initial_score = scorer.score(initializer, calibrations=initializer.calibrations)
+
+    def _joint_progress(_step: int, _total: int, label: str) -> None:
+        if progress_callback is not None:
+            progress_callback(label)
+
+    outcome = refine_fixed_focals(
+        request, initializer,
+        frozen_point_weights=(seed.diagnostics.joint_point_weights
+                              if used_applied_seed else None),
+        cancel_check=cancel_check,
+        progress_callback=_joint_progress,
+    )
+    if (cancel_check is not None and cancel_check()) or "cancel" in outcome.reason.lower():
+        raise SyncCancelled("Sync cancelled")
+    if outcome.accepted and outcome.sync_result is not None:
+        result = outcome.sync_result
+        final_calibrations = outcome.calibrations or result.calibrations
+        final_score = scorer.score(result, calibrations=final_calibrations)
+        if (
+            result.success and final_score.valid
+            and final_score.supported_observations == (
+                len(supported.observations) + len(supported.line_observations or ())
+            )
+            and (
+                not initial_score.valid
+                or final_score.objective <= initial_score.objective +
+                1.0e-9 * max(initial_score.objective, 1.0)
+            )
+        ):
+            result.calibrations = deepcopy(final_calibrations)
+            result.joint_support_coverage = deepcopy(outcome.support_coverage)
+            return result
+        outcome.reason = (
+            final_score.reason or
+            "Joint candidate lost support or worsened the current weighted objective"
+        )
+
+    # A refused fit can leave a useful Sync initializer, but only if that
+    # geometry scores over the same currently supported evidence and relations.
+    initializer.joint_support_coverage = deepcopy(coverage)
+    initializer.joint_refusal_reason = outcome.reason
+    if initial_score.valid and not used_applied_seed:
+        initializer.mean_reprojection_px = (
+            initial_score.point_rmse_px if supported.observations
+            else initial_score.line_rmse_px
+        )
+        initializer.point_rmse_px = initial_score.point_rmse_px
+        initializer.line_rmse_px = initial_score.line_rmse_px
+        initializer.per_match_rmse_px = dict(initial_score.per_match_rmse_px)
+        initializer.per_match_point_rmse_px = dict(initial_score.per_match_point_rmse_px)
+        initializer.per_match_line_rmse_px = dict(initial_score.per_match_line_rmse_px)
+        initializer.per_landmark_rmse_px = dict(initial_score.per_landmark_rmse_px)
+        initializer.joint_initial_objective = initial_score.objective
+        initializer.joint_final_objective = initial_score.objective
+        initializer.joint_constraint_gaps = deepcopy(initial_score.constraint_gaps)
+        initializer.joint_point_weights = scorer.effective_point_weights
+        initializer.downweighted_landmark_ids = list(scorer.downweighted_landmark_ids)
+    if (
+        not initial_score.valid
+        or request.anchor_id not in {item.match_id for item in supported.matches}
+        or len(supported.matches) < 2
+    ):
+        initializer.success = False
+        initializer.message = (
+            f"Joint fit refused ({outcome.reason}); current geometry is invalid: "
+            f"{initial_score.reason or 'fewer than two supported cameras'}"
+        )
+    elif not used_applied_seed:
+        initializer.message += (
+            f" · Joint fit unavailable: {outcome.reason}"
+            f" · supported point {initial_score.point_rmse_px:.2f}px"
+            f", line {initial_score.line_rmse_px:.2f}px"
+        )
+    return initializer
 
 
 def run_diagnose_sync(
@@ -3745,10 +4028,12 @@ def run_diagnose_sync(
     cancel_check: Callable[[], bool] | None = None,
     progress_callback: Callable[[int, int, str], None] | None = None,
 ):
-    """Run the bpy-free Diagnose solve; safe for a worker thread."""
-    from ..core import sync as sync_module
+    """Investigate the common fit without applying its trial geometry."""
+    from ..core.focal_bundle import refine_fixed_focals
+    from ..core.sync.investigate import common_leave_one_out
+    from ..core.sync.request import SyncSolveRequest
 
-    total_steps = 6
+    total_steps = 7
 
     def _base_progress(label: str) -> None:
         if progress_callback is not None:
@@ -3760,19 +4045,35 @@ def run_diagnose_sync(
         progress_callback=_base_progress,
     )
     if progress_callback is not None:
-        progress_callback(1, total_steps, "Camera graph solved")
-    if result.mean_reprojection_px > 8.0 or not result.success:
+        progress_callback(1, total_steps, "Common camera and geometry fit complete")
+    if result.success:
+        request = SyncSolveRequest.from_record(prep.to_record())
+        for match in request.matches:
+            calibration = result.calibrations.get(match.match_id)
+            if calibration is not None:
+                match.calibration = deepcopy(calibration)
+
+        def _counterfactual(filtered_request, reduced_baseline, *, cancel_check):
+            return refine_fixed_focals(
+                filtered_request, reduced_baseline, cancel_check=cancel_check,
+            )
+
         def _leave_one_out_progress(step: int, total: int, label: str) -> None:
             if progress_callback is not None:
-                progress_callback(1 + step, 1 + total, label)
+                progress_callback(2 + step, 2 + max(total, 1), label)
 
-        result.leave_one_out = sync_module.leave_one_out_landmark_report(
-            **prep.leave_one_out_kwargs(),
-            top_k=5,
-            baseline=result if result.per_landmark_rmse_px else None,
+        investigation = common_leave_one_out(
+            request, result, _counterfactual,
             cancel_check=cancel_check,
             progress_callback=_leave_one_out_progress,
         )
+        result.common_leave_one_out = investigation
+        result.leave_one_out = [
+            (item.landmark_name, item.baseline_point_rmse_px,
+             item.candidate_point_rmse_px)
+            for item in investigation.items
+            if item.kind == "point" and item.baseline_valid and item.candidate_valid
+        ]
     if progress_callback is not None:
         progress_callback(total_steps, total_steps, "Complete")
     return result
@@ -3787,7 +4088,7 @@ def apply_diagnose_sync_result(
     prep: DiagnoseSyncPrep,
     result,
 ):
-    """Write Diagnose RMSE/status onto Blender data on the main thread."""
+    """Validate Diagnose ownership without replacing the applied overlay state."""
     current = None
     if int(context.scene.session_uid) == prep.source_scene_uid:
         try:
@@ -3796,26 +4097,12 @@ def apply_diagnose_sync_result(
             pass
     if current != prep.source_request_sha256:
         raise StaleSyncResult("Sync inputs changed while Diagnose was running. Run Diagnose again.")
-    space = properties.workspace(context)
-    _apply_sync_landmark_diagnostics(context, result)
-
-    registered = len(set(result.similarities) & {item.match_id for item in prep.matches})
-    outcome = "Complete"
-    if not result.success:
-        outcome = "Failed"
-    elif registered < len(prep.matches):
-        outcome = "Partial"
-    space.sync_status = (
-        f"Diagnose · {outcome} · {registered}/{len(prep.matches)} cameras · "
-        f"{result.mean_reprojection_px:.2f}px · HTML report pending"
-    )
-    properties.tag_viewport_redraw(context)
     return result
 
 
 def diagnose_sync(context: bpy.types.Context):
     """Blocking Diagnose wrapper for scripts and operator redo."""
-    prep = prepare_diagnose_sync(context)
+    prep = prepare_diagnose_sync(context, prepare_scene=False)
     result = run_diagnose_sync(prep)
     return apply_diagnose_sync_result(context, prep, result)
 
@@ -3845,7 +4132,6 @@ def apply_solve_sync_result(
             "Sync inputs changed while Solve Sync was running. Run Solve Sync again."
         )
     space = properties.workspace(context)
-    _apply_sync_landmark_diagnostics(context, result)
     message = result.message
     if prep.ground_frame_note:
         message = prep.ground_frame_note + " · " + message
@@ -3857,11 +4143,11 @@ def apply_solve_sync_result(
         message = f"{prep.excluded_landmarks} landmark(s) excluded · " + message
     if prep.warnings:
         message = "Known 3D warn: " + "; ".join(prep.warnings[:2]) + " | " + message
-    space.sync_status = message
     result.message = message
     if not result.success:
         raise SyncSolveRejected(result)
-
+    _apply_sync_landmark_diagnostics(context, result)
+    space.sync_status = message
     return _apply_sync_solve_result(context, result, prep.matches)
 
 
@@ -3877,6 +4163,21 @@ def _apply_sync_solve_result(context: bpy.types.Context, result, matches):
     space = properties.workspace(context)
     anchor = properties.anchor_root(context)
     root_by_name = {root.name: root for root in properties.iter_match_roots()}
+    for match_id, calibration in result.calibrations.items():
+        if match_id not in result.similarities:
+            continue
+        root = root_by_name.get(match_id)
+        if root is None or uses_adjusted_camera(root.pm_session):
+            continue
+        previous = calibration_from_settings(root.pm_session)
+        if _intrinsics_or_distortion_changed(previous, calibration):
+            invalidate_undistorted_cache(root.pm_session)
+        apply_camera(
+            context.scene, root.pm_session, calibration, update_scene_camera=False,
+        )
+        for item in matches:
+            if item.match_id == match_id:
+                item.calibration = calibration
     offset = _free_mirror_origin_offset(context, result, anchor)
     if offset is not None:
         from ..core import sync as sync_module
@@ -3918,6 +4219,10 @@ def _apply_sync_solve_result(context: bpy.types.Context, result, matches):
         result = replace(
             result, similarities=similarities, landmarks=landmarks,
             line_segments=line_segments,
+            calibrations={
+                **result.calibrations,
+                **({anchor.name: calibration} if anchor.name in result.calibrations else {}),
+            },
         )
     record_sync_last_ok(set(result.similarities))
     for match_id, similarity in result.similarities.items():
@@ -3972,6 +4277,9 @@ def _apply_sync_solve_result(context: bpy.types.Context, result, matches):
             landmark.has_line_segment = False
 
     sync_landmark_empties(context)
+    # Flush the newly transformed camera hierarchy before the live drift check.
+    context.view_layer.update()
+    _stamp_sync_solution(context, result)
     properties.tag_sync_ui_redraw(context)
     return result
 
@@ -4031,6 +4339,9 @@ def clear_sync_transforms(context: bpy.types.Context) -> None:
         landmark.has_line_segment = False
         landmark.rmse_px = 0.0
     clear_landmark_empties(context)
+    space.sync_solution_evidence_sha256 = ""
+    space.sync_solution_geometry_sha256 = ""
+    space.sync_solution_result_json = ""
     space.sync_status = "Sync cleared"
     from ..core import sync as sync_module
 
@@ -4079,6 +4390,7 @@ class LensRefinePrep:
     mirror_slack: float | None = None
     plane_groups: list | None = None
     plane_slack: float | None = None
+    initial_solution: object | None = None
     source_scene_uid: int = 0
     source_request_sha256: str = ""
 
@@ -4108,8 +4420,8 @@ def prepare_lens_refine(context: bpy.types.Context) -> LensRefinePrep:
     """Prepare origins, then collect the lens job's inputs and apply targets."""
     if properties.anchor_root(context) is None:
         raise ValueError("Choose an anchor match first")
-    space = properties.workspace(context)
-    if not (bool(space.estimate_focal_from_points) and not bool(space.share_lens)):
+    if collect_sync_request(context).initial_solution is None:
+        ensure_ground_frame_from_landmarks(context)
         ensure_origins_from_ground_landmarks(context)
     return collect_lens_refine_inputs(context)
 
@@ -4244,6 +4556,7 @@ def collect_lens_refine_inputs(context: bpy.types.Context) -> LensRefinePrep:
         share_lens=share_lens,
         estimate_focal_from_points=point_focal,
         pick_sigma_px=float(space.focal_pick_sigma_px),
+        initial_solution=collect_sync_request(context).initial_solution,
         **collect_sync_solve_kwargs(context),
     )
     prep.source_scene_uid = int(context.scene.session_uid)

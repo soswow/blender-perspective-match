@@ -132,7 +132,10 @@ class FocalConstraintReliabilityTests(TestCase):
             pick_sigma_px=case["pick_sigma_px"], fx_span=0.4,
             plane_groups=request["plane_groups"], plane_slack=request["plane_slack"])
         self.assertTrue(outcome.improved, outcome.refusal_reason)
-        self.assertLess(outcome.final_cost, 0.5)
+        self.assertLess(outcome.final_cost, outcome.initial_cost)
+        self.assertLess(outcome.final_sync_rmse, 0.5)
+        self.assertAlmostEqual(outcome.sync_result.mean_reprojection_px,
+                               outcome.final_sync_rmse)
         fitted_cameras = []
         for camera in request["cameras"]:
             updated = dict(camera)

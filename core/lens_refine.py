@@ -20,6 +20,10 @@ from .focal_bundle import (
     DEFAULT_POINT_FOCAL_SPAN, MAX_CAMERAS, MAX_POINTS, MAX_LINES, MAX_LINE_STROKES,
     fit_independent_focals, FocalFitCandidate,
 )
+from .joint_fit_score import JointFitScorer, joint_line_support_diagnostics
+from .focal_startup import provisional_poses
+from .sync.request import SyncSolveRequest
+from .sync.constants import GROUND_SLACK_DEFAULT, KNOWN_3D_SLACK_DEFAULT
 
 
 # Soft prior: 1 px endpoint-equivalent VP line RMS ≈ this many sync pixels.
@@ -360,6 +364,7 @@ def _run_sync(
     readonly_match_ids: set[str] | None = None,
     cancel_check=None,
     progress_callback=None,
+    initial_solution=None,
 ) -> sync_module.SyncSolveResult:
     sync_matches = [
         sync_module.SyncMatchInput(match_id=match_id, calibration=calibrations[match_id])
@@ -374,6 +379,7 @@ def _run_sync(
         known_lines=known_lines,
         parallel_pairs=parallel_pairs,
         initial_similarities=initial_similarities,
+        **({"initial_solution": initial_solution} if initial_solution is not None else {}),
         fixed_similarities=fixed_similarities,
         lock_rotation=lock_rotation,
         lock_translation=lock_translation,
@@ -429,8 +435,9 @@ def refine_lenses_from_landmarks(
     readonly_match_ids: set[str] | None = None,
     cancel_check=None,
     progress_callback=None,
+    initial_solution=None,
 ) -> LensRefineResult:
-    """Search free focals with coordinate descent, then a coupled polish.
+    """Fit focal from supported joint geometry, or search the ordinary lens objective.
 
     Coordinate descent moves one unlocked match at a time. The coupled polish
     then jointly varies focals for landmark-sharing pairs (and a global
@@ -446,8 +453,8 @@ def refine_lenses_from_landmarks(
     ``progress_callback(step, total, label)`` reports progress (may be called
     from a worker thread — keep it bpy-free).
 
-    ``estimate_focal_from_points`` opts into a point-only bundle fit, with an
-    explicit per-coordinate pixel-noise assumption.
+    ``estimate_focal_from_points`` opts into the joint focal/pose/geometry fit,
+    with an explicit per-coordinate pixel-noise assumption.
     """
     if not matches:
         raise ValueError("No matches to refine")
@@ -459,11 +466,14 @@ def refine_lenses_from_landmarks(
         fx_span = DEFAULT_POINT_FOCAL_SPAN if estimate_focal_from_points else DEFAULT_FX_SPAN
 
     if estimate_focal_from_points:
-        # This path fits the existing private camera poses through root
-        # similarities. Only fully supported 2D point relations enter this fit;
-        # silently omitting any other constraint would change its meaning.
+        # This path fits private camera calibrations, roots and supported
+        # point/line geometry under the same current-evidence constraints.
         initial_cals = {item.match_id: item.base_calibration for item in matches
                         if item.base_calibration is not None}
+        if (len(initial_cals) != len(matches) and initial_solution is not None and
+                getattr(initial_solution, "calibrations", None)):
+            if set(initial_solution.calibrations) == set(match_ids):
+                initial_cals = initial_solution.calibrations
         empty_sync = sync_module.SyncSolveResult(
             similarities={}, landmarks={}, mean_reprojection_px=float("inf"),
             per_match_rmse_px={}, per_landmark_rmse_px={}, message="Point focal refused",
@@ -480,29 +490,28 @@ def refine_lenses_from_landmarks(
 
         if len(initial_cals) != len(matches):
             return refusal("Point focal estimation needs a saved private camera solve for every match")
-        if len(matches) < 3:
-            return refusal("Point focal estimation needs at least three cameras")
+        if len(matches) < (2 if known_world or known_lines or fixed_similarities or
+                              any(item.on_ground for item in observations) else 3):
+            return refusal("Independent focal fitting needs three free-point views or two referenced cameras")
         if len(matches) > MAX_CAMERAS:
             return refusal(f"Point focal estimation currently supports up to {MAX_CAMERAS} cameras per joint fit (resource limit)")
-        if known_lines:
-            return refusal("Independent FOV fitting does not support Known 3D lines")
         point_count = len({item.landmark_id for item in observations})
-        if not 8 <= point_count <= MAX_POINTS:
+        if not (known_world or known_lines or line_observations or
+                any(item.on_ground for item in observations)) and not 8 <= point_count <= MAX_POINTS:
             return refusal(f"Point focal estimation needs 8–{MAX_POINTS} points")
         for match_id in match_ids:
             count = sum(item.match_id == match_id for item in observations)
-            if count < 8:
+            if count < 8 and not (known_world or known_lines or line_observations or
+                                  any(item.on_ground for item in observations)):
                 return refusal(f"{match_id} has {count} point picks; each camera needs at least eight")
         if not np.isfinite(pick_sigma_px) or pick_sigma_px <= 0:
             return refusal("Pick sigma must be positive and finite")
         if not np.isfinite(fx_span) or not 0 < fx_span < 1:
             return refusal("Focal search span must lie between 0 and 100%")
-        point_ids = {item.landmark_id for item in observations}
+        point_ids = {item.landmark_id for item in observations} | set(known_world or {})
         picked_views = {point_id: {item.match_id for item in observations
                                    if item.landmark_id == point_id}
                         for point_id in point_ids}
-        if any(len(views) < 2 for views in picked_views.values()):
-            return refusal("Point focal estimation needs at least two camera picks per point; one-view plane and mirror members are not supported yet")
         if mirror_landmark_id is not None:
             if not isinstance(mirror_landmark_id, str) or not mirror_landmark_id:
                 return refusal("Mirror reference landmark ID is invalid")
@@ -517,61 +526,144 @@ def refine_lenses_from_landmarks(
         if any(not isinstance(item, sync_module.SyncLineObservation)
                for item in (line_observations or ())):
             return refusal("Invalid line landmarks: expected line strokes")
-        line_ids = {item.landmark_id for item in (line_observations or ())}
+        line_ids = {item.landmark_id for item in (line_observations or ())} | set(known_lines or {})
         if len(line_ids) > MAX_LINES or len(line_observations or ()) > MAX_LINE_STROKES:
             return refusal(f"Line fit supports up to {MAX_LINES} lines and {MAX_LINE_STROKES} strokes (resource limit)")
         try:
-            validate_line_relations(point_ids, line_ids, plane_groups, parallel_pairs)
+            validate_line_relations(point_ids, line_ids, plane_groups, parallel_pairs,
+                                    known_line_ids=set(known_lines or {}))
         except (ValueError, TypeError) as exc:
             return refusal(str(exc))
         if any(set(pair) & line_ids and set(pair) & point_ids for pair in (mirror_pairs or ())):
             return refusal("Mirror relation contains unsupported or mixed point/line members")
         relation_ids = {item[0] for item in (plane_groups or ())} | {
             point_id for pair in (mirror_pairs or ()) for point_id in pair}
-        if not relation_ids <= point_ids | line_ids:
-            return refusal("Plane or mirror relation contains a landmark without two-view picks")
+        if not relation_ids <= point_ids | line_ids | set(known_lines or {}):
+            return refusal("Plane or mirror relation contains an unrepresented landmark")
         line_views = {key: {item.match_id for item in (line_observations or ())
                             if item.landmark_id == key} for key in line_ids}
-        if any(len(views) < 2 and not any(
-                key in pair and len(line_views.get(pair[0] if pair[1] == key else pair[1], ())) >= 2
+        if any(key not in (known_lines or {}) and len(views) < 2 and not any(
+                key in pair and (
+                    (partner := pair[0] if pair[1] == key else pair[1]) in (known_lines or {}) or
+                    len(line_views.get(partner, ())) >= 2)
                 for pair in (mirror_pairs or ()))
                for key, views in line_views.items()):
             return refusal("Line landmarks need two-view strokes or a reconstructed mirror partner")
 
-        unsupported = (
-            share_lens or bool(known_world) or
-            bool(known_lines) or bool(fixed_similarities) or
-            bool(readonly_match_ids) or lock_rotation or lock_translation or
-            any(item.on_ground for item in observations) or
-            any(any(item.line_bundles.values()) or item.reorient_from_vp
-                for item in matches) or
-            (location_match_ids is not None and set(location_match_ids) != set(match_ids))
-        )
-        if unsupported:
-            return refusal("Independent FOV fitting does not support camera roles, pose locks, VP lines, Known 3D or On Ground")
+        joint_request = SyncSolveRequest(
+            matches=[sync_module.SyncMatchInput(key, initial_cals[key])
+                     for key in match_ids],
+            observations=observations, anchor_id=anchor_id,
+            known_world=known_world, line_observations=line_observations,
+            known_lines=known_lines, parallel_pairs=parallel_pairs,
+            fixed_similarities=fixed_similarities,
+            lock_rotation=lock_rotation, lock_translation=lock_translation,
+            ground_slack=ground_slack, known_3d_slack=known_3d_slack,
+            mirror_pairs=mirror_pairs, mirror_plane=mirror_plane,
+            mirror_slack=mirror_slack, mirror_landmark_id=mirror_landmark_id,
+            plane_groups=plane_groups, plane_slack=plane_slack,
+            location_match_ids=location_match_ids,
+            readonly_match_ids=readonly_match_ids)
+        seed_result = None
+        seed_score = None
+        seed_evidence_matches = bool(
+            initial_solution is not None and
+            getattr(initial_solution, "evidence_sha256", "") ==
+            joint_request.evidence_sha256())
+        frozen_seed_weights = (
+            initial_solution.diagnostics.joint_point_weights
+            if seed_evidence_matches and getattr(initial_solution, "diagnostics", None)
+            else None)
+        if initial_solution is not None and getattr(initial_solution, "diagnostics", None) is not None:
+            try:
+                from .sync.solve import solution_result_from_seed
+            except ImportError:
+                solution_result_from_seed = None
+            if solution_result_from_seed is not None:
+                seed_result = solution_result_from_seed(initial_solution)
+            if seed_result is not None and set(seed_result.similarities) >= set(match_ids):
+                seed_scorer = JointFitScorer(joint_request, seed_result,
+                                             calibrations=initial_cals,
+                                             frozen_point_weights=frozen_seed_weights)
+                trial = seed_scorer.score(seed_result, calibrations=initial_cals)
+                if trial.valid and trial.supported_observations == (
+                        len(observations) + len(line_observations or ())):
+                    seed_score = trial
+        certified_seed = (
+            seed_score is not None and seed_evidence_matches and
+            (frozen_seed_weights is not None or not observations))
         if cancel_check and cancel_check():
             return refusal("Cancelled", cancelled=True)
-        if progress_callback:
-            progress_callback(0, 101, "Registering cameras for point focal estimation")
-        try:
-            initial = _run_sync(
-                initial_cals, match_ids, observations, [], anchor_id, {}, {}, [],
-                fixed_similarities=None, lock_rotation=False, lock_translation=False,
-                # Joint point-FOV fitting enforces these relations. Register
-                # from image picks alone so guessed K cannot harden a poor
-                # constrained 3D start before the focal parameters are free.
-                plane_groups=None, plane_slack=0.0,
-                mirror_pairs=None, mirror_plane=None, mirror_slack=0.0,
-                location_match_ids=location_match_ids, cancel_check=cancel_check,
-                progress_callback=(
-                    (lambda label: progress_callback(0, 101, label))
-                    if progress_callback else None))
-        except sync_module.SyncCancelled:
-            return refusal("Cancelled", cancelled=True)
-        initial_rmse = _sync_rmse(initial, observations, initial_cals)
+        if certified_seed:
+            initial = seed_result
+        else:
+            # For a free, unreferenced point graph, hard plane/mirror geometry
+            # at the guessed focal can bias camera registration. These
+            # relations enter the common fitter and final scorer unchanged.
+            point_only_start = (
+                initial_solution is None and not known_world and not known_lines and
+                not line_observations and not fixed_similarities and
+                not lock_rotation and not lock_translation and
+                not readonly_match_ids and
+                (location_match_ids is None or
+                 set(location_match_ids) == set(match_ids)) and
+                not any(item.on_ground for item in observations))
+            if progress_callback:
+                progress_callback(0, 101, "Registering cameras for point focal estimation")
+            try:
+                initial = _run_sync(
+                    initial_cals, match_ids, observations, line_observations or [],
+                    anchor_id, known_world or {}, known_lines or {}, parallel_pairs or [],
+                    fixed_similarities=fixed_similarities,
+                    lock_rotation=lock_rotation, lock_translation=lock_translation,
+                    ground_slack=ground_slack, known_3d_slack=known_3d_slack,
+                    plane_groups=None if point_only_start else plane_groups,
+                    plane_slack=0.0 if point_only_start else plane_slack,
+                    mirror_pairs=None if point_only_start else mirror_pairs,
+                    mirror_plane=None if point_only_start else mirror_plane,
+                    mirror_slack=0.0 if point_only_start else mirror_slack,
+                    mirror_landmark_id=None if point_only_start else mirror_landmark_id,
+                    location_match_ids=location_match_ids,
+                    readonly_match_ids=readonly_match_ids,
+                    initial_solution=initial_solution,
+                    cancel_check=cancel_check,
+                    progress_callback=(
+                        (lambda label: progress_callback(0, 101, label))
+                        if progress_callback else None))
+            except sync_module.SyncCancelled:
+                return refusal("Cancelled", cancelled=True)
+        if not initial.success and seed_score is not None:
+            initial = seed_result
         if not initial.success:
             return refusal("Initial camera registration did not support every camera and point",
-                           initial=initial, initial_rmse=initial_rmse)
+                           initial=initial, initial_rmse=_sync_rmse(initial, observations,
+                                                                      initial_cals))
+        if set(match_ids) - set(initial.similarities):
+            initial, startup_refusal = provisional_poses(
+                initial_cals, observations, initial, anchor_id=anchor_id,
+                cancel_check=cancel_check, progress_callback=(
+                    (lambda _step, _total, label: progress_callback(0, 101, label))
+                    if progress_callback else None))
+            if startup_refusal:
+                if startup_refusal == "Cancelled":
+                    return refusal(startup_refusal, initial=initial,
+                                   initial_rmse=_sync_rmse(initial, observations, initial_cals),
+                                   cancelled=True)
+                if seed_score is None:
+                    return refusal(startup_refusal, initial=initial,
+                                   initial_rmse=_sync_rmse(initial, observations, initial_cals))
+                initial = seed_result
+        scorer = (JointFitScorer(joint_request, seed_result, calibrations=initial_cals,
+                                 frozen_point_weights=(frozen_seed_weights
+                                                       if certified_seed else None))
+                  if seed_score is not None else
+                  JointFitScorer(joint_request, initial, calibrations=initial_cals))
+        initial_score = scorer.score(initial, calibrations=initial_cals)
+        if seed_score is not None and (not initial_score.valid or
+                                       seed_score.objective < initial_score.objective):
+            initial = seed_result
+            initial_score = seed_score
+        initial_rmse = _sync_rmse(initial, observations, initial_cals)
         def point_progress(step: int, total: int, label: str) -> None:
             if progress_callback:
                 # A zero-step status (including provisional startup) is
@@ -579,27 +671,81 @@ def refine_lenses_from_landmarks(
                 progress_callback(0 if step <= 0 else step + 1,
                                   total + 1, label)
         outcome = fit_independent_focals(
-            initial_cals, observations, initial, anchor_id=anchor_id,
+            initial_cals, scorer.point_observations, initial, anchor_id=anchor_id,
             pick_sigma_px=pick_sigma_px, fx_span=fx_span,
             plane_groups=plane_groups, plane_slack=plane_slack,
             mirror_pairs=mirror_pairs, mirror_plane=mirror_plane,
             mirror_slack=mirror_slack, mirror_landmark_id=mirror_landmark_id,
             line_observations=line_observations, parallel_pairs=parallel_pairs,
+            fixed_similarities=fixed_similarities,
+            location_match_ids=location_match_ids,
+            readonly_match_ids=readonly_match_ids,
+            known_world=known_world, known_3d_slack=(KNOWN_3D_SLACK_DEFAULT
+                                                      if known_3d_slack is None else known_3d_slack),
+            ground_slack=(GROUND_SLACK_DEFAULT if ground_slack is None else ground_slack),
+            known_lines=known_lines,
+            lock_rotation=lock_rotation, lock_translation=lock_translation,
+            share_lens=share_lens,
+            frozen_focal_ids=({item.match_id for item in matches if item.freeze_focal}
+                              if not share_lens else set()),
             cancel_check=cancel_check,
             progress_callback=point_progress)
         if not outcome.accepted or outcome.sync_result is None:
+            if outcome.candidate is not None:
+                outcome.candidate.sync_result.joint_point_weights = scorer.effective_point_weights
+                outcome.candidate.sync_result.downweighted_landmark_ids = list(
+                    scorer.downweighted_landmark_ids)
             return refusal(outcome.reason, initial=initial, initial_rmse=initial_rmse,
                            cancelled=outcome.reason == "Cancelled", candidate=outcome.candidate)
+        final_score = scorer.score(outcome.sync_result, calibrations=outcome.calibrations)
+        if not final_score.valid:
+            return refusal(final_score.reason, initial=initial, initial_rmse=initial_rmse,
+                           candidate=outcome.candidate)
+        if (initial_score.valid and final_score.objective >= initial_score.objective):
+            return refusal("Joint focal objective did not improve", initial=initial,
+                           initial_rmse=initial_rmse, candidate=outcome.candidate)
+        outcome.sync_result.joint_initial_objective = (
+            initial_score.objective if initial_score.valid else None)
+        outcome.sync_result.joint_final_objective = final_score.objective
+        outcome.sync_result.joint_constraint_gaps = final_score.constraint_gaps
+        outcome.sync_result.calibrations = outcome.calibrations
+        outcome.sync_result.point_rmse_px = final_score.point_rmse_px
+        outcome.sync_result.line_rmse_px = final_score.line_rmse_px
+        outcome.sync_result.mean_reprojection_px = (
+            final_score.point_rmse_px if observations else final_score.line_rmse_px)
+        outcome.sync_result.per_match_point_rmse_px = final_score.per_match_point_rmse_px
+        outcome.sync_result.per_match_line_rmse_px = final_score.per_match_line_rmse_px
+        outcome.sync_result.per_match_rmse_px = final_score.per_match_rmse_px
+        outcome.sync_result.per_landmark_rmse_px = final_score.per_landmark_rmse_px
+        outcome.sync_result.downweighted_landmark_ids = list(
+            scorer.downweighted_landmark_ids)
+        outcome.sync_result.joint_point_weights = scorer.effective_point_weights
+        outcome.sync_result.plane_seeded_landmark_ids = [
+            key for key in initial.plane_seeded_landmark_ids
+            if key in outcome.sync_result.landmarks]
+        angles, weak = joint_line_support_diagnostics(
+            joint_request, outcome.sync_result, outcome.calibrations)
+        outcome.sync_result.line_support_angles_deg = angles
+        outcome.sync_result.weak_line_ids = weak
+        if weak:
+            outcome.sync_result.message += (
+                " · weak 3D line support (" + ", ".join(weak[:3]) + ")")
         if progress_callback:
             progress_callback(101, 101, "Point focal estimation complete")
         return LensRefineResult(
             calibrations=outcome.calibrations, sync_result=outcome.sync_result,
-            initial_cost=outcome.initial_rmse_px, final_cost=outcome.fitted_rmse_px,
-            initial_sync_rmse=outcome.initial_rmse_px,
-            final_sync_rmse=outcome.fitted_rmse_px,
+            initial_cost=(initial_score.objective if initial_score.valid else float("inf")),
+            final_cost=final_score.objective,
+            initial_sync_rmse=(initial_score.point_rmse_px if observations else
+                               initial_score.line_rmse_px),
+            final_sync_rmse=(final_score.point_rmse_px if observations else
+                             final_score.line_rmse_px),
             fx_deltas={key: float(outcome.calibrations[key].intrinsics.fx -
                                   initial_cals[key].intrinsics.fx) for key in match_ids},
-            message=f"Landmark focal fit · point RMSE {outcome.fitted_rmse_px:.2f}px · 95% intervals at σ={pick_sigma_px:g}px",
+            message=(f"Landmark focal fit · point RMSE {final_score.point_rmse_px:.2f}px"
+                     if observations else
+                     f"Landmark focal fit · line endpoint RMS {final_score.line_rmse_px:.2f}px") +
+                    f" · 95% intervals at σ={pick_sigma_px:g}px",
             improved=True, point_focal_mode=True,
             focal_intervals=outcome.intervals_px)
 
