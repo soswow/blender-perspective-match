@@ -760,18 +760,33 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
                     confidence_body.label(text=detail, icon="EMPTY_AXIS")
 
         row = sync_body.row(align=True)
-        if operators.diagnose_sync_is_running():
+        if operators.solve_sync_is_running():
             status = row.row(align=True)
             status.enabled = False
-            status.label(text="Diagnosing…", icon="INFO")
+            status.label(
+                text=operators.solve_sync_activity_label() or "Solving…",
+                icon="TIME",
+            )
+            row.operator(
+                "perspective_match.cancel_solve_sync",
+                text="Cancel",
+                icon="X",
+            )
+        elif operators.diagnose_sync_is_running():
+            status = row.row(align=True)
+            status.enabled = False
+            status.label(
+                text=operators.diagnose_sync_activity_label() or "Diagnosing…",
+                icon="TIME",
+            )
             row.operator(
                 "perspective_match.cancel_diagnose_sync",
                 text="Cancel",
                 icon="X",
             )
         else:
-            row.operator("perspective_match.solve_sync", icon="FILE_REFRESH")
             row.operator_context = "INVOKE_DEFAULT"
+            row.operator("perspective_match.solve_sync", icon="FILE_REFRESH")
             row.operator(
                 "perspective_match.diagnose_sync",
                 text="Diagnose",

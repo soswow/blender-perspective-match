@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Solve Sync runs in the background with live stage and elapsed time in the sidebar; Esc or Cancel stops it.
+- Diagnose shows live solve activity and elapsed time in the sidebar instead of a stuck 0.00 cursor overlay.
 - Solve Sync and Refine Lenses run faster by reusing calculations and reducing thread overhead during camera registration.
 - New matches hide their Origin Empty by default while keeping the camera and collection visible.
 - Independent FOV fitting now allows 60 seconds of optimization after startup, giving difficult fits more time to finish.

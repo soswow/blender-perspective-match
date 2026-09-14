@@ -342,6 +342,12 @@ _pin_sync_lock = threading.Lock()
 _pin_sync_cancel = False
 _pin_sync_running = False
 
+_solve_sync_lock = threading.Lock()
+_solve_sync_cancel: threading.Event | None = None
+_solve_sync_running = False
+_solve_sync_progress = {"label": ""}
+_solve_sync_result_box: dict = {}
+
 _vp_detect_lock = threading.Lock()
 _vp_detect_cancel: threading.Event | None = None
 _vp_detect_running = False
@@ -353,6 +359,7 @@ def reset_sync_background_jobs() -> None:
     """Cancel and retire background Sync jobs when their Blender scene is unloaded."""
     global _lens_refine_cancel, _lens_refine_running, _lens_refine_result_box, _lens_best_fit
     global _diagnose_sync_cancel, _diagnose_sync_running, _diagnose_sync_result_box
+    global _solve_sync_cancel, _solve_sync_running, _solve_sync_result_box
     with _lens_refine_lock:
         if _lens_refine_cancel is not None:
             _lens_refine_cancel.set()
@@ -366,6 +373,12 @@ def reset_sync_background_jobs() -> None:
         _diagnose_sync_running = False
         _diagnose_sync_cancel = None
         _diagnose_sync_result_box = {}
+    with _solve_sync_lock:
+        if _solve_sync_cancel is not None:
+            _solve_sync_cancel.set()
+        _solve_sync_running = False
+        _solve_sync_cancel = None
+        _solve_sync_result_box = {}
 
 
 def lens_refine_is_running() -> bool:
@@ -377,7 +390,8 @@ def lens_best_fit_is_available(context: bpy.types.Context) -> bool:
     """A completed provisional fit belongs to the current loaded scene."""
     pending = _lens_best_fit
     return bool(pending is not None and not lens_refine_is_running() and
-                not diagnose_sync_is_running() and not pin_sync_is_running() and
+                not diagnose_sync_is_running() and not solve_sync_is_running() and
+                not pin_sync_is_running() and
                 int(context.scene.session_uid) == pending["prep"].source_scene_uid)
 
 
@@ -405,6 +419,45 @@ def lens_refine_startup_label() -> str | None:
 def diagnose_sync_is_running() -> bool:
     """True while a Diagnose modal/worker is active."""
     return bool(_diagnose_sync_running)
+
+
+def solve_sync_is_running() -> bool:
+    """True while a Solve Sync modal/worker is active."""
+    return bool(_solve_sync_running)
+
+
+def sync_job_is_busy() -> bool:
+    """True while any background Sync/lens/Diagnose job owns the sidebar."""
+    return bool(
+        _lens_refine_running
+        or _diagnose_sync_running
+        or _solve_sync_running
+        or _pin_sync_running
+    )
+
+
+def solve_sync_activity_label() -> str | None:
+    """Return Solve Sync activity without a fake completion percentage."""
+    if not _solve_sync_running:
+        return None
+    label = str(_solve_sync_progress.get("label") or "Starting…")
+    started = float(_solve_sync_progress.get("started_at") or 0.0)
+    elapsed = int(max(0.0, time.monotonic() - started)) if started else 0
+    return f"{label} · {elapsed}s"
+
+
+def diagnose_sync_activity_label() -> str | None:
+    """Return Diagnose activity without a fake completion percentage."""
+    if not _diagnose_sync_running:
+        return None
+    label = str(_diagnose_sync_progress.get("label") or "Starting…")
+    total = max(int(_diagnose_sync_progress.get("total", 1)), 1)
+    step = min(int(_diagnose_sync_progress.get("step", 0)), total)
+    started = float(_diagnose_sync_progress.get("started_at") or 0.0)
+    elapsed = int(max(0.0, time.monotonic() - started)) if started else 0
+    if step > 0:
+        return f"{step}/{total} · {label} · {elapsed}s"
+    return f"{label} · {elapsed}s"
 
 
 def pin_sync_is_running() -> bool:
@@ -447,6 +500,15 @@ def request_lens_refine_cancel() -> bool:
 def request_diagnose_sync_cancel() -> bool:
     """Signal the running Diagnose worker to stop."""
     event = _diagnose_sync_cancel
+    if event is None:
+        return False
+    event.set()
+    return True
+
+
+def request_solve_sync_cancel() -> bool:
+    """Signal the running Solve Sync worker to stop."""
+    event = _solve_sync_cancel
     if event is None:
         return False
     event.set()
@@ -3447,13 +3509,19 @@ class PM_OT_solve_sync(bpy.types.Operator):
         "Blender objects. On Ground / Known 3D pin absolute scale vs the anchor. "
         "With locked K, 4+ shared On Ground picks across 3+ images can "
         "initialize orientation without VPs. Matches without Pick Origin get "
-        "one from their first On Ground pick"
+        "one from their first On Ground pick. Runs in the background — Esc or "
+        "Cancel to stop"
     )
     bl_options = {"REGISTER", "UNDO"}
 
+    _timer = None
+    _prep = None
+    _result_box = None
+    _cancel_event = None
+
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
-        if diagnose_sync_is_running() or pin_sync_is_running():
+        if sync_job_is_busy():
             return False
         anchor = properties.anchor_root(context)
         return (
@@ -3462,6 +3530,152 @@ class PM_OT_solve_sync(bpy.types.Operator):
             and len(properties.iter_sync_enabled_roots()) >= 2
             and len(properties.workspace(context).landmarks) >= 1
         )
+
+    def invoke(self, context: bpy.types.Context, _event) -> set[str]:
+        global _solve_sync_cancel, _solve_sync_running
+        global _solve_sync_progress, _solve_sync_result_box
+
+        workspace = _workspace(context)
+        try:
+            prep = scene.prepare_diagnose_sync(context)
+        except Exception as error:
+            workspace.sync_status = str(error)
+            return _report_exception(self, error)
+
+        cancel_event = threading.Event()
+        result_box: dict = {"done": False}
+        progress_state = {
+            "label": "Starting…",
+            "started_at": time.monotonic(),
+        }
+        with _solve_sync_lock:
+            if _solve_sync_running:
+                self.report({"WARNING"}, "Solve Sync already running")
+                return {"CANCELLED"}
+            _solve_sync_cancel = cancel_event
+            _solve_sync_running = True
+            _solve_sync_progress = progress_state
+            _solve_sync_result_box = result_box
+
+        self._prep = prep
+        self._result_box = result_box
+        self._cancel_event = cancel_event
+        workspace.sync_status = "Solve Sync running… Esc to cancel"
+        properties.tag_viewport_redraw(context)
+
+        def _on_progress(label: str) -> None:
+            progress_state["label"] = str(label)
+
+        def _worker() -> None:
+            from ..core import sync as sync_module
+
+            try:
+                result_box["result"] = scene.run_solve_sync(
+                    prep,
+                    cancel_check=cancel_event.is_set,
+                    progress_callback=_on_progress,
+                )
+            except sync_module.SyncCancelled:
+                result_box["cancelled"] = True
+            except Exception as error:
+                result_box["error"] = error
+            finally:
+                result_box["done"] = True
+
+        threading.Thread(
+            target=_worker,
+            name="PM-SolveSync",
+            daemon=True,
+        ).start()
+
+        window_manager = context.window_manager
+        self._timer = window_manager.event_timer_add(0.1, window=context.window)
+        window_manager.modal_handler_add(self)
+        return {"RUNNING_MODAL"}
+
+    def _finish_job(self, context: bpy.types.Context, *, cancelled: bool) -> set[str]:
+        global _solve_sync_cancel, _solve_sync_running, _solve_sync_result_box
+
+        window_manager = context.window_manager
+        if self._timer is not None:
+            try:
+                window_manager.event_timer_remove(self._timer)
+            except (ReferenceError, RuntimeError, ValueError):
+                pass  # A file load may already have removed this timer.
+            self._timer = None
+        if self._result_box is not _solve_sync_result_box:
+            return {"CANCELLED"}
+
+        workspace = _workspace(context)
+        result_box = self._result_box
+        with _solve_sync_lock:
+            _solve_sync_running = False
+            _solve_sync_cancel = None
+            _solve_sync_result_box = {}
+
+        if result_box.get("error") is not None:
+            error = result_box["error"]
+            workspace.sync_status = str(error)
+            properties.tag_viewport_redraw(context)
+            return _report_exception(
+                self,
+                error if isinstance(error, Exception) else Exception(str(error)),
+            )
+
+        if cancelled or result_box.get("cancelled"):
+            workspace.sync_status = "Solve Sync cancelled"
+            properties.tag_viewport_redraw(context)
+            self.report({"WARNING"}, "Solve Sync cancelled")
+            return {"CANCELLED"}
+
+        result = result_box.get("result")
+        if result is None:
+            workspace.sync_status = "Solve Sync cancelled"
+            properties.tag_viewport_redraw(context)
+            return {"CANCELLED"}
+
+        try:
+            applied = scene.apply_solve_sync_result(context, self._prep, result)
+        except Exception as error:
+            workspace.sync_status = str(error)
+            return _report_exception(self, error)
+        settings = properties.active_session(context)
+        if settings is not None:
+            settings.error = ""
+        self.report({"INFO"}, applied.message)
+        return {"FINISHED"}
+
+    def modal(self, context: bpy.types.Context, event) -> set[str]:
+        if self._result_box is not _solve_sync_result_box:
+            return self._finish_job(context, cancelled=True)
+        workspace = _workspace(context)
+        if event.type == "ESC" and event.value == "PRESS":
+            request_solve_sync_cancel()
+            workspace.sync_status = "Cancelling Solve Sync…"
+            properties.tag_viewport_redraw(context)
+            return {"RUNNING_MODAL"}
+
+        if event.type != "TIMER":
+            return {"PASS_THROUGH"}
+
+        activity = solve_sync_activity_label() or "Starting…"
+        workspace.sync_status = f"Solve Sync · {activity} elapsed"
+        properties.tag_viewport_redraw(context)
+        if not _solve_sync_result_box.get("done"):
+            return {"PASS_THROUGH"}
+        return self._finish_job(
+            context,
+            cancelled=bool(
+                _solve_sync_cancel and _solve_sync_cancel.is_set()
+            ),
+        )
+
+    def cancel(self, context: bpy.types.Context) -> None:
+        if self._cancel_event is not None:
+            self._cancel_event.set()
+        # Workers own numerical inputs and a private result box. They can stop
+        # cooperatively after the modal retires without touching a newer job.
+        self._finish_job(context, cancelled=True)
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         workspace = _workspace(context)
@@ -3480,6 +3694,28 @@ class PM_OT_solve_sync(bpy.types.Operator):
         if settings is not None:
             settings.error = ""
         self.report({"INFO"}, result.message)
+        return {"FINISHED"}
+
+
+class PM_OT_cancel_solve_sync(bpy.types.Operator):
+    """Stop the running Solve Sync background job."""
+
+    bl_idname = "perspective_match.cancel_solve_sync"
+    bl_label = "Cancel Solve Sync"
+    bl_description = "Cancel the running Solve Sync solve (Esc also works)"
+    bl_options = {"REGISTER"}
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        return solve_sync_is_running()
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        if not request_solve_sync_cancel():
+            return {"CANCELLED"}
+        workspace = _workspace(context)
+        workspace.sync_status = "Cancelling Solve Sync…"
+        properties.tag_viewport_redraw(context)
+        self.report({"INFO"}, "Cancelling Solve Sync…")
         return {"FINISHED"}
 
 
@@ -3504,8 +3740,6 @@ class PM_OT_diagnose_sync(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
-        if diagnose_sync_is_running() or lens_refine_is_running() or pin_sync_is_running():
-            return False
         return PM_OT_solve_sync.poll(context)
 
     def invoke(self, context: bpy.types.Context, _event) -> set[str]:
@@ -3521,7 +3755,12 @@ class PM_OT_diagnose_sync(bpy.types.Operator):
 
         cancel_event = threading.Event()
         result_box: dict = {"done": False}
-        progress_state = {"step": 0, "total": 6, "label": "Starting…"}
+        progress_state = {
+            "step": 0,
+            "total": 6,
+            "label": "Starting…",
+            "started_at": time.monotonic(),
+        }
         with _diagnose_sync_lock:
             if _diagnose_sync_running:
                 self.report({"WARNING"}, "Diagnose already running")
@@ -3565,7 +3804,6 @@ class PM_OT_diagnose_sync(bpy.types.Operator):
         ).start()
 
         window_manager = context.window_manager
-        window_manager.progress_begin(0, 6)
         self._timer = window_manager.event_timer_add(0.1, window=context.window)
         window_manager.modal_handler_add(self)
         return {"RUNNING_MODAL"}
@@ -3582,10 +3820,6 @@ class PM_OT_diagnose_sync(bpy.types.Operator):
             self._timer = None
         if self._result_box is not _diagnose_sync_result_box:
             return {"CANCELLED"}
-        try:
-            window_manager.progress_end()
-        except Exception:
-            pass
 
         workspace = _workspace(context)
         result_box = self._result_box
@@ -3648,14 +3882,9 @@ class PM_OT_diagnose_sync(bpy.types.Operator):
             return {"PASS_THROUGH"}
 
         progress = _diagnose_sync_progress
-        total = max(int(progress.get("total", 1)), 1)
-        step = min(int(progress.get("step", 0)), total)
-        label = str(progress.get("label", ""))
-        workspace.sync_status = f"Diagnose {step}/{total} · {label}"
-        try:
-            context.window_manager.progress_update(step)
-        except Exception:
-            pass
+        label = str(progress.get("label") or "Starting…")
+        activity = diagnose_sync_activity_label() or label
+        workspace.sync_status = f"Diagnose · {activity} elapsed"
         properties.tag_viewport_redraw(context)
         if not _diagnose_sync_result_box.get("done"):
             return {"PASS_THROUGH"}
@@ -3735,8 +3964,6 @@ class PM_OT_refine_lenses(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
-        if lens_refine_is_running() or diagnose_sync_is_running() or pin_sync_is_running():
-            return False
         return PM_OT_solve_sync.poll(context)
 
     def invoke(self, context: bpy.types.Context, _event) -> set[str]:
@@ -4055,8 +4282,6 @@ class PM_OT_iterate_known_3d_sync(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
-        if lens_refine_is_running() or diagnose_sync_is_running() or pin_sync_is_running():
-            return False
         if not PM_OT_solve_sync.poll(context):
             return False
         return bool(scene.known_3d_iterate_roots(context))
@@ -4276,7 +4501,7 @@ class PM_OT_clear_sync(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
-        return not diagnose_sync_is_running() and not pin_sync_is_running()
+        return not sync_job_is_busy()
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         scene.clear_sync_transforms(context)
@@ -4384,6 +4609,7 @@ CLASSES = (
     PM_OT_clear_landmark_observation,
     PM_OT_select_overlay_landmark,
     PM_OT_solve_sync,
+    PM_OT_cancel_solve_sync,
     PM_OT_diagnose_sync,
     PM_OT_cancel_diagnose_sync,
     PM_OT_refine_lenses,

@@ -374,6 +374,12 @@ errors and refuses to publish. Unchanged and unrelated-object controls still
 apply successfully. The old result must pass independent camera/geometry checks
 in every case, so rejecting a faulty numerical result cannot satisfy the test.
 
+The same `--ownership` run then replays one successful Solve Sync result through
+the operator apply path. Evidence edits must keep current cameras and the
+sentinel landmark error; unchanged and unrelated-object controls apply the
+cameras and pass withheld-object checks. Apply is forbidden from rerunning
+automatic origin/ground preparation.
+
 `ownership.json` and per-action prepared/current requests retain the evidence.
 The apply check is also forbidden from rerunning automatic origin/ground
 preparation. Only the operator's thread launcher is substituted: the solver's
@@ -419,17 +425,17 @@ during rollback itself, undo/redo and live UI scheduling remain outside this che
 ### Job ownership after file load
 
 Run `verify_job_reload.py -- --out /tmp/pm-job-reload` with the same factory-startup
-Blender command above. It saves and reloads only its generated input. Twelve
-controls cover Diagnose and Refine Lenses: unchanged completion, file load before
+Blender command above. It saves and reloads only its generated input. Eighteen
+controls cover Diagnose, Solve Sync and Refine Lenses: unchanged completion, file load before
 or after the old worker completes, late cancellation/timer callbacks, and cancelling
 an unfinished job before starting another in the same scene. Old callbacks must
 leave the new job's cancellation event, result box, running state and status alone.
-The new job must still finish, and applied lens cameras must pass withheld checks.
+The new job must still finish, and applied Solve Sync / lens cameras must pass withheld checks.
 
 This reproduced Diagnose remaining busy after a file load, an old lens callback
 clearing a new job's state, and a missing `time` import in the old cancellation
 wait. Each operator now owns its result box and cancellation event. Loading a
-file retires both jobs, and finishing one cannot consume another's result. A
+file retires those jobs, and finishing one cannot consume another's result. A
 cancelled modal can retire immediately while its numerical worker stops
 cooperatively; no blocking wait is needed on that callback.
 

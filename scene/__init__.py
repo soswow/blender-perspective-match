@@ -3722,6 +3722,23 @@ def prepare_diagnose_sync(context: bpy.types.Context) -> DiagnoseSyncPrep:
     )
 
 
+def run_solve_sync(
+    prep: DiagnoseSyncPrep,
+    *,
+    cancel_check: Callable[[], bool] | None = None,
+    progress_callback: Callable[[str], None] | None = None,
+):
+    """Run the bpy-free Solve Sync; safe for a worker thread."""
+    from ..core import sync as sync_module
+
+    return sync_module.solve_landmark_sync(
+        **prep.solver_kwargs(),
+        use_pose_cache=True,
+        cancel_check=cancel_check,
+        progress_callback=progress_callback,
+    )
+
+
 def run_diagnose_sync(
     prep: DiagnoseSyncPrep,
     *,
@@ -3737,9 +3754,8 @@ def run_diagnose_sync(
         if progress_callback is not None:
             progress_callback(0, total_steps, label)
 
-    result = sync_module.solve_landmark_sync(
-        **prep.solver_kwargs(),
-        use_pose_cache=True,
+    result = run_solve_sync(
+        prep,
         cancel_check=cancel_check,
         progress_callback=_base_progress,
     )
@@ -3812,18 +3828,23 @@ class SyncSolveRejected(ValueError):
         self.result = result
 
 
-def solve_and_apply_sync(context: bpy.types.Context):
-    """Run landmark sync and write similarities onto match root Empties."""
-    from ..core import sync as sync_module
-
+def apply_solve_sync_result(
+    context: bpy.types.Context,
+    prep: DiagnoseSyncPrep,
+    result,
+):
+    """Write Solve Sync cameras and diagnostics on the main thread."""
+    current = None
+    if int(context.scene.session_uid) == prep.source_scene_uid:
+        try:
+            current = collect_sync_request(context).to_record()["sha256"]
+        except (ValueError, ReferenceError, RuntimeError):
+            pass
+    if current != prep.source_request_sha256:
+        raise StaleSyncResult(
+            "Sync inputs changed while Solve Sync was running. Run Solve Sync again."
+        )
     space = properties.workspace(context)
-    anchor = properties.anchor_root(context)
-    prep = prepare_diagnose_sync(context)
-    matches = prep.matches
-    result = sync_module.solve_landmark_sync(
-        **prep.solver_kwargs(),
-        use_pose_cache=True,
-    )
     _apply_sync_landmark_diagnostics(context, result)
     message = result.message
     if prep.ground_frame_note:
@@ -3841,7 +3862,14 @@ def solve_and_apply_sync(context: bpy.types.Context):
     if not result.success:
         raise SyncSolveRejected(result)
 
-    return _apply_sync_solve_result(context, result, matches)
+    return _apply_sync_solve_result(context, result, prep.matches)
+
+
+def solve_and_apply_sync(context: bpy.types.Context):
+    """Run landmark sync and write similarities onto match root Empties."""
+    prep = prepare_diagnose_sync(context)
+    result = run_solve_sync(prep)
+    return apply_solve_sync_result(context, prep, result)
 
 
 def _apply_sync_solve_result(context: bpy.types.Context, result, matches):

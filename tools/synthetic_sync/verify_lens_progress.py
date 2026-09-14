@@ -133,3 +133,76 @@ assert context.window_manager.calls == [
     ("update", 20.0), ("end",)
 ], context.window_manager.calls
 print("Determinate Blender progress PASS", flush=True)
+
+# Diagnose used to keep WindowManager progress at 0/6 during registration.
+context.window_manager.calls.clear()
+operator = SimpleNamespace(_timer=None, report=lambda *_args: None)
+with patch.object(scene, "prepare_diagnose_sync", return_value=SimpleNamespace()), patch.object(
+    operators.threading, "Thread", DeferredThread
+):
+    assert operators.PM_OT_diagnose_sync.invoke(operator, context, None) == {"RUNNING_MODAL"}
+
+try:
+    checks = (
+        (0, 6, "Registering cameras: testing bridges", "testing bridges"),
+        (0, 6, "Bundle adjustment", "Bundle adjustment"),
+        (2, 6, "Checking Landmark A", "2/6"),
+        (6, 6, "Complete", "Complete"),
+    )
+
+    def run_diagnose(_prep, *, progress_callback, **_kwargs):
+        for step, total, label, expected in checks:
+            progress_callback(step, total, label)
+            assert operators.PM_OT_diagnose_sync.modal(operator, context, event) == {"PASS_THROUGH"}
+            activity = operators.diagnose_sync_activity_label()
+            assert expected in activity, (expected, activity)
+            assert f"{expected}" in workspace.sync_status
+            assert "elapsed" in workspace.sync_status
+        return SimpleNamespace()
+
+    with patch.object(scene, "run_diagnose_sync", side_effect=run_diagnose):
+        DeferredThread.pending.target()
+    assert not context.window_manager.calls, context.window_manager.calls
+finally:
+    operator._result_box["cancelled"] = True
+    operator._result_box["done"] = True
+    operators.PM_OT_diagnose_sync._finish_job(operator, context, cancelled=True)
+
+assert not context.window_manager.calls, context.window_manager.calls
+print("Diagnose Blender progress PASS", flush=True)
+
+context.window_manager.calls.clear()
+operator = SimpleNamespace(_timer=None, report=lambda *_args: None)
+with patch.object(scene, "prepare_diagnose_sync", return_value=SimpleNamespace()), patch.object(
+    operators.threading, "Thread", DeferredThread
+):
+    assert operators.PM_OT_solve_sync.invoke(operator, context, None) == {"RUNNING_MODAL"}
+
+try:
+    checks = (
+        "Registering cameras: testing bridges",
+        "Registering cameras: fitting next camera (3/8 posed)",
+        "Bundle adjustment",
+        "Retrying skipped cameras",
+    )
+
+    def run_solve(_prep, *, progress_callback, **_kwargs):
+        for label in checks:
+            progress_callback(label)
+            assert operators.PM_OT_solve_sync.modal(operator, context, event) == {"PASS_THROUGH"}
+            activity = operators.solve_sync_activity_label()
+            assert label in activity, (label, activity)
+            assert label in workspace.sync_status
+            assert "elapsed" in workspace.sync_status
+        return SimpleNamespace(success=True, message="Captured")
+
+    with patch.object(scene, "run_solve_sync", side_effect=run_solve):
+        DeferredThread.pending.target()
+    assert not context.window_manager.calls, context.window_manager.calls
+finally:
+    operator._result_box["cancelled"] = True
+    operator._result_box["done"] = True
+    operators.PM_OT_solve_sync._finish_job(operator, context, cancelled=True)
+
+assert not context.window_manager.calls, context.window_manager.calls
+print("Solve Sync Blender progress PASS", flush=True)

@@ -37,13 +37,14 @@ def verify(case, out):
     results = []
     for label, cls, prepare, run_name, prefix in (
         ("diagnose", operators.PM_OT_diagnose_sync, scene.prepare_diagnose_sync, "run_diagnose_sync", "_diagnose_sync"),
+        ("solve", operators.PM_OT_solve_sync, scene.prepare_diagnose_sync, "run_solve_sync", "_solve_sync"),
         ("lens", operators.PM_OT_refine_lenses, scene.prepare_lens_refine, "run_lens_refine", "_lens_refine"),
     ):
         bpy.ops.wm.open_mainfile(filepath=str(source), load_ui=False)
         prep = prepare(bpy.context)
         wanted = json_values(prep.solver_kwargs())
         result = getattr(scene, run_name)(prep)
-        numerical = result if label == "diagnose" else result.sync_result
+        numerical = result if label != "lens" else result.sync_result
         assessment = evaluate(case, result_record(numerical, case["request"]["cameras"]))
         if not assessment["passed"]:
             raise AssertionError(assessment["violations"])
@@ -127,7 +128,7 @@ def verify(case, out):
                 row["passed"] = row["finished"] and (action == "unchanged" or (
                     row["old_cancelled"] and not row["running_after_retirement"] and row["new_job_untouched"]
                     and "old_cancel_error" not in row))
-                if label == "lens" and row["finished"]:
+                if label in {"lens", "solve"} and row["finished"]:
                     errors = []
                     for camera in case["truth"]["cameras"]:
                         points = [p["position"] for p in case["truth"]["checks"] if camera["id"] in p["views"]]
