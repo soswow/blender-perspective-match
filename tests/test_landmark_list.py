@@ -267,6 +267,25 @@ class LandmarkListTests(unittest.TestCase):
         parallel = landmark_list.parallel_to_enum_entries(rows, "l1")
         self.assertEqual(parallel, ())
 
+    def test_landmark_enum_choices_are_alphabetical(self) -> None:
+        candidates = landmark_list.collect_landmark_enum_candidates((
+            _landmark(item_id="z", name="zeta"),
+            _landmark(item_id="a", name="Alpha"),
+            _landmark(item_id="b", name="beta"),
+            _landmark(item_id="line-z", name="zulu edge", kind="LINE"),
+            _landmark(item_id="line-a", name="Able edge", kind="LINE"),
+        ))
+        self.assertEqual([item.name for item in candidates],
+                         ["Able edge", "Alpha", "beta", "zeta", "zulu edge"])
+        self.assertEqual(
+            [item[1] for item in landmark_list.mirror_of_enum_entries(candidates, "a")],
+            ["beta", "zeta"],
+        )
+        self.assertEqual(
+            [item[1] for item in landmark_list.parallel_to_enum_entries(candidates, "line-a")],
+            ["zulu edge"],
+        )
+
     def test_enum_candidates_do_not_resolve_dynamic_links(self) -> None:
         class DynamicLinksMustNotBeRead:
             item_id = "safe"

@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Landmark selection dropdowns list landmarks in alphabetical order.
 - Solve Sync and independent Refine Lenses use a common final point, line and constraint fit, with Solve keeping focal lengths fixed.
 - Solve Sync and Refine Lenses save reports automatically; Open Last Report replaces the everyday Diagnose workflow.
 - Solve Sync runs in the background with live stage and elapsed time in the sidebar; Esc or Cancel stops it.

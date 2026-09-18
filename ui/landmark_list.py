@@ -34,8 +34,8 @@ class LandmarkEnumCandidate:
 
 
 def collect_landmark_enum_candidates(landmarks) -> tuple[LandmarkEnumCandidate, ...]:
-    """Collect enum labels without resolving mirror_of / parallel_to enums."""
-    return tuple(
+    """Collect alphabetized enum labels without resolving constraint enums."""
+    candidates = tuple(
         LandmarkEnumCandidate(
             name=str(getattr(landmark, "name", "") or ""),
             item_id=str(getattr(landmark, "item_id", "") or ""),
@@ -44,6 +44,12 @@ def collect_landmark_enum_candidates(landmarks) -> tuple[LandmarkEnumCandidate, 
         )
         for landmark in landmarks
     )
+    return tuple(sorted(candidates, key=_landmark_name_sort_key))
+
+
+def _landmark_name_sort_key(item) -> tuple[str, str]:
+    """Sort by displayed name without case sensitivity; break ties by ID."""
+    return (item.name.casefold(), item.item_id.casefold())
 
 
 def _observation_count(landmark) -> int:
@@ -213,7 +219,7 @@ def parallel_to_enum_entries(
                 "Same 3D direction as this line",
             )
         )
-    return tuple(entries)
+    return tuple(sorted(entries, key=lambda item: (item[1].casefold(), item[0].casefold())))
 
 
 def stored_mirror_id(landmark) -> str:
@@ -243,7 +249,7 @@ def mirror_of_enum_entries(
                 "This feature mirrored across the scene Mirror Empty",
             )
         )
-    return tuple(entries)
+    return tuple(sorted(entries, key=lambda item: (item[1].casefold(), item[0].casefold())))
 
 
 def _normalized_mirror_id(partner_id: str, source_id: str) -> str:
