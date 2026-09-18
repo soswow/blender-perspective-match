@@ -184,7 +184,12 @@ def check(out: Path) -> dict:
     create_scene(case, out, False)
     context = bpy.context
     space = properties.workspace(context)
+    assert space.mirror_pair_slack == 0.0 and space.mirror_slack == 0.0
+    space.mirror_pair_slack = 0.003
+    space.mirror_slack = 0.007
     request = scene.collect_sync_request(context)
+    assert abs(request.mirror_pair_slack - 0.003) < 1e-8
+    assert abs(request.mirror_slack - 0.007) < 1e-8
     assert request.initial_solution is None
     match_ids = {item.match_id for item in request.matches}
     point_truth = {
@@ -268,6 +273,12 @@ def check(out: Path) -> dict:
     assert landmark.rmse_px == 3.25 and space.sync_status == before_status
 
     # Edited evidence may warm-start, but cannot claim to be the same incumbent.
+    old_pair_slack = space.mirror_pair_slack
+    space.mirror_pair_slack = 0.004
+    changed = scene.collect_sync_request(context)
+    assert changed.initial_solution is not None
+    assert changed.evidence_sha256() != changed.initial_solution.evidence_sha256
+    space.mirror_pair_slack = old_pair_slack
     pick = next(item for item in landmark.observations if item.is_set)
     saved_x = pick.x
     pick.x += 1.0

@@ -4,7 +4,8 @@ from unittest import TestCase
 
 import numpy as np
 
-from match_perspective.core.focal_line_constraints import LineFocalConstraints, validate_line_relations
+from match_perspective.core.focal_line_constraints import (
+    LineFocalConstraints, direction_in_planes, validate_line_relations)
 from match_perspective.core.derived_lines import derived_line_geometry
 
 
@@ -16,6 +17,19 @@ def compile_relations(groups=(), pairs=(), *, rotation=None, hard=True):
 
 
 class FocalLineConstraintTests(TestCase):
+    def test_mirrored_plane_directions_preserve_free_heading(self):
+        normals = [(0., 0., 1.), (0., 0., -1.)]
+        for direction in ((1., 2., 0.3), (2., 1., -0.2)):
+            expected = np.asarray((*direction[:2], 0.))
+            expected /= np.linalg.norm(expected)
+            np.testing.assert_allclose(direction_in_planes(direction, normals), expected,
+                                       atol=1e-12)
+        np.testing.assert_allclose(
+            direction_in_planes((1., 2., 3.), [(0., 0., 1.), (0., 1., 0.)]),
+            (1., 0., 0.), atol=1e-12)
+        with self.assertRaises(ValueError):
+            direction_in_planes((1., 2., 3.), np.eye(3))
+
     def test_derived_line_relations_depend_on_endpoint_points(self):
         points = np.array((
             (0.0, 0.0, 0.0),

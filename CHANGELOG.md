@@ -36,6 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Point-based FOV refinement supports Is in Plane and point mirror pairs with a supplied Mirror Empty.
 
 ### Fixed
+- Mirror Slack now controls pair mismatch: zero fits point and drawn-line partners as exact reflections, while Mirror Plane Slack separately controls plane movement.
 - Refine Lenses explains why a requested distortion polish left every camera unchanged.
 - Refine Lenses now uses its remaining fit budget to restore hard world-axis or Known 3D line directions for From Points lines before refusing the result.
 - Mirrored-line scoring no longer changes when a different portion of the same infinite line is displayed.

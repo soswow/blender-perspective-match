@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from unittest import TestCase
+from copy import deepcopy
 
 import numpy as np
 
@@ -52,6 +53,27 @@ def _infinite_line_error(segment, truth):
     direction /= np.linalg.norm(direction)
     points = np.asarray(segment, float)
     return float(max(np.linalg.norm(np.cross(point - a, direction)) for point in points))
+
+
+def _mirror_line_gap(result, request, left, right):
+    normal = np.asarray(request["mirror_plane"][1], float)
+    normal /= np.linalg.norm(normal)
+    if request.get("mirror_landmark_id"):
+        origin = np.asarray(result.sync_result.landmarks[request["mirror_landmark_id"]])
+    else:
+        origin = np.asarray(request["mirror_plane"][0], float)
+    left_segment = np.asarray(result.sync_result.line_segments[left], float)
+    right_segment = np.asarray(result.sync_result.line_segments[right], float)
+    left_direction = left_segment[1] - left_segment[0]
+    right_direction = right_segment[1] - right_segment[0]
+    left_direction /= np.linalg.norm(left_direction)
+    right_direction /= np.linalg.norm(right_direction)
+    reflected_direction = left_direction - 2.0 * (normal @ left_direction) * normal
+    reflected_point = left_segment[0] - 2.0 * (
+        normal @ (left_segment[0] - origin)) * normal
+    return (float(np.linalg.norm(np.cross(right_direction, reflected_direction))),
+            float(np.linalg.norm(np.cross(
+                right_direction, reflected_point - right_segment[0]))))
 
 
 class FocalLineIntegrationTests(TestCase):
@@ -131,6 +153,32 @@ class FocalLineIntegrationTests(TestCase):
                 expected = np.asarray(case["truth"]["holdout_pixels"][point_id][camera["id"]])
                 self.assertLess(np.linalg.norm(predicted[0] - expected), 0.01,
                                 (camera["id"], point_id))
+
+        for left, right in case["request"]["mirror_pairs"]:
+            if left in solved.line_segments:
+                direction_gap, position_gap = _mirror_line_gap(
+                    result, case["request"], left, right)
+                self.assertLess(direction_gap, 2.0e-8)
+                self.assertLess(position_gap, 2.0e-8)
+
+    def test_exact_line_pair_is_invariant_to_pair_order(self):
+        case = focal_lines.generate()
+        reversed_case = deepcopy(case)
+        reversed_case["request"]["mirror_pairs"] = [
+            list(reversed(pair)) for pair in case["request"]["mirror_pairs"]]
+        first = _fit(case)
+        second = _fit(reversed_case)
+        self.assertTrue(first.accepted, first.reason)
+        self.assertTrue(second.accepted, second.reason)
+        for pair in case["request"]["mirror_pairs"]:
+            if pair[0] not in first.sync_result.line_segments:
+                continue
+            self.assertLess(max(_mirror_line_gap(first, case["request"], *pair)), 2.0e-8)
+            self.assertLess(max(_mirror_line_gap(second, case["request"], *pair)), 2.0e-8)
+        for camera_id in first.calibrations:
+            self.assertAlmostEqual(first.calibrations[camera_id].intrinsics.fx,
+                                   second.calibrations[camera_id].intrinsics.fx,
+                                   places=8)
 
     def test_contradictory_mirror_stroke_refuses(self):
         result = _fit(focal_lines.generate(inconsistent=True))

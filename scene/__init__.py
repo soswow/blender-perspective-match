@@ -3501,6 +3501,7 @@ def _sync_mirror_kwargs(context: bpy.types.Context) -> dict:
         "mirror_landmark_id": reference_id,
         "mirror_plane": None if plane is None else (plane[0], plane[1]),
         "mirror_slack": float(getattr(space, "mirror_slack", 0.0)),
+        "mirror_pair_slack": float(getattr(space, "mirror_pair_slack", 0.0)),
     }
 
 
@@ -4447,6 +4448,7 @@ class LensRefinePrep:
     mirror_landmark_id: str | None = None
     mirror_plane: tuple | None = None
     mirror_slack: float | None = None
+    mirror_pair_slack: float | None = None
     plane_groups: list | None = None
     plane_slack: float | None = None
     initial_solution: object | None = None

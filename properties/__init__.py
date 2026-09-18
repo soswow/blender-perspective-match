@@ -1872,12 +1872,29 @@ class PMWorkspace(bpy.types.PropertyGroup):
         update=_redraw,
     )
     mirror_slack: bpy.props.FloatProperty(
-        name="Mirror Slack",
+        name="Mirror Plane Slack",
         description=(
             "How far the shared mirror plane may slide along its normal "
             "(scene units) during Solve Sync. 0 keeps it through the selected object or live landmark. "
             "A small value lets a slightly misplaced Empty ease toward "
             "the 2D picks. Does not move the Empty"
+        ),
+        default=0.0,
+        min=0.0,
+        soft_max=0.25,
+        max=2.0,
+        step=1,
+        precision=3,
+        unit="LENGTH",
+        update=_redraw,
+    )
+    mirror_pair_slack: bpy.props.FloatProperty(
+        name="Mirror Slack",
+        description=(
+            "Maximum position mismatch between Is Mirror Of partners (scene units) "
+            "during Solve Sync. 0 keeps point partners and drawn infinite lines as "
+            "exact reflections. A positive value lets point positions and line offsets "
+            "differ by up to that distance; mirrored line directions remain exact"
         ),
         default=0.0,
         min=0.0,

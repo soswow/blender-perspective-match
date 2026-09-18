@@ -74,7 +74,9 @@ class FixedEndpointPublicScoreTests(TestCase):
         first, second = request.known_lines["edge"]
         mirrored = lambda point: np.asarray((-point[0], point[1], point[2]))
         mirror_first, mirror_second = mirrored(first), mirrored(second)
+        mirror_first = mirror_first + np.asarray((0.0, 0.0005, 0.0))
         mirror_second = mirror_second + np.asarray((0.0, 0.0005, 0.0))
+        request.mirror_pair_slack = 0.001
         request.known_lines = None
         request.mirror_pairs = [("edge", "reflected_edge")]
         request.mirror_plane = (np.zeros(3), np.asarray((1.0, 0.0, 0.0)))
@@ -95,6 +97,16 @@ class FixedEndpointPublicScoreTests(TestCase):
         scorer = JointFitScorer(request, represented)
         before = scorer.score(represented)
         self.assertTrue(before.valid, before.reason)
+        request.mirror_pair_slack = 0.0
+        self.assertFalse(JointFitScorer(request, represented).score(represented).valid)
+        request.mirror_pair_slack = 0.0001
+        self.assertFalse(JointFitScorer(request, represented).score(represented).valid)
+        request.mirror_pair_slack = 0.001
+        angled = deepcopy(represented)
+        first_end, second_end = angled.line_segments["reflected_edge"]
+        angled.line_segments["reflected_edge"] = (
+            first_end, second_end + np.array((0., 0.0005, 0.)))
+        self.assertFalse(JointFitScorer(request, angled).score(angled).valid)
         shifted = deepcopy(represented)
         for key, slide in (("edge", 3.0), ("reflected_edge", -4.0)):
             left, right = shifted.line_segments[key]

@@ -16,6 +16,19 @@ LINE_HARD_PLANE_MIN_TANGENT = 1.0e-8
 DERIVED_FIXED_DIRECTION_FEASIBILITY_MULTIPLIER = 10.0
 
 
+def direction_in_planes(direction, normals):
+    """Keep the free in-plane heading while satisfying all supplied normals."""
+    matrix = np.asarray(normals, dtype=float).reshape(-1, 3)
+    _u, singular, vh = np.linalg.svd(matrix, full_matrices=True)
+    rank = int(np.count_nonzero(singular > LINE_HARD_PLANE_MIN_TANGENT))
+    basis = vh[rank:]
+    tangent = basis.T @ (basis @ np.asarray(direction, dtype=float))
+    length = float(np.linalg.norm(tangent))
+    if length < LINE_HARD_PLANE_MIN_TANGENT:
+        raise ValueError("Mirror line direction is incompatible with its hard planes")
+    return tangent / length
+
+
 def validate_line_relations(point_ids, line_ids, plane_groups, parallel_pairs, *,
                             known_line_ids=()):
     """Validate supported references before registration; never discard a relation."""
@@ -171,13 +184,16 @@ class LineFocalConstraints:
                     normals[line] = normal
         return normals
 
-    def constrain_hard_directions(self, points, geometry):
+    def constrain_hard_directions(self, points, geometry, *, excluded=()):
         """Use an in-plane infinite line throughout fitting and result emission."""
         normals = self.hard_direction_normals(points, geometry)
+        excluded = set(excluded)
         if not normals:
             return geometry
         constrained = list(geometry)
         for line, normal in normals.items():
+            if line in excluded:
+                continue
             position, direction = geometry[line]
             tangent = direction - normal * float(normal @ direction)
             length = float(np.linalg.norm(tangent))

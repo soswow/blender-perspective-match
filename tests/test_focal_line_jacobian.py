@@ -33,6 +33,9 @@ class FocalLineJacobianTests(TestCase):
         calibrations, points, initial = _inputs(case)
         lines = [sync.SyncLineObservation(**item)
                  for item in request["line_observations"]]
+        line_ids = {item.landmark_id for item in lines}
+        independent_point_pairs = [pair for pair in request["mirror_pairs"]
+                                   if not set(pair) & line_ids]
 
         class StopAfterJacobian(Exception):
             pass
@@ -45,11 +48,12 @@ class FocalLineJacobianTests(TestCase):
                 focal_bundle.fit_independent_focals(
                     calibrations, points, initial, anchor_id=request["anchor_id"],
                     pick_sigma_px=case["pick_sigma_px"],
-                    line_observations=lines, mirror_pairs=request["mirror_pairs"],
+                    line_observations=lines, mirror_pairs=independent_point_pairs,
                     mirror_plane=request["mirror_plane"],
                     mirror_landmark_id=request["mirror_landmark_id"])
         # One full line residual at startup and one at the Jacobian state;
-        # each of the four camera and three line charts then touches its strokes.
+        # each camera and independent line chart then touches only its strokes.
+        # Mirrored line charts share geometry and therefore have cross-line derivatives.
         camera_counts = [sum(item.match_id == camera for item in lines)
                          for camera in calibrations]
         camera_parameters = (1, 6, 7, 7)

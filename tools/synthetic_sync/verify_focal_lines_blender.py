@@ -1,8 +1,9 @@
 """Generated line-FOV Blender preparation, bundle, apply and stale-input checks.
 
-One bundle, with an explicit oracle point/pose start to isolate native integration.
+One bundle, with an explicit oracle geometry/pose start to isolate native integration.
 Optional --fresh also runs one real point-based registration.
-No user files are opened and no blend is saved. Output folder must be new.
+No user files are opened. A generated blend is saved for a reopen check.
+Output folder must be new.
 """
 from __future__ import annotations
 
@@ -55,10 +56,11 @@ def check(out, fresh=False, partial=False, relations=False):
     initial = sync.SyncSolveResult(
         similarities=similarities,
         landmarks={k: np.asarray(p) for k, p in case['truth']['points'].items()},
+        line_segments={key: tuple(np.asarray(end) for end in segment)
+                       for key, segment in case['truth']['lines'].items()},
         mean_reprojection_px=0., per_match_rmse_px={}, per_landmark_rmse_px={},
-        message='Oracle point/pose start; line geometry absent', success=True)
-    # The point initializer is isolated; line reconstruction and focal fitting
-    # use real production code and the prepared RNA stroke coordinates.
+        message='Oracle geometry/pose start for native integration', success=True)
+    # The initializer is isolated; fitting uses the real prepared RNA strokes.
     start_options = dict(wraps=lens_refine._run_sync) if fresh else dict(return_value=initial)
     with patch.object(lens_refine, '_run_sync', **start_options) as startup:
         result = scene.run_lens_refine(prep)
@@ -126,6 +128,27 @@ def check(out, fresh=False, partial=False, relations=False):
     report = dict(passed=True, bundles=1, fresh_registration=fresh, partial_startup=partial,
                   withheld_max_px=float(max(errors)), lines=len(result.sync_result.line_segments),
                   relations=relations)
+    from match_perspective.core.joint_fit_score import JointFitScorer, supported_joint_request
+    from match_perspective.core.sync.solve import solution_result_from_seed
+
+    def assert_certified():
+        request = scene.collect_sync_request(bpy.context)
+        seed = request.initial_solution
+        assert seed is not None and seed.evidence_sha256 == request.evidence_sha256()
+        applied = solution_result_from_seed(seed)
+        supported, _coverage = supported_joint_request(request, applied)
+        score = JointFitScorer(
+            supported, applied, calibrations=applied.calibrations,
+            frozen_point_weights=seed.diagnostics.joint_point_weights,
+        ).score(applied, calibrations=applied.calibrations)
+        assert score.valid, (score.reason, score.constraint_gaps)
+
+    assert_certified()
+    path = out / 'line-fit-reopen.blend'
+    bpy.ops.wm.save_as_mainfile(filepath=str(path), check_existing=False)
+    bpy.ops.wm.open_mainfile(filepath=str(path))
+    assert_certified()
+    report['reopen_certified'] = True
     (out / 'result.json').write_text(json.dumps(report, indent=2))
     print('Line FOV Blender PASS:', report)
 

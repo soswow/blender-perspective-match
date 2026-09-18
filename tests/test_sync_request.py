@@ -19,7 +19,8 @@ class SyncRequestTests(unittest.TestCase):
     def request(self):
         request = SyncSolveRequest(**solver_arguments(generate("locked_bridge")["request"]))
         request.lock_rotation, request.lock_translation = True, True
-        request.ground_slack, request.known_3d_slack, request.mirror_slack = 0.13, 0.27, 0.09
+        request.ground_slack, request.known_3d_slack = 0.13, 0.27
+        request.mirror_slack, request.mirror_pair_slack = 0.09, 0.04
         calibration = request.matches[0].calibration
         calibration.division_lambda = 0.015
         calibration.lambda_saturated = True
@@ -61,7 +62,8 @@ class SyncRequestTests(unittest.TestCase):
         self.assertEqual(restored.location_match_ids, {"view_0", "view_1"})
         self.assertEqual(restored.readonly_match_ids, {"view_2"})
         self.assertIsInstance(restored.location_match_ids, set)
-        self.assertEqual(restored.to_record()["version"], 6)
+        self.assertEqual(restored.to_record()["version"], 7)
+        self.assertEqual(restored.mirror_pair_slack, 0.04)
         self.assertEqual(restored.mirror_landmark_id, "mirror_center")
         self.assertEqual(restored.plane_groups, [("p0", "Z", 2), ("edge", "FREE", 1)])
         self.assertEqual(restored.plane_slack, 0.07)
@@ -124,7 +126,7 @@ class SyncRequestTests(unittest.TestCase):
     def test_legacy_snapshot_preserves_pre_role_semantics_and_checks_checksum(self):
         legacy = self.request().to_record()
         legacy["version"] = 1
-        for key in ("location_match_ids", "readonly_match_ids", "plane_groups", "plane_slack", "mirror_landmark_id", "initial_solution"):
+        for key in ("location_match_ids", "readonly_match_ids", "plane_groups", "plane_slack", "mirror_landmark_id", "initial_solution", "mirror_pair_slack"):
             del legacy["inputs"][key]
         legacy["sha256"] = request_fingerprint(legacy["inputs"])
         restored = SyncSolveRequest.from_record(legacy)
@@ -132,7 +134,8 @@ class SyncRequestTests(unittest.TestCase):
         self.assertIsNone(restored.readonly_match_ids)
         self.assertIsNone(restored.plane_groups)
         self.assertIsNone(restored.plane_slack)
-        self.assertEqual(restored.to_record()["version"], 6)
+        self.assertEqual(restored.to_record()["version"], 7)
+        self.assertEqual(restored.mirror_pair_slack, 0.0)
         self.assertIsNone(restored.mirror_landmark_id)
         legacy["inputs"]["lock_rotation"] = False
         with self.assertRaisesRegex(ValueError, "checksum"):
@@ -141,14 +144,14 @@ class SyncRequestTests(unittest.TestCase):
     def test_version_two_snapshot_preserves_roles_and_injects_plane_defaults(self) -> None:
         legacy = self.request().to_record()
         legacy["version"] = 2
-        for key in ("plane_groups", "plane_slack", "mirror_landmark_id", "initial_solution"):
+        for key in ("plane_groups", "plane_slack", "mirror_landmark_id", "initial_solution", "mirror_pair_slack"):
             del legacy["inputs"][key]
         legacy["sha256"] = request_fingerprint(legacy["inputs"])
         restored = SyncSolveRequest.from_record(legacy)
         self.assertEqual(restored.location_match_ids, {"view_0", "view_1"})
         self.assertIsNone(restored.plane_groups)
         self.assertIsNone(restored.plane_slack)
-        self.assertEqual(restored.to_record()["version"], 6)
+        self.assertEqual(restored.to_record()["version"], 7)
         self.assertIsNone(restored.mirror_landmark_id)
 
     def test_version_three_snapshot_injects_mirror_landmark_default(self) -> None:
@@ -156,10 +159,11 @@ class SyncRequestTests(unittest.TestCase):
         legacy["version"] = 3
         del legacy["inputs"]["mirror_landmark_id"]
         del legacy["inputs"]["initial_solution"]
+        del legacy["inputs"]["mirror_pair_slack"]
         legacy["sha256"] = request_fingerprint(legacy["inputs"])
         restored = SyncSolveRequest.from_record(legacy)
         self.assertIsNone(restored.mirror_landmark_id)
-        self.assertEqual(restored.to_record()["version"], 6)
+        self.assertEqual(restored.to_record()["version"], 7)
         legacy["inputs"]["mirror_landmark_id"] = "point"
         legacy["sha256"] = request_fingerprint(legacy["inputs"])
         with self.assertRaisesRegex(ValueError, "version 4"):
@@ -237,6 +241,7 @@ class SyncRequestTests(unittest.TestCase):
         record = self.request().to_record()
         record["version"] = 4
         del record["inputs"]["initial_solution"]
+        del record["inputs"]["mirror_pair_slack"]
         record["sha256"] = request_fingerprint(record["inputs"])
         self.assertIsNone(SyncSolveRequest.from_record(record).initial_solution)
         record["inputs"]["initial_solution"] = {}
@@ -248,10 +253,20 @@ class SyncRequestTests(unittest.TestCase):
         record = self.request().to_record()
         record["version"] = 5
         del record["inputs"]["derived_lines"]
+        del record["inputs"]["mirror_pair_slack"]
         record["sha256"] = request_fingerprint(record["inputs"])
         restored = SyncSolveRequest.from_record(record)
         self.assertIsNone(restored.derived_lines)
-        self.assertEqual(restored.to_record()["version"], 6)
+        self.assertEqual(restored.to_record()["version"], 7)
+
+    def test_version_six_request_defaults_to_exact_mirror_pairs(self):
+        record = self.request().to_record()
+        record["version"] = 6
+        del record["inputs"]["mirror_pair_slack"]
+        record["sha256"] = request_fingerprint(record["inputs"])
+        restored = SyncSolveRequest.from_record(record)
+        self.assertEqual(restored.mirror_pair_slack, 0.0)
+        self.assertEqual(restored.to_record()["version"], 7)
 
     def test_diagnose_replays_reference_and_skips_removing_its_defining_point(self):
         request = self.request()

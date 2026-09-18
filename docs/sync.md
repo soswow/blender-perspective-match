@@ -247,9 +247,7 @@ generally repair a mismatch between a guessed starting frame and a known world
 direction; the joint fit can adjust the observable orientation freedoms below.
 
 Point landmarks may use **Is in Plane** (X/Y/Z or Free) and **Is Mirror Of**
-with a supplied **Mirror Empty** or an on-plane **Mirror Landmark**. Plane Slack and Mirror Slack keep their
-existing meanings: plane membership can be softened, and Mirror Slack lets
-the effective mirror plane slide along its normal relative to the selected object or live landmark.
+with a supplied **Mirror Empty** or an on-plane **Mirror Landmark**. Plane Slack softens plane membership. **Mirror Slack** controls pair-position mismatch, while **Mirror Plane Slack** lets the effective mirror plane slide along its normal relative to the selected object or live landmark.
 A one-view point can participate when current Known 3D, ground, or a supported
 hard plane determines its depth. Fit Only views cannot supply that depth.
 Point-only Free groups need four members to constrain coplanarity; point-only
@@ -331,7 +329,9 @@ Model or place Empties in the anchor world → select them → Sync list **Landm
 
 A point or line landmark can name another of the same kind as **Is Mirror Of** — the same feature on the opposite side of a symmetric object. The pair is stored on both landmarks; selecting either side shows the other, and clearing **None** on one side clears the other. Each side is picked only where it is visible. The magic-wand button next to the dropdown fills the partner when this landmark's name ends with **left** or **right** and another landmark of the same kind uses the swapped name. Pairwise registration still needs ordinary shared points. The mirror constraint is used in joint BA, and a line picked in only a recovered still is mixed against the partner's reflected 3D when Solve Sync places that camera.
 
-One scene **Mirror Empty** (below the slack rows) is the plane for every pair. Place it on the midline. **Local Plane** chooses which local face is the mirror (YZ by default: local X is the normal). **Mirror Slack** sits beside **Plane Slack** (0 pins the plane) and lets that plane slide along its normal if the Empty was slightly off. The Empty is not moved.
+One scene **Mirror Empty** (below the slack rows) is the plane for every pair. Place it on the midline. **Local Plane** chooses which local face is the mirror (YZ by default: local X is the normal). **Mirror Plane Slack** (0 pins the plane) lets that plane slide along its normal if the Empty was slightly off. The Empty is not moved.
+
+**Mirror Slack** controls the paired geometry itself. At 0, point partners and drawn infinite lines are fitted as exact reflections while their cameras and other free geometry adjust around them. A positive value permits point-position or transverse line-offset mismatch up to that distance in scene units. Mirrored line directions remain exact; there is no angular slack. This setting is independent of Mirror Plane Slack, and existing files keep their saved plane slack when opened.
 
 For a plane that should follow a reconstructed point, set **Mirror Position**
 to **Landmark**, then choose the **On-plane Point**. It must lie on the symmetry
@@ -343,7 +343,7 @@ object and its **Local Plane**; only that object's orientation is used.
 The reference is an ordinary reconstructed point. Its current estimate and the
 mirror relations are fitted together, so better picks and additional views can
 change the plane position during later solves. Its cached position and any
-visible landmark Empty are not treated as exact Known 3D. **Mirror Slack = 0**
+visible landmark Empty are not treated as exact Known 3D. **Mirror Plane Slack = 0**
 keeps the plane through the fitted reference; positive slack allows a normal
 offset from it. Moving an orientation object does not move the plane; rotating
 it changes the supplied normal. The solve never moves that object.
@@ -459,7 +459,8 @@ For a cold or incomplete start, Sync seeds pairwise pose then runs a joint bundl
 - **Ground Slack** — how far On Ground landmarks may sit off Z=0 (scene units). 0 pins them to the floor raycast. The default (0.02) is enough for plank cup / tag thickness on a boarded floor.
 - **Known 3D Slack** — how far Known 3D point landmarks may sit off their Empty (scene units). 0 (the default) pins them. A small value is a spring toward the Empty while each still's 2D pick pulls the point along that camera's ray, so CAD that is slightly wrong can share the error with the cameras instead of stretching the overlay. Linked Empties stay put; **Landmark Empties** show the eased positions. Known 3D lines stay pinned. **Use Known 3D** (Camera) still treats the Empty as fixed. A point that is both Known 3D and **On Ground** uses the tighter of the two slacks for Z.
 - **Plane Slack** — how far **Is in Plane** landmarks may leave their shared plane (scene units). 0 (the default) pins them. A small value lets a slightly warped wall or table flex.
-- **Mirror Empty / Plane / Mirror Slack** — one object whose chosen local face is the shared mirror for every **Is Mirror Of** pair. Slack 0 pins the plane to the Empty; a small value lets it slide along the normal. The Empty is not moved. Mirror Slack sits beside Plane Slack.
+- **Mirror Slack** — maximum point-position or transverse drawn-line mismatch for **Is Mirror Of** pairs. 0 fits exact reflections; line directions stay exact at every value.
+- **Mirror Empty / Plane / Mirror Plane Slack** — one object whose chosen local face is the shared mirror for every pair. Plane slack 0 pins it to the Empty; a small value lets it slide along the normal. The Empty is not moved.
 
 **Solve Sync** and **Refine Lenses** save a self-contained local HTML report
 when an operation finishes. They do not open the browser automatically.

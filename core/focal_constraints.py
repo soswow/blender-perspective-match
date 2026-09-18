@@ -33,6 +33,7 @@ class PointFocalConstraints:
     baseline_world: float
     plane_spring: float
     mirror_pair_spring: float
+    mirror_pair_slack: float
     mirror_offset_spring: float
     free_mirror_offset: bool
     free_baseline: bool
@@ -50,13 +51,15 @@ class PointFocalConstraints:
         plane_slack: float, mirror_pairs: list[tuple[str, str]] | None,
         mirror_plane: tuple[np.ndarray, np.ndarray] | None,
         mirror_slack: float,
+        mirror_pair_slack: float = 0.0,
         mirror_landmark_id: str | None = None,
         extra_mirror_pairs: bool = False,
     ) -> "PointFocalConstraints":
         """Reject unsupported references rather than dropping relation members."""
         index = {key: value for value, key in enumerate(point_ids)}
-        if not np.isfinite((plane_slack, mirror_slack)).all() or min(plane_slack, mirror_slack) < 0:
-            raise ValueError("Plane and Mirror Slack must be finite and nonnegative")
+        if (not np.isfinite((plane_slack, mirror_slack, mirror_pair_slack)).all() or
+                min(plane_slack, mirror_slack, mirror_pair_slack) < 0):
+            raise ValueError("Plane and mirror slacks must be finite and nonnegative")
         groups = normalize_plane_groups(plane_groups)
         if len(groups) != len(plane_groups or ()):
             raise ValueError("Point plane groups contain invalid or duplicate members")
@@ -124,7 +127,10 @@ class PointFocalConstraints:
                                     if mirror_landmark_id is not None else None),
             baseline_world=baseline_world,
             plane_spring=PLANE_RESIDUAL_PX * baseline_world / hard_plane_slack,
-            mirror_pair_spring=MIRROR_PAIR_RESIDUAL_PX * baseline_world / MIRROR_PAIR_HARD_GAP,
+            mirror_pair_spring=(MIRROR_PAIR_RESIDUAL_PX * baseline_world /
+                                (mirror_pair_slack if mirror_pair_slack > 1e-12
+                                 else MIRROR_PAIR_HARD_GAP)),
+            mirror_pair_slack=float(mirror_pair_slack),
             mirror_offset_spring=(MIRROR_PLANE_RESIDUAL_PX * baseline_world / mirror_slack
                                   if mirror_enabled and mirror_slack > 1e-12 else 0.0),
             free_mirror_offset=bool(mirror_enabled and mirror_slack > 1e-12),

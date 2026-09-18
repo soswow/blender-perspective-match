@@ -20,7 +20,7 @@ from .derived_lines import (MIN_DERIVED_LINE_SPAN, derived_line_geometry,
 from .focal_constraints import PointFocalConstraints
 from .focal_lines import LineChart, canonical_line_point, endpoint_distances
 from .focal_line_constraints import (DERIVED_FIXED_DIRECTION_FEASIBILITY_MULTIPLIER,
-                                     LineFocalConstraints,
+                                     LineFocalConstraints, direction_in_planes,
                                      LINE_RELATION_DIRECTION_HARD_SINE)
 from .focal_optimizer import bounded_lm_step
 from .focal_orientation import orientation_basis, overall_rotation
@@ -31,7 +31,8 @@ from .joint_fit_score import (JointFitScorer, joint_line_support_diagnostics,
 from .focal_startup import provisional_poses
 from .sync import SyncObservation, SyncLineObservation, SyncSolveResult, SimilarityTransform, SyncMatchInput
 from .sync.request import SyncSolveRequest
-from .sync.constants import (MIRROR_PAIR_HARD_GAP, PLANE_HARD_SLACK,
+from .sync.constants import (MIRROR_PAIR_EXACT_RELATIVE_TOLERANCE,
+                             PLANE_HARD_SLACK,
                              GROUND_SLACK_DEFAULT, KNOWN_3D_SLACK_DEFAULT)
 from .sync.lines import (_reconstruct_line_from_observations,
                          _finite_segment_from_line_observations,
@@ -48,7 +49,6 @@ MAX_POINTS = 80
 MAX_LINES = 24
 MAX_LINE_STROKES = 96
 MAX_DENSE_JACOBIAN_BYTES = 192 * 1024 * 1024
-LINE_MIRROR_DIRECTION_HARD_SINE = 0.01
 MAX_ITERATIONS = 400
 MAX_SECONDS = 60.0
 RELATIVE_COST_TOLERANCE = 1.0e-7
@@ -240,6 +240,83 @@ def _coupled_hard_line_image_fd_jacobian(
         changed = line_residual_at(geometry_at(shifted, points))
         jac[:, column] = (changed - baseline) / step
     return jac
+
+
+def _project_exact_points(
+    raw_points: np.ndarray,
+    point_constraints: PointFocalConstraints,
+    reference_constraints: PointReferenceConstraints,
+    frame_rotation: np.ndarray,
+    mirror_offset: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Project raw point coordinates onto simultaneous hard affine relations."""
+    points = np.asarray(raw_points, dtype=float)
+    count = len(points)
+    rows: list[np.ndarray] = []
+    values: list[float] = []
+
+    for point, target in reference_constraints.hard_xyz.items():
+        for axis in range(3):
+            row = np.zeros(3 * count)
+            row[3 * point + axis] = 1.0
+            rows.append(row)
+            values.append(float(target[axis]))
+    for point, (normal, offset) in reference_constraints.hard_z.items():
+        row = np.zeros(3 * count)
+        row[3 * point:3 * point + 3] = normal
+        rows.append(row)
+        values.append(float(offset))
+
+    if (point_constraints.mirror_enabled and
+            point_constraints.mirror_pair_slack <= 1.0e-12):
+        normal = point_constraints.mirror_normal
+        assert normal is not None
+        householder = np.eye(3) - 2.0 * np.outer(normal, normal)
+        rotation = np.asarray(frame_rotation, dtype=float)
+        for left, right in point_constraints.mirror_pairs:
+            block = np.zeros((3, 3 * count))
+            block[:, 3 * right:3 * right + 3] = rotation
+            block[:, 3 * left:3 * left + 3] = -householder @ rotation
+            if point_constraints.mirror_reference_index is None:
+                target = 2.0 * (
+                    point_constraints.mirror_distance + mirror_offset) * normal
+            else:
+                reference = point_constraints.mirror_reference_index
+                block[:, 3 * reference:3 * reference + 3] -= (
+                    2.0 * np.outer(normal, normal) @ rotation)
+                target = 2.0 * mirror_offset * normal
+            rows.extend(block)
+            values.extend(target.tolist())
+
+    if not rows:
+        size = 3 * count
+        return points.copy(), np.eye(size), np.empty((0, size))
+    matrix = np.asarray(rows, dtype=float).reshape(-1, 3 * count)
+    target = np.asarray(values, dtype=float)
+    gram_inverse = np.linalg.pinv(matrix @ matrix.T, rcond=1.0e-12)
+    raw = points.ravel()
+    projected = raw - matrix.T @ (gram_inverse @ (matrix @ raw - target))
+    if float(np.max(np.abs(matrix @ projected - target))) > 1.0e-8:
+        raise ValueError("Hard point and mirror relations are contradictory")
+    derivative = np.eye(3 * count) - matrix.T @ gram_inverse @ matrix
+    return projected.reshape(count, 3), derivative, matrix
+
+
+def _constraint_pivot_columns(matrix: np.ndarray) -> set[int]:
+    """Choose raw coordinates removed by an affine projection's null space."""
+    if not len(matrix):
+        return set()
+    selected: list[int] = []
+    rank = 0
+    for column in range(matrix.shape[1]):
+        trial = matrix[:, selected + [column]]
+        trial_rank = int(np.linalg.matrix_rank(trial, tol=1.0e-10))
+        if trial_rank > rank:
+            selected.append(column)
+            rank = trial_rank
+            if rank == int(np.linalg.matrix_rank(matrix, tol=1.0e-10)):
+                break
+    return set(selected)
 
 
 def _refine_homography(a: np.ndarray, b: np.ndarray, h: np.ndarray) -> np.ndarray | None:
@@ -524,6 +601,7 @@ def fit_independent_focals(
     mirror_pairs: list[tuple[str, str]] | None = None,
     mirror_plane: tuple[np.ndarray, np.ndarray] | None = None,
     mirror_slack: float = 0.0,
+    mirror_pair_slack: float = 0.0,
     mirror_landmark_id: str | None = None,
     line_observations: list[SyncLineObservation] | None = None,
     parallel_pairs: list[tuple[str, str]] | None = None,
@@ -816,6 +894,7 @@ def fit_independent_focals(
             plane_slack=0.0 if plane_slack is None else plane_slack,
             mirror_pairs=point_mirrors, mirror_plane=mirror_plane,
             mirror_slack=0.0 if mirror_slack is None else mirror_slack,
+            mirror_pair_slack=(0.0 if mirror_pair_slack is None else mirror_pair_slack),
             mirror_landmark_id=mirror_landmark_id,
             extra_mirror_pairs=bool(line_mirrors))
         line_constraints = LineFocalConstraints.from_inputs_with_derived(
@@ -880,6 +959,25 @@ def fit_independent_focals(
     uv = np.asarray([(item.u, item.v) for item in observations], float)
     weights = np.sqrt(np.asarray([item.weight for item in observations], float))
     line_index = {key: index for index, key in enumerate(line_ids)}
+    line_mirror_roles: list[tuple[int, int, bool]] = []
+    for left_id, right_id in line_mirrors:
+        left_derived = left_id in derived_by_id
+        right_derived = right_id in derived_by_id
+        if left_derived and right_derived:
+            return refuse("Exact mirror relations between two From Points lines are unsupported")
+        left_fixed = left_id in (known_lines or {})
+        right_fixed = right_id in (known_lines or {})
+        if left_fixed and right_fixed:
+            source_id, target_id, both_fixed = left_id, right_id, True
+        elif left_fixed or left_derived:
+            source_id, target_id, both_fixed = left_id, right_id, False
+        elif right_fixed or right_derived:
+            source_id, target_id, both_fixed = right_id, left_id, False
+        else:
+            source_id, target_id = sorted((left_id, right_id))
+            both_fixed = False
+        line_mirror_roles.append(
+            (line_index[source_id], line_index[target_id], both_fixed))
     lci = np.asarray([camera_index[item.match_id] for item in line_observations], int)
     lli = np.asarray([line_index[item.landmark_id] for item in line_observations], int)
     luv = np.asarray([((item.u1, item.v1), (item.u2, item.v2))
@@ -935,28 +1033,29 @@ def fit_independent_focals(
         else:
             start = ncam + 5 + scale_columns + 6 * (camera - 2)
             active[start:start + 6] = False
-    for point in reference_constraints.hard_xyz:
-        start = point_offset + 3 * point
-        active[start:start + 3] = False
-    hard_z_pivots = {}
-    for point, (normal, _offset) in reference_constraints.hard_z.items():
-        pivot = int(np.argmax(np.abs(normal)))
-        hard_z_pivots[point] = pivot
-        active[point_offset + 3 * point + pivot] = False
+    try:
+        _initial_projected, _initial_point_derivative, initial_point_matrix = (
+            _project_exact_points(
+                points0, constraints, reference_constraints, np.eye(3), 0.0))
+    except ValueError as exc:
+        return refuse(str(exc))
+    for column in _constraint_pivot_columns(initial_point_matrix):
+        active[point_offset + column] = False
     for line_id in known_lines or {}:
         if line_id not in line_index:
             continue
         start = line_offset + 4 * chart_line_indices.index(line_index[line_id])
         active[start:start + 4] = False
+    chart_by_line = {line: chart for chart, line in enumerate(chart_line_indices)}
+    for _source, target, both_fixed in line_mirror_roles:
+        if both_fixed or target not in chart_by_line:
+            continue
+        start = line_offset + 4 * chart_by_line[target]
+        active[start:start + (4 if constraints.mirror_pair_slack <= 1.0e-12 else 2)] = False
     for column in _redundant_hard_line_columns(
             line_constraints, points0, line_charts, line_offset,
             chart_line_indices):
         active[column] = False
-    point_derivatives = [np.eye(3) for _ in point_ids]
-    for point in reference_constraints.hard_xyz:
-        point_derivatives[point] = np.zeros((3, 3))
-    for point, (normal, _offset) in reference_constraints.hard_z.items():
-        point_derivatives[point] = np.eye(3) - np.outer(normal, normal)
     if lock_rotation:
         active[ncam:ncam + 3] = False
         for camera in range(2, ncam):
@@ -1042,6 +1141,13 @@ def fit_independent_focals(
             division_lambda=source.division_lambda,
             brown_conrady=source.brown_conrady)
 
+    def point_state(params: np.ndarray):
+        offset = (float(params[mirror_offset_column])
+                  if mirror_offset_column is not None else 0.0)
+        return _project_exact_points(
+            params[point_offset:point_end].reshape(npoint, 3),
+            constraints, reference_constraints, frame_rotation(params), offset)
+
     def decode(params: np.ndarray):
         focal_exponents = (np.full(ncam, params[0]) if share_lens else params[:ncam])
         focal = base_fx * np.exp(focal_exponents)
@@ -1058,8 +1164,7 @@ def fit_independent_focals(
             for camera in range(1, ncam):
                 if ids[camera] not in (fixed_similarities or {}):
                     centers[camera] = translated_root_center(camera, rotations[camera], params)
-        points = reference_constraints.project_hard(
-            params[point_offset:point_end].reshape(npoint, 3))
+        points, _point_derivative, _matrix = point_state(params)
         return focal, rotations, np.asarray(centers), points
 
     def camera_state(params: np.ndarray, camera: int, column: int):
@@ -1109,14 +1214,110 @@ def fit_independent_focals(
                 direction = line_seeds[key][1]
                 span = max(float(np.linalg.norm(direction)), 1.0e-12)
             geometry[line_index[key]] = (0.5 * (first + second), direction / span)
+        rotation = frame_rotation(params)
+        constrained_points = points @ rotation.T
+        constrained = [(rotation @ point, rotation @ direction)
+                       for point, direction in geometry]
+        mirror_targets = {target for _source, target, fixed in line_mirror_roles
+                          if not fixed}
+        mirror_sources = {source for source, _target, fixed in line_mirror_roles
+                          if not fixed}
+        normal = constraints.mirror_normal
+        householder = (np.eye(3) - 2.0 * np.outer(normal, normal)
+                       if normal is not None else None)
         if line_constraints.hard_plane and line_constraints.groups:
-            rotation = frame_rotation(params)
             constrained = line_constraints.constrain_hard_directions(
-                points @ rotation.T,
-                [(rotation @ point, rotation @ direction) for point, direction in geometry])
-            geometry = [(rotation.T @ point, rotation.T @ direction)
-                        for point, direction in constrained]
-        return geometry
+                constrained_points, constrained,
+                excluded=mirror_targets | mirror_sources)
+            hard_normals = line_constraints.hard_direction_normals(
+                constrained_points, constrained)
+        else:
+            hard_normals = {}
+        known_indices = {line_index[key] for key in (known_lines or {})}
+        for source, target, both_fixed in line_mirror_roles:
+            if both_fixed:
+                continue
+            assert householder is not None
+            normals = []
+            if source in hard_normals:
+                normals.append(hard_normals[source])
+            if target in hard_normals:
+                normals.append(householder @ hard_normals[target])
+            fixed_directions = []
+            for left, right in line_constraints.pairs:
+                if isinstance(right, np.ndarray):
+                    if left == source:
+                        fixed_directions.append(right)
+                    elif left == target:
+                        fixed_directions.append(householder @ right)
+                elif left in (source, target) and right in known_indices:
+                    direction = constrained[right][1]
+                    fixed_directions.append(
+                        direction if left == source else householder @ direction)
+                elif right in (source, target) and left in known_indices:
+                    direction = constrained[left][1]
+                    fixed_directions.append(
+                        direction if right == source else householder @ direction)
+            source_point, source_direction = constrained[source]
+            if source in known_indices:
+                fixed_directions.insert(0, source_direction)
+            if fixed_directions:
+                candidate = np.asarray(fixed_directions[0], float)
+                candidate /= np.linalg.norm(candidate)
+                if candidate @ source_direction < 0:
+                    candidate = -candidate
+                if (any(np.linalg.norm(np.cross(candidate, other)) >
+                        LINE_RELATION_DIRECTION_HARD_SINE
+                        for other in fixed_directions[1:]) or
+                        any(abs(float(candidate @ plane_normal)) >
+                            LINE_RELATION_DIRECTION_HARD_SINE
+                            for plane_normal in normals)):
+                    raise ValueError(
+                        "Exact mirror line direction contradicts a hard plane or parallel relation")
+                source_direction = candidate
+            elif normals and source in chart_by_line:
+                source_direction = direction_in_planes(source_direction, normals)
+            constrained[source] = (source_point, source_direction)
+        if line_mirror_roles:
+            assert normal is not None
+            assert householder is not None
+            distance = (float(normal @ constrained_points[
+                constraints.mirror_reference_index])
+                if constraints.mirror_reference_index is not None
+                else constraints.mirror_distance)
+            if mirror_offset_column is not None:
+                distance += float(params[mirror_offset_column])
+            shift = 2.0 * distance * normal
+            for source, target, both_fixed in line_mirror_roles:
+                source_point, source_direction = constrained[source]
+                target_point, target_direction = constrained[target]
+                reflected_direction = householder @ source_direction
+                reflected_direction /= np.linalg.norm(reflected_direction)
+                reflected_point = canonical_line_point(
+                    householder @ canonical_line_point(
+                        source_point, source_direction) + shift,
+                    reflected_direction)
+                if both_fixed:
+                    fixed_point = canonical_line_point(target_point, target_direction)
+                    direction_gap = float(np.linalg.norm(
+                        np.cross(target_direction, reflected_direction)))
+                    position_gap = constraints.baseline_world * float(np.linalg.norm(
+                        np.cross(target_direction, reflected_point - fixed_point)))
+                    position_limit = (constraints.mirror_pair_slack +
+                                      MIRROR_PAIR_EXACT_RELATIVE_TOLERANCE * max(
+                                          constraints.baseline_world, 1.0))
+                    if (direction_gap > MIRROR_PAIR_EXACT_RELATIVE_TOLERANCE or
+                            position_gap > position_limit):
+                        raise ValueError(
+                            "Hard Known 3D lines contradict their exact mirror relation")
+                    continue
+                if constraints.mirror_pair_slack <= 1.0e-12:
+                    target_point = reflected_point
+                else:
+                    target_point = canonical_line_point(target_point, reflected_direction)
+                constrained[target] = (target_point, reflected_direction)
+        return [(rotation.T @ point, rotation.T @ direction)
+                for point, direction in constrained]
 
     def frame_rotation(params):
         return overall_rotation(params[line_end:orientation_end], rotation_basis)
@@ -1158,24 +1359,22 @@ def fit_independent_focals(
         if mirror_offset_column is not None:
             distance += float(params[mirror_offset_column])
         result = list(relations)
-        for left_id, right_id in line_mirrors:
-            left_p, left_d = geometry[line_index[left_id]]
-            right_p, right_d = geometry[line_index[right_id]]
-            left_p = canonical_line_point(left_p, left_d)
-            right_p = canonical_line_point(right_p, right_d)
-            reflected_p = householder @ left_p + 2 * distance * normal
-            reflected_d = householder @ left_d
-            if reflected_d @ right_d < 0:
-                reflected_d = -reflected_d
-            # Two perpendicular position coordinates and two direction
-            # coordinates: translation along either line is no constraint.
-            result.extend((constraints.mirror_pair_spring *
-                           np.cross(right_d, reflected_p - right_p))[:].tolist())
-            result.extend((200.0 * np.cross(right_d, reflected_d)).tolist())
+        if constraints.mirror_pair_slack > 1.0e-12:
+            for source, target, _both_fixed in line_mirror_roles:
+                source_p, source_d = geometry[source]
+                target_p, target_d = geometry[target]
+                source_p = canonical_line_point(source_p, source_d)
+                target_p = canonical_line_point(target_p, target_d)
+                reflected_p = householder @ source_p + 2 * distance * normal
+                # Direction is shared exactly by line_geometry. Only the
+                # invariant transverse offset is softened by Mirror Slack.
+                result.extend((constraints.mirror_pair_spring *
+                               np.cross(target_d, reflected_p - target_p)).tolist())
         return np.asarray(result)
 
     def residual_and_jacobian(params: np.ndarray, *, jacobian: bool):
         focal, rotations, centers, points = decode(params)
+        _projected_points, point_derivative, _point_matrix = point_state(params)
         residual = np.empty((len(uv), 2))
         jac = np.zeros((2 * len(uv), len(params))) if jacobian else None
         depths = np.empty(len(uv))
@@ -1204,8 +1403,9 @@ def fit_independent_focals(
             point_j = np.einsum('nij,jk->nik', dq, rotations[camera])
             for local, point_id in enumerate(pi[selected]):
                 jac[2 * selected[local]:2 * selected[local] + 2,
-                    point_offset + 3 * point_id:point_offset + 3 * point_id + 3] = (
-                        point_j[local] @ point_derivatives[point_id])
+                    point_offset:point_end] = (
+                        point_j[local] @
+                        point_derivative[3 * point_id:3 * point_id + 3])
             if camera:
                 if camera == 1:
                     rotation_start = ncam
@@ -1252,6 +1452,30 @@ def fit_independent_focals(
                         derivative = ((trial_rotation - rotations[camera]) @ offset_xyz.T).T / step
                         jac[rows, rotation_start + component] = np.einsum(
                             'nij,nj->ni', dq, derivative).ravel()
+        if jac is not None and constraints.mirror_pair_slack <= 1.0e-12:
+            coupled = list(range(line_end, orientation_end))
+            if mirror_offset_column is not None:
+                coupled.append(mirror_offset_column)
+            for column in coupled:
+                step = 1.0e-6 * max(1.0, abs(params[column]))
+                shifted = params.copy()
+                shifted[column] += step
+                changed_points = decode(shifted)[3]
+                changed = np.empty((len(uv), 2))
+                for camera in range(ncam):
+                    selected = np.flatnonzero(ci == camera)
+                    if not len(selected):
+                        continue
+                    q = (rotations[camera] @
+                         (changed_points[pi[selected]] - centers[camera]).T).T
+                    source = calibrations[ids[camera]]
+                    predicted, _, _ = project_camera_points(
+                        q, intrinsics_at(camera, focal[camera]),
+                        division_lambda=source.division_lambda,
+                        brown_conrady=source.brown_conrady, jacobian=False)
+                    changed[selected] = (
+                        predicted - uv[selected]) * fit_weights[selected, None]
+                jac[:, column] = (changed.ravel() - residual.ravel()) / step
         pixel_residual = residual.ravel()
         geometry = line_geometry(params, points)
         line_residual = line_image_residual(focal, rotations, centers, geometry)
@@ -1266,18 +1490,47 @@ def fit_independent_focals(
                 chart_line_indices=chart_line_indices,
                 line_distance=projected_line if general_projection else None,
                 geometry_at=(lambda shifted: line_geometry(shifted, points))
-                if line_constraints.hard_plane and line_constraints.groups else None)
-            if line_constraints.hard_plane and line_constraints.groups:
-                # Free plane normals depend on their fitted support points;
-                # world-axis planes depend on the common rotation parameters.
-                coupled_columns = _coupled_hard_line_columns(
-                    line_constraints, point_offset, line_end, orientation_end)
-                line_jac += _coupled_hard_line_image_fd_jacobian(
+                if ((line_constraints.hard_plane and line_constraints.groups) or
+                    line_mirror_roles) else None)
+            coupled_columns = _coupled_hard_line_columns(
+                line_constraints, point_offset, line_end, orientation_end)
+            if line_mirror_roles:
+                for source, target, _both_fixed in line_mirror_roles:
+                    if source in chart_by_line:
+                        start = line_offset + 4 * chart_by_line[source]
+                        coupled_columns.update(range(start, start + 4))
+                    if (constraints.mirror_pair_slack > 1.0e-12 and
+                            target in chart_by_line):
+                        start = line_offset + 4 * chart_by_line[target]
+                        coupled_columns.update(range(start + 2, start + 4))
+                    if source in line_constraints.derived_endpoints:
+                        for point in line_constraints.derived_endpoints[source]:
+                            dependency = point_derivative[
+                                3 * point:3 * point + 3]
+                            coupled_columns.update(
+                                point_offset + int(column) for column in
+                                np.flatnonzero(np.any(abs(dependency) > 1.0e-12, axis=0)))
+                coupled_columns.update(range(line_end, orientation_end))
+                if constraints.mirror_reference_index is not None:
+                    dependency = point_derivative[
+                        3 * constraints.mirror_reference_index:
+                        3 * constraints.mirror_reference_index + 3]
+                    coupled_columns.update(
+                        point_offset + int(column) for column in
+                        np.flatnonzero(np.any(abs(dependency) > 1.0e-12, axis=0)))
+                if mirror_offset_column is not None:
+                    coupled_columns.add(mirror_offset_column)
+            if coupled_columns:
+                # Moving support, exact partner geometry, the live mirror
+                # reference and common frame can affect strokes on either side.
+                coupled_jac = _coupled_hard_line_image_fd_jacobian(
                     params, line_residual, coupled_columns,
                     point_values_at=lambda shifted: decode(shifted)[3],
                     geometry_at=line_geometry,
                     line_residual_at=lambda changed: line_image_residual(
                         focal, rotations, centers, changed))
+                line_jac[:, sorted(coupled_columns)] = (
+                    coupled_jac[:, sorted(coupled_columns)])
             jac = np.vstack((jac, line_jac))
         pixel_residual = np.concatenate((pixel_residual, line_residual))
         if not has_geometric_priors:
@@ -1297,26 +1550,36 @@ def fit_independent_focals(
             prior_residual = np.concatenate((prior_residual, reference_residual))
             if jacobian:
                 prior_jacobian = np.vstack((prior_jacobian, reference_jacobian))
-        if jacobian and len(rotation_basis):
-            point_block = prior_jacobian[:, point_offset:point_end].reshape(-1, npoint, 3)
+        if jacobian:
+            frame_derivative = np.kron(np.eye(npoint), base_frame)
             prior_jacobian[:, point_offset:point_end] = (
-                point_block @ base_frame).reshape(-1, 3 * npoint)
-            for column in range(line_end, orientation_end):
+                prior_jacobian[:, point_offset:point_end] @
+                frame_derivative @ point_derivative)
+        if jacobian and (len(rotation_basis) or
+                         constraints.mirror_pair_slack <= 1.0e-12):
+            coupled = list(range(line_end, orientation_end))
+            if (mirror_offset_column is not None and
+                    constraints.mirror_pair_slack <= 1.0e-12):
+                coupled.append(mirror_offset_column)
+            for column in coupled:
                 step = 1e-6 * max(1.0, abs(params[column]))
                 shifted = params.copy()
                 shifted[column] += step
-                changed_points = points @ frame_rotation(shifted).T
-                changed, _ = constraints.residual_and_jacobian(
+                shifted_points = decode(shifted)[3]
+                changed_points = shifted_points @ frame_rotation(shifted).T
+                changed, _changed_jac = constraints.residual_and_jacobian(
                     changed_points, point_offset=point_offset, parameter_count=len(params),
-                    mirror_offset=offset, mirror_offset_column=mirror_offset_column,
+                    mirror_offset=(float(shifted[mirror_offset_column])
+                                   if mirror_offset_column is not None else 0.0),
+                    mirror_offset_column=mirror_offset_column,
                     jacobian=False)
+                changed_reference, _changed_reference_jac = (
+                    reference_constraints.residual_and_jacobian(
+                        shifted_points, point_offset=point_offset,
+                        parameter_count=len(params), jacobian=False))
+                if len(changed_reference):
+                    changed = np.concatenate((changed, changed_reference))
                 prior_jacobian[:, column] = (changed - prior_residual) / step
-        if jacobian:
-            for point, transform in enumerate(point_derivatives):
-                if point in reference_constraints.hard_xyz or point in reference_constraints.hard_z:
-                    start = point_offset + 3 * point
-                    prior_jacobian[:, start:start + 3] = (
-                        prior_jacobian[:, start:start + 3] @ transform)
         mirror_line_residual = line_prior(params, constrained_points, constrained_lines)
         if jacobian and len(mirror_line_residual):
             mirror_jac = np.zeros((len(mirror_line_residual), len(params)))
@@ -1650,7 +1913,15 @@ def fit_independent_focals(
                                              if mirror_offset_column is not None else 0.0))
             if plane_max > PLANE_HARD_SLACK:
                 return refuse("Fitted points violate a hard Is in Plane relation", fitted=fitted_rmse)
-            if mirror_max > MIRROR_PAIR_HARD_GAP:
+            exact_tolerance = MIRROR_PAIR_EXACT_RELATIVE_TOLERANCE * max(
+                baseline,
+                baseline * max((float(np.linalg.norm(point))
+                                for point in final_points), default=0.0),
+                baseline * max((float(np.linalg.norm(point))
+                                for point, _direction in final_geometry), default=0.0),
+                1.0)
+            mirror_limit = constraints.mirror_pair_slack + exact_tolerance
+            if mirror_max > mirror_limit:
                 return refuse("Fitted points violate a supplied point mirror relation", fitted=fitted_rmse)
             if line_mirrors:
                 normal = constraints.mirror_normal
@@ -1670,8 +1941,8 @@ def fit_independent_focals(
                     position_gap = baseline * np.linalg.norm(
                         np.cross(right_d, reflected_p - right_p))
                     direction_gap = np.linalg.norm(np.cross(right_d, reflected_d))
-                    if (position_gap > MIRROR_PAIR_HARD_GAP or
-                            direction_gap > LINE_MIRROR_DIRECTION_HARD_SINE):
+                    if (position_gap > mirror_limit or
+                            direction_gap > MIRROR_PAIR_EXACT_RELATIVE_TOLERANCE):
                         return refuse("Fitted lines violate a supplied mirror relation", fitted=fitted_rmse)
         if len(luv) or line_constraints.active:
             final_geometry = line_geometry(x, decode(x)[3])
@@ -1989,6 +2260,7 @@ def refine_fixed_focals(
         plane_groups=work_request.plane_groups, plane_slack=work_request.plane_slack,
         mirror_pairs=work_request.mirror_pairs, mirror_plane=work_request.mirror_plane,
         mirror_slack=work_request.mirror_slack,
+        mirror_pair_slack=work_request.mirror_pair_slack,
         mirror_landmark_id=work_request.mirror_landmark_id,
         line_observations=work_request.line_observations,
         parallel_pairs=work_request.parallel_pairs,

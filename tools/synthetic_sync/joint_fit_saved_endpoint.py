@@ -27,7 +27,20 @@ from .budget import ExperimentBudget
 from match_perspective.core import focal_bundle, lens_refine
 from match_perspective.core.joint_fit_score import JointFitScorer
 from match_perspective.core.sync.request import SyncSolveRequest, json_values, request_fingerprint
+from match_perspective.core.sync.solve import solution_result_from_seed
 from match_perspective.core.sync.types import SimilarityTransform, SyncSolveResult
+
+
+def _finite_json(value):
+    """Replace nonfinite diagnostic scalars while preserving solver decisions."""
+    value = json_values(value)
+    if isinstance(value, float) and not np.isfinite(value):
+        return None
+    if isinstance(value, dict):
+        return {key: _finite_json(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_finite_json(item) for item in value]
+    return value
 
 
 def _request(record):
@@ -56,6 +69,40 @@ def _initial(record):
     result = SyncSolveResult(**{key: value for key, value in values.items() if key in allowed})
     result.joint_mirror_offset_m = float(values.get("joint_mirror_offset_m", 0.0))
     return result
+
+
+def _mirror_line_witnesses(request, result):
+    """Measure reflected line direction and offset at stored finite helpers."""
+    if request.mirror_plane is None:
+        return []
+    normal = np.asarray(request.mirror_plane[1], float)
+    normal /= np.linalg.norm(normal)
+    origin = (np.asarray(result.landmarks[request.mirror_landmark_id], float)
+              if request.mirror_landmark_id is not None else
+              np.asarray(request.mirror_plane[0], float))
+    rows = []
+    for left, right in request.mirror_pairs or ():
+        if left not in result.line_segments or right not in result.line_segments:
+            continue
+        first = np.asarray(result.line_segments[left], float)
+        second = np.asarray(result.line_segments[right], float)
+        first_midpoint = np.mean(first, axis=0)
+        second_midpoint = np.mean(second, axis=0)
+        first_direction = first[1] - first[0]
+        second_direction = second[1] - second[0]
+        first_direction /= np.linalg.norm(first_direction)
+        second_direction /= np.linalg.norm(second_direction)
+        reflected_direction = first_direction - 2.0 * (normal @ first_direction) * normal
+        reflected_midpoint = first_midpoint - 2.0 * (
+            normal @ (first_midpoint - origin)) * normal
+        sine = float(np.linalg.norm(np.cross(second_direction, reflected_direction)))
+        rows.append(dict(
+            pair=[left, right], direction_sine=sine,
+            direction_degrees=float(np.degrees(np.arcsin(min(sine, 1.0)))),
+            midpoint_witness_gap_m=float(np.linalg.norm(
+                np.cross(second_direction, reflected_midpoint - second_midpoint))),
+        ))
+    return rows
 
 
 def _archive_records(args):
@@ -163,8 +210,13 @@ def main():
         "initial": json.loads(args.initial.read_text()),
         "inputs": json.loads(args.inputs.read_text()),
     }
+    initial_is_request_seed = False
     if "sync_result" in records["initial"]:
         records["initial"] = records["initial"]["sync_result"]
+    elif (records["initial"].get("format") == "perspective-match-sync-request" and
+          records["initial"].get("inputs", {}).get("initial_solution") is not None):
+        records["initial"] = records["initial"]["inputs"]["initial_solution"]
+        initial_is_request_seed = True
     input_hashes = _archive_records(args)
     source_paths = sorted((ROOT / "core").rglob("*.py")) + [Path(__file__),
                                                             ROOT / "tools/synthetic_sync/budget.py"]
@@ -182,10 +234,14 @@ def main():
                 "python": sys.version, "numpy": np.__version__,
                 "platform": platform.platform()}
     request = _request(records["request"])
-    initial = _initial(records["initial"])
+    initial = (solution_result_from_seed(request.initial_solution)
+               if initial_is_request_seed else _initial(records["initial"]))
+    if initial is None:
+        raise ValueError("Saved solution seed lacks complete applied diagnostics")
     options = records["inputs"]
     calibrations = {item.match_id: item.calibration for item in request.matches}
     scorer = JointFitScorer(request, initial, calibrations=calibrations)
+    initial_score = scorer.score(initial, calibrations=calibrations)
     diagnostic = {}
     request_record = {"records": records, "source_key": source_key,
                       "input_hashes": input_hashes, "public_wrapper": args.public_wrapper}
@@ -207,8 +263,10 @@ def main():
                     calibrations, scorer.point_observations, initial,
                     anchor_id=request.anchor_id, pick_sigma_px=options["pick_sigma_px"],
                     fx_span=options["fx_span"], plane_groups=request.plane_groups,
+                    fixed_focals=bool(options.get("fixed_focals", False)),
                     plane_slack=request.plane_slack, mirror_pairs=request.mirror_pairs,
                     mirror_plane=request.mirror_plane, mirror_slack=request.mirror_slack,
+                    mirror_pair_slack=request.mirror_pair_slack,
                     mirror_landmark_id=request.mirror_landmark_id,
                     line_observations=request.line_observations,
                     parallel_pairs=request.parallel_pairs,
@@ -224,6 +282,10 @@ def main():
                     lock_translation=request.lock_translation,
                     share_lens=options["share_lens"],
                     diagnostic_callback=diagnostic.update)
+                # Preserve the numerical endpoint before public scoring or
+                # report serialization can fail independently of the solve.
+                (args.out / "solver-endpoint.json").write_text(json.dumps(
+                    _finite_json(outcome), indent=2, allow_nan=False))
                 score = (scorer.score(
                     outcome.sync_result, calibrations=outcome.calibrations)
                          if outcome.sync_result is not None else None)
@@ -233,8 +295,14 @@ def main():
                     abs(public_objective - internal_objective) /
                     max(public_objective, internal_objective, 1.0)
                     if public_objective is not None and internal_objective is not None else None)
-                output = {"outcome": json_values(outcome), "score": json_values(score),
-                          "diagnostic": json_values(diagnostic), "source_key": source_key,
+                output = {"outcome": _finite_json(outcome), "score": _finite_json(score),
+                          "initial_score": _finite_json(initial_score),
+                          "initial_mirror_line_witnesses": _mirror_line_witnesses(
+                              request, initial),
+                          "final_mirror_line_witnesses": _mirror_line_witnesses(
+                              request, outcome.sync_result)
+                              if outcome.sync_result is not None else [],
+                          "diagnostic": _finite_json(diagnostic), "source_key": source_key,
                           "input_hashes": input_hashes,
                           "internal_objective": internal_objective,
                           "public_objective": public_objective,

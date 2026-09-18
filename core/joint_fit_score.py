@@ -10,15 +10,15 @@ from . import geometry
 from .derived_lines import derived_line_geometry, validate_derived_lines
 from .focal_constraints import PointFocalConstraints
 from .focal_line_constraints import (LineFocalConstraints,
-                                     LINE_RELATION_DIRECTION_HARD_SINE,
-                                     LINE_RELATION_DIRECTION_RESIDUAL_PX)
+                                     LINE_RELATION_DIRECTION_HARD_SINE)
 from .focal_lines import canonical_line_point
 from .focal_point_priors import PointReferenceConstraints
 from .focal_projection import project_stroke_line
 from .sync.ba import _auto_downweight_outlier_observations, _balance_observation_weights
 from .sync.ba import observations_for_location
 from .sync.constants import (GROUND_SLACK_DEFAULT, KNOWN_3D_SLACK_DEFAULT,
-                             LINE_PLANE_MIN_SINE, MIRROR_PAIR_HARD_GAP,
+                             LINE_PLANE_MIN_SINE,
+                             MIRROR_PAIR_EXACT_RELATIVE_TOLERANCE,
                              OUTLIER_WEIGHT_FACTOR, PLANE_HARD_SLACK,
                              WORLD_AXIS_DIRECTIONS)
 from .sync.lines import line_support_angles
@@ -375,6 +375,8 @@ class JointFitScorer:
                 plane_slack=0.0 if request.plane_slack is None else request.plane_slack,
                 mirror_pairs=point_pairs, mirror_plane=request.mirror_plane,
                 mirror_slack=0.0 if request.mirror_slack is None else request.mirror_slack,
+                mirror_pair_slack=(0.0 if request.mirror_pair_slack is None
+                                   else request.mirror_pair_slack),
                 mirror_landmark_id=request.mirror_landmark_id,
                 extra_mirror_pairs=bool(line_pairs))
             line_rel = LineFocalConstraints.from_inputs_with_derived(
@@ -418,9 +420,9 @@ class JointFitScorer:
                         reflected_d = -reflected_d
                     position = np.cross(right_d, reflected_p - right_p)
                     direction = np.cross(right_d, reflected_d)
-                    line_mirror_rows.extend((point_rel.mirror_pair_spring * position).tolist())
-                    line_mirror_rows.extend((LINE_RELATION_DIRECTION_RESIDUAL_PX *
-                                             direction).tolist())
+                    if point_rel.mirror_pair_slack > 1.0e-12:
+                        line_mirror_rows.extend(
+                            (point_rel.mirror_pair_spring * position).tolist())
                     line_mirror_distance = max(line_mirror_distance,
                                                baseline * float(np.linalg.norm(position)))
                     line_mirror_direction = max(line_mirror_direction,
@@ -446,14 +448,22 @@ class JointFitScorer:
                         line_mirror_m=line_mirror_distance,
                         line_mirror_direction_sine=line_mirror_direction,
                         known_line_m=known_line_gap)
+            exact_tolerance = MIRROR_PAIR_EXACT_RELATIVE_TOLERANCE * max(
+                baseline,
+                baseline * max((float(np.linalg.norm(point))
+                                for point in point_chart), default=0.0),
+                baseline * max((float(np.linalg.norm(point))
+                                for point, _direction in line_chart), default=0.0),
+                1.0)
+            mirror_limit = point_rel.mirror_pair_slack + exact_tolerance
             if (ref.hard_xyz and known_gap > 1e-7 or
                     hard_ground_gap > 1e-7 or
                     point_rel.hard_plane and plane_gap > PLANE_HARD_SLACK or
-                    point_mirror_gap > MIRROR_PAIR_HARD_GAP or
+                    point_mirror_gap > mirror_limit or
                     line_rel.hard_plane and line_plane_gap > PLANE_HARD_SLACK or
                     line_direction_gap > LINE_RELATION_DIRECTION_HARD_SINE or
-                    line_mirror_distance > MIRROR_PAIR_HARD_GAP or
-                    line_mirror_direction > LINE_RELATION_DIRECTION_HARD_SINE or
+                    line_mirror_distance > mirror_limit or
+                    line_mirror_direction > MIRROR_PAIR_EXACT_RELATIVE_TOLERANCE or
                     known_line_gap > 1e-7):
                 return JointFitScore(constraint_gaps=gaps, reason="Hard world relation is violated")
             objective = sum(item.weight * point_errors[(item.match_id, item.landmark_id)]**2

@@ -31,6 +31,7 @@ from .constants import (
     GROUND_SLACK_DEFAULT,
     KNOWN_3D_SLACK_DEFAULT,
     LINE_PLANE_MIN_SINE,
+    MIRROR_PAIR_SLACK_DEFAULT,
     MIRROR_SLACK_DEFAULT,
     PLANE_SLACK_DEFAULT,
     RECOVERED_HUBER_DELTA_PX,
@@ -1568,6 +1569,7 @@ def solve_landmark_sync(
     mirror_pairs: list[tuple[str, str]] | None = None,
     mirror_plane: tuple[np.ndarray, np.ndarray] | None = None,
     mirror_slack: float | None = None,
+    mirror_pair_slack: float | None = None,
     mirror_landmark_id: str | None = None,
     plane_groups: list[tuple[str, str, int]] | None = None,
     plane_slack: float | None = None,
@@ -1623,6 +1625,9 @@ def solve_landmark_sync(
     if mirror_slack is None:
         mirror_slack = MIRROR_SLACK_DEFAULT
     mirror_slack = max(float(mirror_slack), 0.0)
+    if mirror_pair_slack is None:
+        mirror_pair_slack = MIRROR_PAIR_SLACK_DEFAULT
+    mirror_pair_slack = max(float(mirror_pair_slack), 0.0)
     if plane_slack is None:
         plane_slack = PLANE_SLACK_DEFAULT
     plane_slack = max(float(plane_slack), 0.0)

@@ -869,7 +869,12 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
         plane_slack_row = sync_body.row(align=True)
         plane_slack_row.use_property_split = False
         plane_slack_row.prop(workspace, "plane_slack", text="Plane Slack")
-        plane_slack_row.prop(workspace, "mirror_slack", text="Mirror Slack")
+        plane_slack_row.prop(workspace, "mirror_pair_slack", text="Mirror Slack")
+        plane_offset_row = sync_body.row(align=True)
+        plane_offset_row.use_property_split = False
+        plane_offset_row.enabled = bool(getattr(workspace, "mirror_object", None) or
+                                        getattr(workspace, "mirror_origin", "OBJECT") == "LANDMARK")
+        plane_offset_row.prop(workspace, "mirror_slack", text="Mirror Plane Slack")
         origin_row = sync_body.row(align=True)
         origin_row.use_property_split = False
         origin_row.prop(workspace, "mirror_origin", text="Mirror Position")

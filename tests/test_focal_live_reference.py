@@ -112,7 +112,7 @@ class LiveReferenceFocalTests(TestCase):
             a = result.sync_result.landmarks[left]
             b = result.sync_result.landmarks[right]
             gap = b - (a - 2 * (normal @ (a - reconstructed)) * normal)
-            self.assertLess(np.linalg.norm(gap), 0.01)
+            self.assertLess(np.linalg.norm(gap), 2.0e-8)
 
     def test_public_point_fov_accepts_live_reference_without_mirror_empty_position(self):
         case = _case()

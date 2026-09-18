@@ -43,17 +43,25 @@ KNOWN_3D_SLACK_DEFAULT = 0.0
 # Soft XYZ residual at |offset| = slack equals this many pixels before Huber.
 KNOWN_3D_RESIDUAL_PX = 6.0
 
-# Default Mirror Slack: 0 pins the plane to the Empty (Empty is not moved).
+# Default Mirror Plane Slack: 0 pins the plane to the Empty (Empty is not moved).
 MIRROR_SLACK_DEFAULT = 0.0
 
 # Soft plane-offset residual at |δ| = slack equals this many pixels before Huber.
 MIRROR_PLANE_RESIDUAL_PX = 6.0
 
-# Pair reflection gap of this many scene units equals MIRROR_PAIR_RESIDUAL_PX.
+# Default permitted point/line mirror-pair position mismatch in scene units.
+# Zero is represented exactly by the common fit rather than by a stiff spring.
+MIRROR_PAIR_SLACK_DEFAULT = 0.0
+
+# Legacy initializer mirror-pair target. The common fit uses explicit
+# Mirror Pair Slack and never treats this value as an implicit allowance.
 MIRROR_PAIR_HARD_GAP = 0.01
 
 # Soft XYZ residual for B − reflect(A) at |gap| = MIRROR_PAIR_HARD_GAP.
 MIRROR_PAIR_RESIDUAL_PX = 6.0
+# Numerical-only allowance for float32 Blender persistence of exact mirror
+# geometry, scaled by the represented scene extent at certification time.
+MIRROR_PAIR_EXACT_RELATIVE_TOLERANCE = 8.0 * float(np.finfo(np.float32).eps)
 
 # Shared-plane buckets (Is in Plane). Axis X/Y/Z share that coordinate;
 # Free fits an unknown plane. 0 slack is a hard pin (tiny spring).

@@ -33,6 +33,7 @@ class SyncSolveRequest:
     mirror_pairs: list[tuple[str, str]] | None = None
     mirror_plane: tuple[np.ndarray, np.ndarray] | None = None
     mirror_slack: float | None = None
+    mirror_pair_slack: float | None = None
     mirror_landmark_id: str | None = None
     plane_groups: list[tuple[str, str, int]] | None = None
     plane_slack: float | None = None
@@ -88,14 +89,14 @@ class SyncSolveRequest:
     def to_record(self) -> dict:
         """Copy inputs into JSON values, preserving order and explicit defaults."""
         inputs = self._inputs(include_seed=True)
-        return {"format": "perspective-match-sync-request", "version": 6,
+        return {"format": "perspective-match-sync-request", "version": 7,
                 "inputs": inputs, "sha256": request_fingerprint(inputs)}
 
     @classmethod
     def from_record(cls, record: dict) -> SyncSolveRequest:
         """Decode a complete snapshot; reject missing fields and unknown versions."""
         version = record.get("version")
-        if record.get("format") != "perspective-match-sync-request" or type(version) is not int or version not in {1, 2, 3, 4, 5, 6}:
+        if record.get("format") != "perspective-match-sync-request" or type(version) is not int or version not in {1, 2, 3, 4, 5, 6, 7}:
             raise ValueError("Unsupported Sync request format/version")
         inputs = record["inputs"]
         if record.get("sha256") != request_fingerprint(inputs):
@@ -123,6 +124,10 @@ class SyncSolveRequest:
                 raise ValueError("From Points lines require Sync request version 6")
             values.pop("derived_lines", None)
             values["derived_lines"] = None
+        if version in {1, 2, 3, 4, 5, 6}:
+            if "mirror_pair_slack" in values:
+                raise ValueError("Mirror pair slack requires Sync request version 7")
+            values["mirror_pair_slack"] = 0.0
         _check_fields(values, SyncSolveRequest)
         if values["mirror_landmark_id"] is not None and (
             not isinstance(values["mirror_landmark_id"], str)

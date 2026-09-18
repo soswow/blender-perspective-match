@@ -475,6 +475,17 @@ class PointFocalConstraintModelTests(TestCase):
         broken_mirror[partner] += 0.02 * mirror.mirror_normal / mirror.baseline_world
         self.assertGreater(mirror.world_gaps(broken_mirror)[1], MIRROR_PAIR_HARD_GAP)
 
+    def test_positive_pair_slack_is_a_physical_position_spring(self):
+        mirror, points = _compiled(fixtures.generate("mirror-hard-offcenter"))
+        mirror.mirror_pair_slack = 0.04
+        mirror.mirror_pair_spring = 6.0 * mirror.baseline_world / 0.04
+        partner = mirror.mirror_pairs[0][1]
+        points[partner] += 0.02 * mirror.mirror_normal / mirror.baseline_world
+        self.assertAlmostEqual(mirror.world_gaps(points)[1], 0.02, places=10)
+        residual, _jac = mirror.residual_and_jacobian(
+            points, point_offset=0, parameter_count=points.size, jacobian=False)
+        self.assertAlmostEqual(float(np.linalg.norm(residual)), 3.0, places=8)
+
     def test_public_point_route_initializes_from_picks_then_fits_relations(self):
         for name in ("free-hard", "axis-hard", "mirror-hard-offcenter"):
             with self.subTest(name=name):
