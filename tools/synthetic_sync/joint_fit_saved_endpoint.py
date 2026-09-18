@@ -11,6 +11,7 @@ import platform
 import shutil
 import sys
 import types
+from unittest import mock
 
 import numpy as np
 
@@ -23,7 +24,7 @@ if "match_perspective" not in sys.modules:
     sys.modules["match_perspective"] = package
 
 from .budget import ExperimentBudget
-from match_perspective.core import focal_bundle
+from match_perspective.core import focal_bundle, lens_refine
 from match_perspective.core.joint_fit_score import JointFitScorer
 from match_perspective.core.sync.request import SyncSolveRequest, json_values, request_fingerprint
 from match_perspective.core.sync.types import SimilarityTransform, SyncSolveResult
@@ -57,12 +58,104 @@ def _initial(record):
     return result
 
 
+def _archive_records(args):
+    """Copy exact JSON inputs beside the output before replaying them."""
+    archive = args.out / "inputs"
+    paths = {"request.json": args.request, "initial.json": args.initial,
+             "options.json": args.inputs}
+    hashes = {}
+    for name, source in paths.items():
+        data = source.read_bytes()
+        digest = hashlib.sha256(data).hexdigest()
+        destination = archive / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if destination.exists():
+            if hashlib.sha256(destination.read_bytes()).hexdigest() != digest:
+                raise ValueError(f"Archived {name} differs from supplied input")
+        else:
+            shutil.copyfile(source, destination)
+        hashes[name] = digest
+    return hashes
+
+
+def _wrapper_matches(calibrations):
+    """Build point-focal inputs that retain each saved private calibration."""
+    return [lens_refine.MatchLensInput(
+        match_id=match_id, line_bundles={}, intrinsics=calibration.intrinsics,
+        base_calibration=calibration)
+        for match_id, calibration in calibrations.items()]
+
+
+def _public_wrapper(request, initial, calibrations, scorer, options):
+    """Replay point FOV refinement from one mocked saved startup, never registration."""
+    missing = set(calibrations) - set(initial.similarities)
+    if missing:
+        raise ValueError("Saved startup is missing cameras: " + ", ".join(sorted(missing)))
+    progress = []
+    matches = _wrapper_matches(calibrations)
+    calls = {"startup": 0, "bundle": 0}
+    fit = lens_refine.fit_independent_focals
+
+    def saved_start(*_args, **_kwargs):
+        calls["startup"] += 1
+        if calls["startup"] > 1:
+            raise RuntimeError("Saved-start replay cannot restart registration")
+        return initial
+
+    def one_bundle(*args, **kwargs):
+        calls["bundle"] += 1
+        if calls["bundle"] > 1:
+            raise RuntimeError("Saved-start replay permits only one numerical bundle")
+        return fit(*args, **kwargs)
+
+    with mock.patch.object(lens_refine, "_run_sync", side_effect=saved_start) as run_sync, \
+         mock.patch.object(lens_refine, "fit_independent_focals", side_effect=one_bundle):
+        result = lens_refine.refine_lenses_from_landmarks(
+            matches, scorer.point_observations, anchor_id=request.anchor_id,
+            known_world=request.known_world,
+            line_observations=request.line_observations,
+            known_lines=request.known_lines, derived_lines=request.derived_lines,
+            parallel_pairs=request.parallel_pairs,
+            fx_span=options["fx_span"],
+            lock_rotation=request.lock_rotation,
+            lock_translation=request.lock_translation,
+            share_lens=options["share_lens"],
+            estimate_focal_from_points=True,
+            pick_sigma_px=options["pick_sigma_px"],
+            fixed_similarities=request.fixed_similarities,
+            ground_slack=request.ground_slack,
+            known_3d_slack=request.known_3d_slack,
+            mirror_pairs=request.mirror_pairs,
+            mirror_plane=request.mirror_plane,
+            mirror_slack=request.mirror_slack,
+            mirror_landmark_id=request.mirror_landmark_id,
+            plane_groups=request.plane_groups,
+            plane_slack=request.plane_slack,
+            location_match_ids=request.location_match_ids,
+            readonly_match_ids=request.readonly_match_ids,
+            progress_callback=lambda _done, _total, label: progress.append(label))
+    if run_sync.call_count != 1:
+        raise RuntimeError(
+            f"Saved-start wrapper made {run_sync.call_count} startup calls; expected one")
+    score = (scorer.score(result.sync_result, calibrations=result.calibrations)
+             if result.improved else None)
+    objective_consistent = bool(
+        score is not None and score.valid and
+        np.isclose(result.final_cost, score.objective, rtol=1.e-10, atol=1.e-10))
+    return result, score, progress, objective_consistent
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--request", type=Path, required=True)
     parser.add_argument("--initial", type=Path, required=True)
     parser.add_argument("--inputs", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--public-wrapper", action="store_true",
+                        help="Run Refine Lenses from the saved startup with registration mocked.")
+    parser.add_argument("--max-calls", type=int, default=4)
+    parser.add_argument("--wall-seconds", type=float, default=300.0)
+    parser.add_argument("--per-call-seconds", type=float, default=120.0)
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
     records = {
@@ -72,6 +165,7 @@ def main():
     }
     if "sync_result" in records["initial"]:
         records["initial"] = records["initial"]["sync_result"]
+    input_hashes = _archive_records(args)
     source_paths = sorted((ROOT / "core").rglob("*.py")) + [Path(__file__),
                                                             ROOT / "tools/synthetic_sync/budget.py"]
     source_hashes = {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
@@ -84,6 +178,7 @@ def main():
             shutil.copyfile(path, destination)
         assert hashlib.sha256(destination.read_bytes()).hexdigest() == source_hashes[str(path.relative_to(ROOT))]
     metadata = {"source_key": source_key, "source_hashes": source_hashes,
+                "input_hashes": input_hashes, "public_wrapper": args.public_wrapper,
                 "python": sys.version, "numpy": np.__version__,
                 "platform": platform.platform()}
     request = _request(records["request"])
@@ -92,53 +187,77 @@ def main():
     calibrations = {item.match_id: item.calibration for item in request.matches}
     scorer = JointFitScorer(request, initial, calibrations=calibrations)
     diagnostic = {}
+    request_record = {"records": records, "source_key": source_key,
+                      "input_hashes": input_hashes, "public_wrapper": args.public_wrapper}
     with ExperimentBudget(args.out / "attempts.jsonl", metadata=metadata,
-                          max_calls=4, wall_seconds=300.0, per_call_seconds=120.0) as budget:
-        with budget.attempt("saved-endpoint", {"records": records, "source_key": source_key}) as attempt:
-            outcome = focal_bundle.fit_independent_focals(
-                calibrations, scorer.point_observations, initial,
-                anchor_id=request.anchor_id, pick_sigma_px=options["pick_sigma_px"],
-                fx_span=options["fx_span"], plane_groups=request.plane_groups,
-                plane_slack=request.plane_slack, mirror_pairs=request.mirror_pairs,
-                mirror_plane=request.mirror_plane, mirror_slack=request.mirror_slack,
-                mirror_landmark_id=request.mirror_landmark_id,
-                line_observations=request.line_observations,
-                parallel_pairs=request.parallel_pairs,
-                fixed_similarities=request.fixed_similarities,
-                location_match_ids=request.location_match_ids,
-                readonly_match_ids=request.readonly_match_ids,
-                known_world=request.known_world,
-                known_3d_slack=request.known_3d_slack,
-                ground_slack=request.ground_slack,
-                known_lines=request.known_lines,
-                lock_rotation=request.lock_rotation,
-                lock_translation=request.lock_translation,
-                share_lens=options["share_lens"],
-                diagnostic_callback=diagnostic.update)
-            score = (scorer.score(
-                outcome.sync_result, calibrations=outcome.calibrations)
-                     if outcome.sync_result is not None else None)
-            internal_objective = diagnostic.get("final_objective")
-            public_objective = score.objective if score and score.valid else None
-            relative_objective_delta = (
-                abs(public_objective - internal_objective) /
-                max(public_objective, internal_objective, 1.0)
-                if public_objective is not None and internal_objective is not None else None)
-            output = {"outcome": json_values(outcome), "score": json_values(score),
-                      "diagnostic": json_values(diagnostic), "source_key": source_key,
-                      "internal_objective": internal_objective,
-                      "public_objective": public_objective,
-                      "relative_objective_delta": relative_objective_delta}
+                          max_calls=args.max_calls, wall_seconds=args.wall_seconds,
+                          per_call_seconds=args.per_call_seconds) as budget:
+        label = "saved-start-public-wrapper" if args.public_wrapper else "saved-endpoint"
+        with budget.attempt(label, request_record) as attempt:
+            if args.public_wrapper:
+                result, score, progress, objective_consistent = _public_wrapper(
+                    request, initial, calibrations, scorer, options)
+                output = {"result": json_values(result), "score": json_values(score),
+                          "progress": progress,
+                          "mocked_startup_calls": 1,
+                          "original_weight_objective_consistent": objective_consistent,
+                          "source_key": source_key, "input_hashes": input_hashes}
+            else:
+                outcome = focal_bundle.fit_independent_focals(
+                    calibrations, scorer.point_observations, initial,
+                    anchor_id=request.anchor_id, pick_sigma_px=options["pick_sigma_px"],
+                    fx_span=options["fx_span"], plane_groups=request.plane_groups,
+                    plane_slack=request.plane_slack, mirror_pairs=request.mirror_pairs,
+                    mirror_plane=request.mirror_plane, mirror_slack=request.mirror_slack,
+                    mirror_landmark_id=request.mirror_landmark_id,
+                    line_observations=request.line_observations,
+                    parallel_pairs=request.parallel_pairs,
+                    fixed_similarities=request.fixed_similarities,
+                    location_match_ids=request.location_match_ids,
+                    readonly_match_ids=request.readonly_match_ids,
+                    known_world=request.known_world,
+                    known_3d_slack=request.known_3d_slack,
+                    ground_slack=request.ground_slack,
+                    known_lines=request.known_lines,
+                    derived_lines=request.derived_lines,
+                    lock_rotation=request.lock_rotation,
+                    lock_translation=request.lock_translation,
+                    share_lens=options["share_lens"],
+                    diagnostic_callback=diagnostic.update)
+                score = (scorer.score(
+                    outcome.sync_result, calibrations=outcome.calibrations)
+                         if outcome.sync_result is not None else None)
+                internal_objective = diagnostic.get("final_objective")
+                public_objective = score.objective if score and score.valid else None
+                relative_objective_delta = (
+                    abs(public_objective - internal_objective) /
+                    max(public_objective, internal_objective, 1.0)
+                    if public_objective is not None and internal_objective is not None else None)
+                output = {"outcome": json_values(outcome), "score": json_values(score),
+                          "diagnostic": json_values(diagnostic), "source_key": source_key,
+                          "input_hashes": input_hashes,
+                          "internal_objective": internal_objective,
+                          "public_objective": public_objective,
+                          "relative_objective_delta": relative_objective_delta}
             attempt.complete(output)
-    (args.out / "endpoint.json").write_text(json.dumps(output, indent=2, allow_nan=False))
-    print(json.dumps({"accepted": outcome.accepted, "reason": outcome.reason,
-                      "score_valid": score.valid if score else None,
-                      "score_reason": score.reason if score else None,
-                      "internal_objective": internal_objective,
-                      "public_objective": public_objective,
-                      "relative_objective_delta": relative_objective_delta,
-                      "constraint_gaps": score.constraint_gaps if score else None,
-                      "source_key": source_key}))
+    endpoint = "wrapper.json" if args.public_wrapper else "endpoint.json"
+    (args.out / endpoint).write_text(json.dumps(output, indent=2, allow_nan=False))
+    if args.public_wrapper:
+        print(json.dumps({"improved": result.improved, "refusal_reason": result.refusal_reason,
+                          "score_valid": score.valid if score else None,
+                          "public_objective": score.objective if score and score.valid else None,
+                          "original_weight_objective_consistent": objective_consistent,
+                          "mocked_startup_calls": 1,
+                          "source_key": source_key}))
+    else:
+        print(json.dumps({"accepted": outcome.accepted, "reason": outcome.reason,
+                          "score_valid": score.valid if score else None,
+                          "score_reason": score.reason if score else None,
+                          "internal_objective": internal_objective,
+                          "public_objective": public_objective,
+                          "relative_objective_delta": relative_objective_delta,
+                          "constraint_gaps": score.constraint_gaps if score else None,
+                          "source_key": source_key}))
 
 
 if __name__ == "__main__":

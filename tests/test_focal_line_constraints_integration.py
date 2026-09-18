@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from unittest import TestCase, mock
+from unittest.mock import PropertyMock
 
 import numpy as np
 
@@ -41,20 +42,50 @@ def _infinite_line_error(segment, truth):
     return max(np.linalg.norm(np.cross(np.asarray(point)-a, direction)) for point in segment)
 
 
-def _fit(case):
+def _fit(case, diagnostic_callback=None, **overrides):
     request = case["request"]
     calibrations, observations, initial = _inputs(case)
-    return fit_independent_focals(
-        calibrations, observations, initial, anchor_id=request["anchor_id"],
-        pick_sigma_px=case["pick_sigma_px"],
+    arguments = dict(
+        anchor_id=request["anchor_id"], pick_sigma_px=case["pick_sigma_px"],
         line_observations=[sync.SyncLineObservation(**item)
                            for item in request["line_observations"]],
         plane_groups=request["plane_groups"], plane_slack=request["plane_slack"],
         parallel_pairs=request["parallel_pairs"],
-        mirror_pairs=request.get("mirror_pairs"), mirror_plane=request.get("mirror_plane"))
+        derived_lines=request.get("derived_lines"),
+        mirror_pairs=request.get("mirror_pairs"), mirror_plane=request.get("mirror_plane"),
+        diagnostic_callback=diagnostic_callback)
+    arguments.update(overrides)
+    return fit_independent_focals(calibrations, observations, initial, **arguments)
 
 
 class FocalLineConstraintIntegrationTests(TestCase):
+    def test_derived_world_direction_restores_feasibility_after_ordinary_endpoint(self):
+        case = focal_line_constraints.generate(
+            axis_parallel=True, derived_axis_parallel=True,
+            derived_axis_observed_offset_y=.10)
+        case["pick_sigma_px"] = 5.0
+        for observation in case["request"]["observations"]:
+            if observation["landmark_id"] == "axis_derived_second":
+                observation["weight"] = 20.0
+        _calibrations, _observations, initial = _inputs(case)
+        fixed_frame = {key: value for key, value in initial.similarities.items()}
+        with mock.patch.object(focal_bundle.LineFocalConstraints,
+                               "has_derived_fixed_direction",
+                               new_callable=PropertyMock, return_value=False):
+            refused = _fit(case, fixed_similarities=fixed_frame, fixed_focals=True)
+        self.assertFalse(refused.accepted)
+        self.assertIn("directions violate", refused.reason)
+        restored = _fit(case, fixed_similarities=fixed_frame, fixed_focals=True)
+        self.assertTrue(restored.accepted, restored.reason)
+        first, second = np.asarray(restored.sync_result.line_segments["axis_edge"])
+        direction = (second - first) / np.linalg.norm(second - first)
+        self.assertLess(np.linalg.norm(np.cross(direction, [0., 0., 1.])), .01)
+        support = np.asarray([restored.sync_result.landmarks[f"axis_{index}"]
+                              for index in range(4)])
+        support_x = np.mean(support[:, 0])
+        self.assertLess(max(abs(first[0] - support_x),
+                            abs(second[0] - support_x)), 1.e-5)
+
     def test_tilted_anchor_recovers_line_planes_and_world_parallel_direction(self):
         from tools.synthetic_sync.focal_orientation import rotation
 

@@ -19,7 +19,9 @@ from .derived_lines import (MIN_DERIVED_LINE_SPAN, derived_line_geometry,
                             validate_derived_lines)
 from .focal_constraints import PointFocalConstraints
 from .focal_lines import LineChart, canonical_line_point, endpoint_distances
-from .focal_line_constraints import LineFocalConstraints, LINE_RELATION_DIRECTION_HARD_SINE
+from .focal_line_constraints import (DERIVED_FIXED_DIRECTION_FEASIBILITY_MULTIPLIER,
+                                     LineFocalConstraints,
+                                     LINE_RELATION_DIRECTION_HARD_SINE)
 from .focal_optimizer import bounded_lm_step
 from .focal_orientation import orientation_basis, overall_rotation
 from .focal_point_priors import PointReferenceConstraints
@@ -1363,6 +1365,30 @@ def fit_independent_focals(
         relative_gains = []
         sweep_start_cost = None
         iteration_limit = MAX_ITERATIONS * (len(main_blocks) if block_mode else 1)
+        direction_feasibility_attempted = False
+
+        def restore_derived_fixed_direction():
+            """Spend remaining fit budget enforcing a failed fixed derived direction."""
+            nonlocal converged, damping, direction_feasibility_attempted, stop_reason
+            if (direction_feasibility_attempted or
+                    not line_constraints.has_derived_fixed_direction):
+                return False
+            current_points = decode(x)[3]
+            _constrained_points, constrained_geometry = prior_geometry(
+                x, current_points, line_geometry(x, current_points))
+            direction_gap = line_constraints.derived_fixed_direction_gap(
+                constrained_geometry)
+            if direction_gap <= LINE_RELATION_DIRECTION_HARD_SINE:
+                return False
+            direction_feasibility_attempted = True
+            line_constraints.direction_feasibility_scale = (
+                DERIVED_FIXED_DIRECTION_FEASIBILITY_MULTIPLIER)
+            damping = 1.0e-3
+            converged = False
+            stop_reason = "direction_feasibility"
+            relative_gains.clear()
+            return True
+
         for iteration in range(iteration_limit):
             if cancel_check and cancel_check():
                 return refuse("Cancelled")
@@ -1371,6 +1397,8 @@ def fit_independent_focals(
                 break
             if progress_callback:
                 progress_callback(iteration, iteration_limit,
+                                  "Enforcing line direction constraints"
+                                  if line_constraints.direction_feasibility_scale > 1.0 else
                                   "Estimating focal from landmarks" if line_ids else
                                   "Estimating focal from points")
             residual, jac, _ = residual_and_jacobian(x, jacobian=True)
@@ -1389,6 +1417,8 @@ def fit_independent_focals(
             if np.linalg.norm(gradient, ord=np.inf) < 1.0e-7:
                 if block_mode:
                     iterations = iteration + 1
+                    continue
+                if restore_derived_fixed_direction():
                     continue
                 converged = True
                 iterations = iteration
@@ -1437,11 +1467,15 @@ def fit_independent_focals(
                     current, _, _ = residual_and_jacobian(x, jacobian=False)
                     sweep_gain = (sweep_start_cost - float(current @ current)) / max(sweep_start_cost, 1.0)
                     if sweep_gain < RELATIVE_COST_TOLERANCE:
+                        if restore_derived_fixed_direction():
+                            continue
                         converged = True
                         stop_reason = "small_improvement"
                         break
                 continue
             if converged or not accepted_step:
+                if restore_derived_fixed_direction():
+                    continue
                 converged = converged or not accepted_step and np.linalg.norm(gradient, ord=np.inf) < 1.0e-5
                 if not accepted_step:
                     stop_reason = "small_gradient" if converged else "no_improving_step"
@@ -1503,6 +1537,13 @@ def fit_independent_focals(
                         break
         fit_weights = weights
         fit_line_weights = line_weights
+        feasibility_scale_used = line_constraints.direction_feasibility_scale
+        feasibility_residual = (residual_and_jacobian(x, jacobian=False)[0]
+                                if feasibility_scale_used > 1.0 else None)
+        # Feasibility continuation only steers the remaining optimizer steps.
+        # Every reported objective, candidate, noise and uncertainty check uses
+        # the ordinary frozen evidence weights.
+        line_constraints.direction_feasibility_scale = 1.0
         endpoint_residual, _, endpoint_depths = residual_and_jacobian(x, jacobian=False)
         point_raw = endpoint_residual[:point_rows].reshape(-1, 2) / weights[:, None]
         endpoint_measurements = (point_raw if len(point_raw) else
@@ -1528,7 +1569,11 @@ def fit_independent_focals(
                 "relative_cost_tolerance": RELATIVE_COST_TOLERANCE,
                 "initial_objective": float(initial_residual @ initial_residual),
                 "final_objective": float(endpoint_residual @ endpoint_residual),
+                "direction_feasibility_private_objective": (
+                    float(feasibility_residual @ feasibility_residual)
+                    if feasibility_residual is not None else None),
                 "recent_relative_improvements": relative_gains[-10:],
+                "direction_feasibility_scale": feasibility_scale_used,
                 "orientation_parameters": len(rotation_basis),
                 "world_rotation": (world_from_internal @ anchor_r).tolist(),
                 "focal_bound_hits": {

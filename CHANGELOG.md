@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Landmark-reference selectors can be filtered by typing a name in Blender's native search popup.
+- Landmark constraint fields use the full sidebar width, and From Points endpoints appear on separate rows.
 - Landmark selection dropdowns list landmarks in alphabetical order.
 - Solve Sync and independent Refine Lenses use a common final point, line and constraint fit, with Solve keeping focal lengths fixed.
 - Solve Sync and Refine Lenses save reports automatically; Open Last Report replaces the everyday Diagnose workflow.
@@ -34,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Point-based FOV refinement supports Is in Plane and point mirror pairs with a supplied Mirror Empty.
 
 ### Fixed
+- Refine Lenses now uses its remaining fit budget to restore hard world-axis or Known 3D line directions for From Points lines before refusing the result.
 - Mirrored-line scoring no longer changes when a different portion of the same infinite line is displayed.
 - Solve Sync retains valid stored camera rotations after Blender rounds their values and can recover when a saved solution needs registration again.
 - Repeated solves preserve outlier weights when picks and constraints are unchanged.

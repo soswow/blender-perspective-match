@@ -642,6 +642,9 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
 
         landmark = scene.active_landmark(context)
         if landmark is not None:
+            # Keep landmark controls on the full sidebar width. The inherited
+            # property split leaves a wide empty gutter before each field.
+            sync_body.use_property_split = False
             from_points = (
                 landmark.kind == "LINE"
                 and str(getattr(landmark, "line_source", "DRAWN")) == "FROM_POINTS"
@@ -909,10 +912,13 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             text="%",
         )
         if not workspace.share_lens:
-            point_opts = sync_body.column(align=True)
+            point_opts = sync_body.row(align=True)
+            point_opts.use_property_split = False
             point_opts.prop(workspace, "estimate_focal_from_points")
             if workspace.estimate_focal_from_points:
-                point_opts.prop(workspace, "focal_pick_sigma_px")
+                point_opts.prop(
+                    workspace, "focal_pick_sigma_px", text="Assumed Pick Error (px)"
+                )
         refine_row = sync_body.row(align=True)
         if operators.lens_refine_is_running():
             opts_row.enabled = False

@@ -11,7 +11,8 @@ from .geometry import project
 
 
 def generate(*, inconsistent: str | None = None, relations: bool = True,
-             axis_parallel: bool = False) -> dict:
+             axis_parallel: bool = False, derived_axis_parallel: bool = False,
+             derived_axis_observed_offset_y: float = 0.0) -> dict:
     """Build point-supported planes and parallel free lines from withheld 3D truth."""
     case = deepcopy(focal_constraints.generate("free-hard-exact"))
     request, truth = case["request"], case["truth"]
@@ -39,6 +40,26 @@ def generate(*, inconsistent: str | None = None, relations: bool = True,
     truth["lines"] = lines
     truth["line_oracle_pixels"] = {}
     request["lines"] = [dict(id=key, known=None) for key in lines]
+    if derived_axis_parallel:
+        first_id, second_id = "axis_derived_first", "axis_derived_second"
+        request["derived_lines"] = [["axis_edge", first_id, second_id]]
+        for point_id, point in zip((first_id, second_id), lines["axis_edge"]):
+            truth["points"][point_id] = list(point)
+            request["points"].append(dict(id=point_id, ground=False, known=None))
+            truth["oracle_pixels"][point_id] = {}
+            for camera in truth["cameras"]:
+                uv, depth = project([point], camera)
+                assert depth[0] > 0
+                truth["oracle_pixels"][point_id][camera["id"]] = uv[0].tolist()
+                observed_point = np.asarray(point, float).copy()
+                if point_id == second_id:
+                    observed_point[1] += derived_axis_observed_offset_y
+                observed, observed_depth = project([observed_point], camera)
+                assert observed_depth[0] > 0
+                request["observations"].append(dict(
+                    match_id=camera["id"], landmark_id=point_id,
+                    u=float(observed[0, 0]), v=float(observed[0, 1]), weight=1.0))
+            request["plane_groups"].append([point_id, "X", 2])
     for key, ends in lines.items():
         a, b = np.asarray(ends, float)
         truth["line_oracle_pixels"][key] = {}
@@ -55,10 +76,11 @@ def generate(*, inconsistent: str | None = None, relations: bool = True,
             if inconsistent == "plane" and key == "axis_edge" and index == 2:
                 direction = uv[1] - uv[0]
                 uv += 65 * np.array([-direction[1], direction[0]]) / np.linalg.norm(direction)
-            request["line_observations"].append(dict(
-                match_id=camera["id"], landmark_id=key,
-                u1=float(uv[0, 0]), v1=float(uv[0, 1]),
-                u2=float(uv[1, 0]), v2=float(uv[1, 1]), weight=1.0))
+            if not (derived_axis_parallel and key == "axis_edge"):
+                request["line_observations"].append(dict(
+                    match_id=camera["id"], landmark_id=key,
+                    u1=float(uv[0, 0]), v1=float(uv[0, 1]),
+                    u2=float(uv[1, 0]), v2=float(uv[1, 1]), weight=1.0))
     if relations:
         request["plane_groups"] += [["axis_edge", "X", 2],
                                      ["free_edge_a", "FREE", 1],

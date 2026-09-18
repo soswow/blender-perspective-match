@@ -78,6 +78,57 @@ class FocalLineConstraintTests(TestCase):
             changed[endpoint][0] += .2
             self.assertGreater(np.linalg.norm(residual(changed)), 1.)
 
+    def test_derived_world_direction_can_enter_feasibility_continuation(self):
+        points = {"a": np.array((0., 0., 0.)), "b": np.array((.1, 0., 2.))}
+        model = LineFocalConstraints.from_inputs_with_derived(
+            list(points), ["edge"], plane_groups=[],
+            parallel_pairs=[("edge", "WORLD_AXIS_Z")], anchor_rotation=np.eye(3),
+            plane_spring=100., baseline_world=1., hard_plane=True,
+            derived_lines=[("edge", "a", "b")])
+        _, geometry = derived_line_geometry(points, [("edge", "a", "b")])
+        values = np.asarray(list(points.values()))
+        ordinary = np.linalg.norm(model.residual(values, [geometry["edge"]]))
+        self.assertTrue(model.has_derived_fixed_direction)
+        model.direction_feasibility_scale = 10.
+        self.assertAlmostEqual(np.linalg.norm(model.residual(values, [geometry["edge"]])),
+                               ordinary * 10.)
+
+    def test_derived_fixed_direction_gap_ignores_other_line_relations(self):
+        model = LineFocalConstraints.from_inputs_with_derived(
+            ["a", "b"], ["edge", "other"], plane_groups=[],
+            parallel_pairs=[("edge", "WORLD_AXIS_Z"), ("other", "WORLD_AXIS_Z")],
+            anchor_rotation=np.eye(3), plane_spring=100., baseline_world=1.,
+            hard_plane=True, derived_lines=[("edge", "a", "b")])
+        geometry = [(np.zeros(3), np.array((0., 0., 1.))),
+                    (np.zeros(3), np.array((1., 0., 0.)))]
+        self.assertEqual(model.derived_fixed_direction_gap(geometry), 0.)
+
+    def test_derived_known_line_target_is_fixed_but_drawn_target_is_not(self):
+        derived = LineFocalConstraints.from_inputs_with_derived(
+            ["a", "b"], ["edge", "known"], plane_groups=[],
+            parallel_pairs=[("edge", "known")], anchor_rotation=np.eye(3),
+            plane_spring=100., baseline_world=1., hard_plane=True,
+            known_line_ids={"known"}, known_line_positions={"known": np.zeros(3)},
+            derived_lines=[("edge", "a", "b")])
+        drawn = LineFocalConstraints.from_inputs_with_derived(
+            ["a", "b"], ["edge", "drawn"], plane_groups=[],
+            parallel_pairs=[("edge", "drawn")], anchor_rotation=np.eye(3),
+            plane_spring=100., baseline_world=1., hard_plane=True,
+            derived_lines=[("edge", "a", "b")])
+        self.assertTrue(derived.has_derived_fixed_direction)
+        self.assertFalse(drawn.has_derived_fixed_direction)
+        geometry = [(np.zeros(3), np.array((.1, 0., 1.))),
+                    (np.zeros(3), np.array((0., 0., 1.)))]
+        values = np.asarray(((0., 0., 0.), (0., 0., 2.)))
+        ordinary = np.linalg.norm(derived.residual(values, geometry))
+        derived.direction_feasibility_scale = 10.
+        self.assertAlmostEqual(np.linalg.norm(derived.residual(values, geometry)),
+                               ordinary * 10.)
+        drawn_ordinary = np.linalg.norm(drawn.residual(values, geometry))
+        drawn.direction_feasibility_scale = 10.
+        self.assertAlmostEqual(np.linalg.norm(drawn.residual(values, geometry)),
+                               drawn_ordinary)
+
     def test_derived_free_plane_does_not_project_line_away_from_endpoints(self):
         points = {"a": np.array((.2, .3, 1.)), "b": np.array((.8, .3, 1.)),
                   "s0": np.array((0., 0., 1.)), "s1": np.array((1., 0., 1.)),

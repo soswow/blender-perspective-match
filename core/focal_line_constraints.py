@@ -11,6 +11,9 @@ from .sync.constants import WORLD_AXIS_DIRECTIONS
 LINE_RELATION_DIRECTION_RESIDUAL_PX = 200.0
 LINE_RELATION_DIRECTION_HARD_SINE = 0.01
 LINE_HARD_PLANE_MIN_TANGENT = 1.0e-8
+# One remaining-budget feasibility pass raises only fixed targets attached to
+# From Points lines after their ordinary endpoint fails the hard direction gate.
+DERIVED_FIXED_DIRECTION_FEASIBILITY_MULTIPLIER = 10.0
 
 
 def validate_line_relations(point_ids, line_ids, plane_groups, parallel_pairs, *,
@@ -65,6 +68,7 @@ class LineFocalConstraints:
     baseline_world: float
     hard_plane: bool
     derived_endpoints: dict[int, tuple[int, int]]
+    direction_feasibility_scale: float = 1.0
 
     @classmethod
     def from_inputs(cls, point_ids, line_ids, *, plane_groups, parallel_pairs,
@@ -114,6 +118,29 @@ class LineFocalConstraints:
     @property
     def active(self):
         return bool(self.groups or self.pairs)
+
+    @property
+    def has_derived_fixed_direction(self):
+        """Whether a derived line has a world-constant parallel target."""
+        return any(self._is_derived_fixed_direction(left, right)
+                   for left, right in self.pairs)
+
+    def _is_derived_fixed_direction(self, left, right):
+        if isinstance(right, np.ndarray):
+            return left in self.derived_endpoints
+        return ((left in self.derived_endpoints and right in self.support_line_points) or
+                (right in self.derived_endpoints and left in self.support_line_points))
+
+    def derived_fixed_direction_gap(self, geometry):
+        """Return the worst fixed target direction sine for derived lines only."""
+        gap = 0.0
+        for left, right in self.pairs:
+            if not self._is_derived_fixed_direction(left, right):
+                continue
+            other_direction = geometry[right][1] if isinstance(right, int) else right
+            gap = max(gap, float(np.linalg.norm(
+                np.cross(geometry[left][1], other_direction))))
+        return gap
 
     @property
     def point_indices(self):
@@ -172,7 +199,9 @@ class LineFocalConstraints:
                 rows.extend(LINE_RELATION_DIRECTION_RESIDUAL_PX * normal * (normal @ direction))
         for left, right in self.pairs:
             other_direction = geometry[right][1] if isinstance(right, int) else right
-            rows.extend(LINE_RELATION_DIRECTION_RESIDUAL_PX *
+            scale = (self.direction_feasibility_scale
+                     if self._is_derived_fixed_direction(left, right) else 1.0)
+            rows.extend(scale * LINE_RELATION_DIRECTION_RESIDUAL_PX *
                         np.cross(geometry[left][1], other_direction))
         return np.asarray(rows, float)
 
