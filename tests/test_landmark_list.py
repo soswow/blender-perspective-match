@@ -314,6 +314,58 @@ class LandmarkListTests(unittest.TestCase):
             ),
         )
 
+    def test_search_reference_routes_stable_ids_to_existing_fields(self) -> None:
+        workspace = SimpleNamespace(mirror_landmark_id="plane-point")
+        landmark = SimpleNamespace(
+            item_id="line",
+            line_point_a_id="point-a",
+            line_point_b_id="point-b",
+            parallel_to="WORLD_AXIS_X",
+            mirror_of_id="mirror-line",
+        )
+        expected = {
+            "LINE_POINT_A": "point-a",
+            "LINE_POINT_B": "point-b",
+            "PARALLEL_TO": "WORLD_AXIS_X",
+            "MIRROR_OF": "mirror-line",
+            "MIRROR_LANDMARK": "plane-point",
+        }
+        for target, value in expected.items():
+            self.assertEqual(
+                landmark_list.landmark_reference_value(target, workspace, landmark),
+                value,
+            )
+            landmark_list.set_landmark_reference(
+                target, workspace, landmark, f"new-{target.lower()}",
+            )
+            self.assertEqual(
+                landmark_list.landmark_reference_value(target, workspace, landmark),
+                f"new-{target.lower()}",
+            )
+
+    def test_search_reference_label_preserves_special_and_missing_entries(self) -> None:
+        items = (
+            ("NONE", "None", "No selection"),
+            ("WORLD_AXIS_X", "X Axis", "World X"),
+            ("point-id", "Point Name", "Point"),
+        )
+        self.assertEqual(landmark_list.enum_item_label(items, "NONE"), "None")
+        self.assertEqual(
+            landmark_list.enum_item_label(items, "WORLD_AXIS_X"), "X Axis",
+        )
+        self.assertEqual(
+            landmark_list.enum_item_label(items, "missing-point-id"),
+            "Missing (missing-)",
+        )
+
+    def test_search_reference_resolves_target_by_uuid_not_active_index(self) -> None:
+        first = SimpleNamespace(item_id="first")
+        second = SimpleNamespace(item_id="second")
+        self.assertIs(
+            landmark_list.landmark_by_id((first, second), "second"), second,
+        )
+        self.assertIsNone(landmark_list.landmark_by_id((first, second), "absent"))
+
 
 if __name__ == "__main__":
     unittest.main()

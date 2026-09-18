@@ -603,6 +603,24 @@ def _mirror_landmark_items(self, context):
     return packed
 
 
+def landmark_reference_items(target: str, context, landmark=None) -> tuple:
+    """Native search choices for a landmark-reference selector."""
+    from ..ui import landmark_list
+
+    if target in {"LINE_POINT_A", "LINE_POINT_B"}:
+        return _LINE_POINT_NONE if landmark is None else _line_point_items(landmark, context)
+    if target == "PARALLEL_TO":
+        return _PARALLEL_TO_STATIC if landmark is None else _parallel_to_items(landmark, context)
+    if target == "MIRROR_OF":
+        return _MIRROR_OF_NONE if landmark is None else _mirror_of_items(landmark, context)
+    if target == "MIRROR_LANDMARK":
+        if context is None:
+            return (("NONE", "Choose landmark", "Point on the symmetry plane", 0, 0),)
+        return _mirror_landmark_items(workspace(context), context)
+    valid = ", ".join(item[0] for item in landmark_list.LANDMARK_REFERENCE_TARGET_ITEMS)
+    raise ValueError(f"Unknown landmark reference target {target!r}; expected {valid}")
+
+
 def _get_mirror_landmark(self):
     return next((item[-1] for item in _mirror_landmark_items(self, bpy.context)
                  if item[0] == self.mirror_landmark_id), 0)

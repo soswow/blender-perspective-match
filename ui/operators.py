@@ -23,7 +23,7 @@ from ..detect import opencv as opencv_support
 from ..detect import tag_snap
 from ..detect import vp_lines as vp_line_detect
 from ..scene import distortion
-from . import match_history, overlay, overlay_hit, sync_report
+from . import landmark_list, match_history, overlay, overlay_hit, sync_report
 from .landmark_names import suggested_duplicate_landmark_name
 from .npanel import PERSPECTIVE_MATCH_CATEGORY
 
@@ -34,6 +34,15 @@ def _session(context: bpy.types.Context):
 
 def _workspace(context: bpy.types.Context):
     return properties.workspace(context)
+
+
+def _landmark_reference_search_items(self, context):
+    """Reuse the persisted fields' filtered choices in Blender's search popup."""
+    if context is None:
+        return properties.landmark_reference_items(self.target, None)
+    space = _workspace(context)
+    landmark = landmark_list.landmark_by_id(space.landmarks, self.landmark_id)
+    return properties.landmark_reference_items(self.target, context, landmark)
 
 
 def _write_sync_report(
@@ -3284,6 +3293,69 @@ class PM_OT_add_landmarks_from_selected(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class PM_OT_search_landmark_reference(bpy.types.Operator):
+    """Choose a landmark reference with Blender's native type-to-filter popup."""
+
+    bl_idname = "perspective_match.search_landmark_reference"
+    bl_label = "Search Landmark Reference"
+    bl_description = "Search eligible landmarks by name"
+    bl_options = {"INTERNAL", "UNDO"}
+    bl_property = "selection"
+
+    target: bpy.props.EnumProperty(
+        name="Reference Field",
+        items=landmark_list.LANDMARK_REFERENCE_TARGET_ITEMS,
+        options={"HIDDEN"},
+    )
+    landmark_id: bpy.props.StringProperty(options={"HIDDEN"})
+    selection: bpy.props.EnumProperty(
+        name="Landmark",
+        description="Type to filter eligible landmarks",
+        items=_landmark_reference_search_items,
+    )
+
+    def _owner(self, context: bpy.types.Context):
+        space = _workspace(context)
+        landmark = landmark_list.landmark_by_id(space.landmarks, self.landmark_id)
+        if self.target != "MIRROR_LANDMARK" and landmark is None:
+            return space, None
+        return space, landmark
+
+    def invoke(self, context: bpy.types.Context, _event) -> set[str]:
+        space, landmark = self._owner(context)
+        if self.target != "MIRROR_LANDMARK" and landmark is None:
+            self.report({"WARNING"}, "The landmark is no longer available")
+            return {"CANCELLED"}
+        current = landmark_list.landmark_reference_value(
+            self.target, space, landmark,
+        )
+        choices = properties.landmark_reference_items(
+            self.target, context, landmark,
+        )
+        if current in {item[0] for item in choices if item is not None}:
+            self.selection = current
+        context.window_manager.invoke_search_popup(self)
+        return {"RUNNING_MODAL"}
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        space, landmark = self._owner(context)
+        if self.target != "MIRROR_LANDMARK" and landmark is None:
+            self.report({"WARNING"}, "The landmark is no longer available")
+            return {"CANCELLED"}
+        choices = properties.landmark_reference_items(
+            self.target, context, landmark,
+        )
+        allowed = {item[0] for item in choices if item is not None}
+        if self.selection not in allowed:
+            self.report({"WARNING"}, "That landmark is no longer eligible")
+            return {"CANCELLED"}
+        landmark_list.set_landmark_reference(
+            self.target, space, landmark, self.selection,
+        )
+        properties.tag_sync_ui_redraw(context)
+        return {"FINISHED"}
+
+
 class PM_OT_landmark_use_selected(bpy.types.Operator):
     """Assign the active object as Known 3D for the active landmark."""
 
@@ -4781,6 +4853,7 @@ CLASSES = (
     PM_OT_reset_view_lighting,
     PM_OT_add_landmark,
     PM_OT_add_landmarks_from_selected,
+    PM_OT_search_landmark_reference,
     PM_OT_landmark_use_selected,
     PM_OT_landmark_clear_known,
     PM_OT_use_selected_mirror,

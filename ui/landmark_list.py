@@ -9,6 +9,60 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
+LANDMARK_REFERENCE_TARGET_ITEMS = (
+    ("LINE_POINT_A", "Point A", "First point landmark defining this line"),
+    ("LINE_POINT_B", "Point B", "Second point landmark defining this line"),
+    ("PARALLEL_TO", "Is Parallel To", "Line or world axis sharing this direction"),
+    ("MIRROR_OF", "Is Mirror Of", "Landmark reflected across the mirror plane"),
+    ("MIRROR_LANDMARK", "On-plane Point", "Point defining the mirror plane position"),
+)
+
+
+_LANDMARK_REFERENCE_ATTRS = {
+    "LINE_POINT_A": ("LANDMARK", "line_point_a_id"),
+    "LINE_POINT_B": ("LANDMARK", "line_point_b_id"),
+    "PARALLEL_TO": ("LANDMARK", "parallel_to"),
+    "MIRROR_OF": ("LANDMARK", "mirror_of_id"),
+    "MIRROR_LANDMARK": ("WORKSPACE", "mirror_landmark_id"),
+}
+
+
+def landmark_by_id(landmarks, item_id: str):
+    """Find a landmark without depending on the active-list selection."""
+    return next(
+        (item for item in landmarks if str(getattr(item, "item_id", "")) == item_id),
+        None,
+    )
+
+
+def landmark_reference_value(target: str, workspace, landmark=None) -> str:
+    """Read the stable identifier behind one searchable reference field."""
+    owner_kind, attribute = _LANDMARK_REFERENCE_ATTRS[target]
+    owner = workspace if owner_kind == "WORKSPACE" else landmark
+    if owner is None:
+        return "NONE"
+    return str(getattr(owner, attribute, "NONE") or "NONE")
+
+
+def set_landmark_reference(target: str, workspace, landmark, value: str) -> None:
+    """Write one searched identifier through its existing RNA update path."""
+    owner_kind, attribute = _LANDMARK_REFERENCE_ATTRS[target]
+    owner = workspace if owner_kind == "WORKSPACE" else landmark
+    if owner is None:
+        raise ValueError("Landmark reference target is no longer available")
+    setattr(owner, attribute, str(value or "NONE"))
+
+
+def enum_item_label(items, identifier: str) -> str:
+    """Displayed enum label, with a useful fallback for a stale identifier."""
+    for item in items:
+        if item is not None and item[0] == identifier:
+            return item[1]
+    if identifier not in {"", "NONE"}:
+        return f"Missing ({identifier[:8]})"
+    return "None"
+
+
 @dataclass(frozen=True)
 class LandmarkRowMeta:
     """Display facts for one CollectionProperty index."""

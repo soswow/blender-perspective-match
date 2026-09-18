@@ -884,6 +884,66 @@ def main() -> None:
                 observation_b.is_set = True
             space.active_landmark_index = 0
 
+            # Landmark-reference controls use one native Enum search operator.
+            # Its UUID target must be independent of the active landmark index.
+            derived_line = space.landmarks.add()
+            derived_line.item_id = "smoke-derived-line"
+            derived_line.name = "Derived Line"
+            derived_line.kind = "LINE"
+            derived_line.line_source = "FROM_POINTS"
+            derived_line.use_in_sync = False
+            direction_line = space.landmarks.add()
+            direction_line.item_id = "smoke-direction-line"
+            direction_line.name = "Direction Line"
+            direction_line.kind = "LINE"
+            direction_line.use_in_sync = False
+            properties.bump_sync_ui_cache()
+            assert (
+                ui_operators.PM_OT_search_landmark_reference.bl_property
+                == "selection"
+            )
+            for target, selection in (
+                ("LINE_POINT_A", "smoke-g0"),
+                ("LINE_POINT_B", "smoke-g1"),
+                ("PARALLEL_TO", "smoke-direction-line"),
+            ):
+                outcome = bpy.ops.perspective_match.search_landmark_reference(
+                    target=target,
+                    landmark_id=derived_line.item_id,
+                    selection=selection,
+                )
+                assert outcome == {"FINISHED"}, (target, outcome)
+            assert derived_line.line_point_a_id == "smoke-g0"
+            assert derived_line.line_point_b_id == "smoke-g1"
+            assert derived_line.parallel_to == "smoke-direction-line"
+            outcome = bpy.ops.perspective_match.search_landmark_reference(
+                target="MIRROR_OF",
+                landmark_id="smoke-g0",
+                selection="smoke-g1",
+            )
+            assert outcome == {"FINISHED"}
+            assert space.landmarks[0].mirror_of_id == "smoke-g1"
+            assert space.landmarks[1].mirror_of_id == "smoke-g0"
+            outcome = bpy.ops.perspective_match.search_landmark_reference(
+                target="MIRROR_OF", landmark_id="smoke-g0", selection="NONE",
+            )
+            assert outcome == {"FINISHED"}
+            assert space.landmarks[0].mirror_of_id == "NONE"
+            assert space.landmarks[1].mirror_of_id == "NONE"
+            outcome = bpy.ops.perspective_match.search_landmark_reference(
+                target="MIRROR_LANDMARK", selection="smoke-g2",
+            )
+            assert outcome == {"FINISHED"}
+            assert space.mirror_landmark_id == "smoke-g2"
+            outcome = bpy.ops.perspective_match.search_landmark_reference(
+                target="MIRROR_LANDMARK", selection="NONE",
+            )
+            assert outcome == {"FINISHED"}
+            assert space.mirror_landmark_id == "NONE"
+            space.landmarks.remove(len(space.landmarks) - 1)
+            space.landmarks.remove(len(space.landmarks) - 1)
+            properties.bump_sync_ui_cache()
+
             result = scene.solve_and_apply_sync(bpy.context)
             assert result.success, result.message
             helper = bpy.data.objects.get("PM_LM_g0")

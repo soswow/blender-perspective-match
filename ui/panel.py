@@ -156,6 +156,22 @@ def _mode_tool_active(workspace, mode: str) -> bool:
     return bool(workspace.is_modal and workspace.work_mode == mode)
 
 
+def _landmark_reference_search(layout, context, workspace, *, label, target,
+                               landmark=None) -> None:
+    """Draw a property-like button backed by Blender's native enum search."""
+    items = properties.landmark_reference_items(target, context, landmark)
+    selected = landmark_list.landmark_reference_value(target, workspace, landmark)
+    split = layout.split(factor=0.4, align=True)
+    split.label(text=label)
+    operator = split.operator(
+        "perspective_match.search_landmark_reference",
+        text=landmark_list.enum_item_label(items, selected),
+        icon="VIEWZOOM",
+    )
+    operator.target = target
+    operator.landmark_id = "" if landmark is None else landmark.item_id
+
+
 class VIEW3D_PT_perspective_match(bpy.types.Panel):
     """Perspective Match sidebar panel."""
 
@@ -650,15 +666,26 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             if landmark.kind == "LINE":
                 sync_body.prop(landmark, "line_source", text="Source")
                 if from_points:
-                    endpoints = sync_body.row(align=True)
-                    endpoints.prop(landmark, "line_point_a", text="Point A")
-                    endpoints.prop(landmark, "line_point_b", text="Point B")
+                    _landmark_reference_search(
+                        sync_body.row(align=True), context, workspace,
+                        label="Point A", target="LINE_POINT_A", landmark=landmark,
+                    )
+                    _landmark_reference_search(
+                        sync_body.row(align=True), context, workspace,
+                        label="Point B", target="LINE_POINT_B", landmark=landmark,
+                    )
                 else:
                     sync_body.prop(landmark, "known_object_b", text="Known 3D B")
-                sync_body.prop(landmark, "parallel_to", text="Is Parallel To")
+                _landmark_reference_search(
+                    sync_body.row(align=True), context, workspace,
+                    label="Is Parallel To", target="PARALLEL_TO", landmark=landmark,
+                )
             if landmark.kind in {"POINT", "LINE"} and not from_points:
                 mirror_of_row = sync_body.row(align=True)
-                mirror_of_row.prop(landmark, "mirror_of", text="Is Mirror Of")
+                _landmark_reference_search(
+                    mirror_of_row, context, workspace,
+                    label="Is Mirror Of", target="MIRROR_OF", landmark=landmark,
+                )
                 mirror_of_row.operator(
                     "perspective_match.guess_mirror_partner",
                     text="",
@@ -847,7 +874,10 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
         if live_mirror:
             landmark_row = sync_body.row(align=True)
             landmark_row.use_property_split = False
-            landmark_row.prop(workspace, "mirror_landmark", text="On-plane Point")
+            _landmark_reference_search(
+                landmark_row, context, workspace,
+                label="On-plane Point", target="MIRROR_LANDMARK",
+            )
         mirror_row = sync_body.row(align=True)
         mirror_row.use_property_split = False
         mirror_row.prop(workspace, "mirror_object",

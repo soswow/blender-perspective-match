@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Landmark-reference selectors can be filtered by typing a name in Blender's native search popup.
 - Landmark selection dropdowns list landmarks in alphabetical order.
 - Solve Sync and independent Refine Lenses use a common final point, line and constraint fit, with Solve keeping focal lengths fixed.
 - Solve Sync and Refine Lenses save reports automatically; Open Last Report replaces the everyday Diagnose workflow.
