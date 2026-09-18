@@ -1742,6 +1742,16 @@ class PMWorkspace(bpy.types.PropertyGroup):
         default=False,
         update=_redraw,
     )
+    refine_lens_distortion: bpy.props.BoolProperty(
+        name="Refine Distortion",
+        description=(
+            "After an accepted landmark FOV fit, optionally refine one bounded "
+            "division-model radial distortion value per still while keeping "
+            "FOV, camera poses, and 3D geometry fixed. Requires broad point coverage"
+        ),
+        default=False,
+        update=_redraw,
+    )
     point_focal_span_percent: bpy.props.FloatProperty(
         name="Lens Search %",
         description=(

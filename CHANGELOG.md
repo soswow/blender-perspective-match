@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Estimate FOV from Points supports up to 32 cameras in one joint fit; Assumed Pick Error explains its role in noise checks and FOV uncertainty.
 
 ### Added
+- Refine Lenses can optionally polish one-parameter radial distortion after an accepted independent landmark FOV fit, while preserving focal length, camera pose and 3D geometry unless broadly distributed validation picks support the correction.
 - Line landmarks can use two existing points, with dashed, non-editable segments and plane or parallel constraints that adjust their endpoints.
 - Independent FOV fitting supports Known 3D points and lines, Ground, camera roles and locks, and existing distortion and pixel-aspect calibration.
 - Use Best Fit can apply improved independent FOV results as provisional cameras and landmarks when calibration cannot be validated.

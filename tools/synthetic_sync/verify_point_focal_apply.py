@@ -55,11 +55,13 @@ def state(context):
 def check(out):
     from match_perspective import core, properties, scene
     from match_perspective.core import sync
+    from match_perspective.scene import distortion as distortion_module
     from match_perspective.ui import operators
 
     context = HeadlessContext()
     space = properties.workspace(context)
     assert "estimate_focal_from_points" in space.bl_rna.properties
+    assert "refine_lens_distortion" in space.bl_rna.properties
     assert "focal_pick_sigma_px" in space.bl_rna.properties
     assert "point_focal_span_percent" in space.bl_rna.properties
     space.share_lens = False
@@ -80,12 +82,20 @@ def check(out):
     scene._apply_camera_background(cached_root.pm_session)
     prep = scene.prepare_lens_refine(context)
     assert prep.estimate_focal_from_points and prep.pick_sigma_px == 1.25
+    assert not prep.estimate_distortion
     assert prep.fx_span == 0.4
     assert all(not item.freeze_focal and not item.reorient_from_vp
                for item in prep.lens_inputs)
     assert all(not root.pm_session.origin_is_set for root in properties.iter_match_roots())
     assert prep.solver_kwargs()["estimate_focal_from_points"] is True
+    assert prep.solver_kwargs()["estimate_distortion"] is False
     assert prep.solver_kwargs()["pick_sigma_px"] == 1.25
+    space.refine_lens_distortion = True
+    distortion_prep = scene.collect_lens_refine_inputs(context)
+    assert distortion_prep.estimate_distortion
+    assert distortion_prep.solver_kwargs()["estimate_distortion"] is True
+    assert distortion_prep.source_request_sha256 != prep.source_request_sha256
+    space.refine_lens_distortion = False
     space.share_lens = True
     shared_prep = scene.collect_lens_refine_inputs(context)
     assert not shared_prep.estimate_focal_from_points
@@ -100,6 +110,7 @@ def check(out):
     for index, (match_id, calibration) in enumerate(calibrations.items()):
         calibration.intrinsics.fx *= 1.08 + index * 0.02
         calibration.intrinsics.fy = calibration.intrinsics.fx
+        calibration.division_lambda = -0.05 - index * 0.01
         intervals[match_id] = (calibration.intrinsics.fx * 0.95,
                                calibration.intrinsics.fx * 1.05)
     anchor_id = prep.anchor_id
@@ -133,9 +144,10 @@ def check(out):
     )
 
     for edit in ("focal_pick_sigma_px", "estimate_focal_from_points",
+                 "refine_lens_distortion",
                  "point_focal_span_percent"):
         original = getattr(space, edit)
-        setattr(space, edit, False if edit == "estimate_focal_from_points"
+        setattr(space, edit, not original if isinstance(original, bool)
                 else original + 0.25)
         before = state(context)
         try:
@@ -187,12 +199,16 @@ def check(out):
     assert before == state(context), "Point apply failure did not restore snapshot"
 
     with patch.object(scene, "solve_and_apply_sync",
-                      side_effect=AssertionError("Point apply reran Sync")):
+                      side_effect=AssertionError("Point apply reran Sync")), \
+            patch.object(distortion_module, "rebuild_undistorted_plates") as rebuild:
         _, applied = scene.apply_lens_refine_result(context, result, prep)
+    rebuild.assert_called_once_with(context)
     assert applied is fitted_sync
     for root in properties.iter_match_roots():
         match_id = root.name
         assert abs(root.pm_session.fx - calibrations[match_id].intrinsics.fx) < 1e-4
+        assert abs(root.pm_session.division_lambda -
+                   calibrations[match_id].division_lambda) < 1e-6
         assert np.allclose(root.pm_session.sync_translation,
                            similarities[match_id].translation, atol=1e-5)
         expected = sync._metric_scale_similarity(

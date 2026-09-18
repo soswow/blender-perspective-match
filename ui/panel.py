@@ -919,11 +919,16 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
                 point_opts.prop(
                     workspace, "focal_pick_sigma_px", text="Assumed Pick Error (px)"
                 )
+                distortion_opts = sync_body.row(align=True)
+                distortion_opts.use_property_split = False
+                distortion_opts.prop(workspace, "refine_lens_distortion")
         refine_row = sync_body.row(align=True)
         if operators.lens_refine_is_running():
             opts_row.enabled = False
             if not workspace.share_lens:
                 point_opts.enabled = False
+                if workspace.estimate_focal_from_points:
+                    distortion_opts.enabled = False
             startup_label = operators.lens_refine_startup_label()
             if startup_label is not None:
                 refine_row.label(text=startup_label, icon="TIME")
@@ -945,6 +950,8 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
             opts_row.enabled = False
             if not workspace.share_lens:
                 point_opts.enabled = False
+                if workspace.estimate_focal_from_points:
+                    distortion_opts.enabled = False
             progress = refine_row.row(align=True)
             progress.enabled = False
             progress.prop(

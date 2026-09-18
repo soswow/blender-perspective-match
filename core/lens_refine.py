@@ -22,6 +22,7 @@ from .focal_bundle import (
 )
 from .joint_fit_score import JointFitScorer, joint_line_support_diagnostics
 from .focal_startup import provisional_poses
+from .distortion_refine import refine_division_distortion
 from .sync.request import SyncSolveRequest
 from .sync.constants import GROUND_SLACK_DEFAULT, KNOWN_3D_SLACK_DEFAULT
 
@@ -422,6 +423,7 @@ def refine_lenses_from_landmarks(
     lock_translation: bool = False,
     share_lens: bool = False,
     estimate_focal_from_points: bool = False,
+    estimate_distortion: bool = False,
     pick_sigma_px: float = 1.0,
     fixed_similarities: dict[str, sync_module.SimilarityTransform] | None = None,
     ground_slack: float | None = None,
@@ -681,7 +683,7 @@ def refine_lenses_from_landmarks(
                 # A zero-step status (including provisional startup) is
                 # activity, not completed numerical progress.
                 progress_callback(0 if step <= 0 else step + 1,
-                                  total + 1, label)
+                                  total + (2 if estimate_distortion else 1), label)
         outcome = fit_independent_focals(
             initial_cals, scorer.point_observations, initial, anchor_id=anchor_id,
             pick_sigma_px=pick_sigma_px, fx_span=fx_span,
@@ -717,6 +719,26 @@ def refine_lenses_from_landmarks(
         if (initial_score.valid and final_score.objective >= initial_score.objective):
             return refusal("Joint focal objective did not improve", initial=initial,
                            initial_rmse=initial_rmse, candidate=outcome.candidate)
+        distortion_ids: list[str] = []
+        distortion_checked = False
+        if estimate_distortion:
+            distortion_checked = True
+            if progress_callback:
+                progress_callback(101, 102, "Checking one-parameter lens distortion")
+            distortion = refine_division_distortion(
+                outcome.calibrations, scorer.point_observations, outcome.sync_result,
+                pick_sigma_px=pick_sigma_px, cancel_check=cancel_check)
+            if distortion.cancelled:
+                return refusal("Cancelled", initial=initial, initial_rmse=initial_rmse,
+                               cancelled=True, candidate=outcome.candidate)
+            if distortion.accepted_match_ids:
+                distortion_score = scorer.score(
+                    outcome.sync_result, calibrations=distortion.calibrations)
+                if (distortion_score.valid and
+                        distortion_score.objective < final_score.objective):
+                    outcome.calibrations = distortion.calibrations
+                    final_score = distortion_score
+                    distortion_ids = distortion.accepted_match_ids
         outcome.sync_result.joint_initial_objective = (
             initial_score.objective if initial_score.valid else None)
         outcome.sync_result.joint_final_objective = final_score.objective
@@ -744,7 +766,9 @@ def refine_lenses_from_landmarks(
             outcome.sync_result.message += (
                 " · weak 3D line support (" + ", ".join(weak[:3]) + ")")
         if progress_callback:
-            progress_callback(101, 101, "Point focal estimation complete")
+            progress_callback(102 if estimate_distortion else 101,
+                              102 if estimate_distortion else 101,
+                              "Point focal estimation complete")
         return LensRefineResult(
             calibrations=outcome.calibrations, sync_result=outcome.sync_result,
             initial_cost=(initial_score.objective if initial_score.valid else float("inf")),
@@ -758,7 +782,12 @@ def refine_lenses_from_landmarks(
             message=(f"Landmark focal fit · point RMSE {final_score.point_rmse_px:.2f}px"
                      if observations else
                      f"Landmark focal fit · line endpoint RMS {final_score.line_rmse_px:.2f}px") +
-                    f" · 95% intervals at σ={pick_sigma_px:g}px",
+                     (f" · focal-only 95% intervals at σ={pick_sigma_px:g}px"
+                      if distortion_ids else
+                      f" · 95% intervals at σ={pick_sigma_px:g}px") +
+                    ((" · distortion refined: " + ", ".join(sorted(distortion_ids)))
+                     if distortion_ids else
+                     (" · distortion unchanged" if distortion_checked else "")),
             improved=True, point_focal_mode=True,
             focal_intervals=outcome.intervals_px)
 

@@ -4437,6 +4437,7 @@ class LensRefinePrep:
     fixed_similarities: dict | None = None
     share_lens: bool = True
     estimate_focal_from_points: bool = False
+    estimate_distortion: bool = False
     pick_sigma_px: float = 1.0
     ground_slack: float | None = None
     known_3d_slack: float | None = None
@@ -4508,6 +4509,8 @@ def collect_lens_refine_inputs(context: bpy.types.Context) -> LensRefinePrep:
     space = properties.workspace(context)
     share_lens = bool(getattr(space, "share_lens", True))
     point_focal = bool(getattr(space, "estimate_focal_from_points", False)) and not share_lens
+    estimate_distortion = bool(
+        point_focal and getattr(space, "refine_lens_distortion", False))
     anchor = properties.anchor_root(context)
     if anchor is None:
         raise ValueError("Choose an anchor match first")
@@ -4614,6 +4617,7 @@ def collect_lens_refine_inputs(context: bpy.types.Context) -> LensRefinePrep:
         root_by_name=root_by_name,
         share_lens=share_lens,
         estimate_focal_from_points=point_focal,
+        estimate_distortion=estimate_distortion,
         pick_sigma_px=float(space.focal_pick_sigma_px),
         initial_solution=collect_sync_request(context).initial_solution,
         **collect_sync_solve_kwargs(context),
