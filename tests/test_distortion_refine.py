@@ -106,6 +106,11 @@ class DistortionRefineTests(unittest.TestCase):
         self.assertEqual(outcome.accepted_match_ids, ["camera"])
         fitted = outcome.calibrations["camera"]
         self.assertAlmostEqual(fitted.division_lambda, -0.12, delta=0.005)
+        diagnostic = outcome.diagnostics["camera"]
+        self.assertTrue(diagnostic.accepted)
+        self.assertAlmostEqual(diagnostic.best_lambda, -0.12, delta=0.005)
+        self.assertLess(diagnostic.best_validation_rmse_px,
+                        diagnostic.start_validation_rmse_px)
         self.assertLess(
             self._held_out_rmse(fitted, held_out),
             self._held_out_rmse(start, held_out) * 0.05,
@@ -122,6 +127,11 @@ class DistortionRefineTests(unittest.TestCase):
         self.assertEqual(outcome.accepted_match_ids, [])
         self.assertIs(outcome.calibrations["camera"], start)
         self.assertIn("validation", outcome.skipped_reasons["camera"])
+        diagnostic = outcome.diagnostics["camera"]
+        self.assertFalse(diagnostic.accepted)
+        self.assertIsNotNone(diagnostic.best_lambda)
+        self.assertGreater(diagnostic.validation_point_picks, 0)
+        self.assertIn("validation", diagnostic.reason)
 
     def test_brown_conrady_is_preserved(self):
         start, _truth, observations, result, _held_out = self._case(
@@ -265,7 +275,24 @@ class DistortionRefineTests(unittest.TestCase):
                     self.assertIs(result.calibrations, bundle.calibrations)
                     self.assertEqual(result.final_cost, 5.0)
                     self.assertEqual(result.sync_result.mean_reprojection_px, 5.0)
-                    self.assertIn("distortion unchanged", result.message)
+                    self.assertIn(
+                        "distortion unchanged (combined fit score did not improve)",
+                        result.message,
+                    )
+
+    def test_unchanged_message_summarizes_camera_skip_reasons(self):
+        outcome = distortion_refine.DistortionRefineOutcome(
+            {}, [], {
+                "A": "needs at least 16 supported point picks",
+                "B": "needs at least 16 supported point picks",
+                "C": "point picks do not cover enough of the image radius",
+            })
+        message = lens_refine._distortion_status_message(outcome, [])
+        self.assertEqual(
+            message,
+            "distortion unchanged (2 cameras: needs at least 16 supported point picks; "
+            "1 camera: point picks do not cover enough of the image radius)",
+        )
 
 
 if __name__ == "__main__":

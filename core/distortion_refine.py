@@ -29,6 +29,27 @@ class DistortionRefineOutcome:
     accepted_match_ids: list[str]
     skipped_reasons: dict[str, str]
     cancelled: bool = False
+    diagnostics: dict[str, "DistortionCameraDiagnostic"] | None = None
+
+
+@dataclass
+class DistortionCameraDiagnostic:
+    """Evidence and pick-validation scores for one frozen-camera distortion trial."""
+
+    supported_point_picks: int
+    start_lambda: float
+    validation_point_picks: int = 0
+    normalized_outer_radius: float | None = None
+    normalized_radius_span: float | None = None
+    best_lambda: float | None = None
+    start_fit_rmse_px: float | None = None
+    best_fit_rmse_px: float | None = None
+    start_validation_rmse_px: float | None = None
+    best_validation_rmse_px: float | None = None
+    start_full_rmse_px: float | None = None
+    best_full_rmse_px: float | None = None
+    accepted: bool = False
+    reason: str = ""
 
 
 def _weighted_rmse(errors: np.ndarray, weights: np.ndarray) -> float:
@@ -76,6 +97,7 @@ def refine_division_distortion(
     output = dict(calibrations)
     accepted: list[str] = []
     skipped: dict[str, str] = {}
+    diagnostics: dict[str, DistortionCameraDiagnostic] = {}
     by_match: dict[str, list[SyncObservation]] = {}
     for item in observations:
         if item.match_id in calibrations and item.landmark_id in result.landmarks:
@@ -83,16 +105,27 @@ def refine_division_distortion(
 
     for match_id, calibration in calibrations.items():
         if cancel_check and cancel_check():
-            return DistortionRefineOutcome(dict(calibrations), [], skipped, cancelled=True)
+            return DistortionRefineOutcome(
+                dict(calibrations), [], skipped, cancelled=True, diagnostics=diagnostics)
         items = by_match.get(match_id, [])
+        diagnostic = DistortionCameraDiagnostic(
+            supported_point_picks=len(items),
+            start_lambda=float(calibration.division_lambda),
+        )
+        diagnostics[match_id] = diagnostic
+
+        def skip(reason: str) -> None:
+            skipped[match_id] = reason
+            diagnostic.reason = reason
+
         if geometry.has_brown_conrady(calibration.brown_conrady):
-            skipped[match_id] = "imported Brown–Conrady distortion is already active"
+            skip("imported Brown–Conrady distortion is already active")
             continue
         if match_id not in result.similarities:
-            skipped[match_id] = "camera has no fitted pose"
+            skip("camera has no fitted pose")
             continue
         if len(items) < MIN_DISTORTION_PICKS:
-            skipped[match_id] = f"needs at least {MIN_DISTORTION_PICKS} supported point picks"
+            skip(f"needs at least {MIN_DISTORTION_PICKS} supported point picks")
             continue
 
         observed = np.asarray([(item.u, item.v) for item in items], dtype=np.float64)
@@ -103,16 +136,19 @@ def refine_division_distortion(
         )
         order = np.argsort(radii, kind="stable")
         validation_indices = order[VALIDATION_STRIDE - 1::VALIDATION_STRIDE]
+        diagnostic.validation_point_picks = int(len(validation_indices))
         validation_mask = np.zeros(len(items), dtype=bool)
         validation_mask[validation_indices] = True
         fit_mask = ~validation_mask
         radius_span = float(np.quantile(radii, 0.9) - np.quantile(radii, 0.1))
+        diagnostic.normalized_outer_radius = float(np.quantile(radii, 0.9))
+        diagnostic.normalized_radius_span = radius_span
         if (len(validation_indices) < 4 or
                 float(np.quantile(radii, 0.9)) < MIN_NORMALIZED_OUTER_RADIUS or
                 radius_span < MIN_NORMALIZED_RADIUS_SPAN or
                 float(np.max(radii[fit_mask])) < MIN_NORMALIZED_OUTER_RADIUS or
                 float(np.max(radii[validation_mask])) < MIN_NORMALIZED_OUTER_RADIUS):
-            skipped[match_id] = "point picks do not cover enough of the image radius"
+            skip("point picks do not cover enough of the image radius")
             continue
 
         points = np.asarray([result.landmarks[item.landmark_id] for item in items])
@@ -120,7 +156,7 @@ def refine_division_distortion(
         ideal, valid = _project_shared_points(
             points, pinhole, result.similarities[match_id])
         if not np.all(valid) or not np.isfinite(ideal).all():
-            skipped[match_id] = "fitted points do not project in front of the camera"
+            skip("fitted points do not project in front of the camera")
             continue
         weights = np.asarray([max(float(item.weight), 1.0e-12) for item in items])
 
@@ -139,25 +175,27 @@ def refine_division_distortion(
         start = float(calibration.division_lambda)
         if (not np.isfinite(start) or abs(start) > MAX_DIVISION_LAMBDA or
                 not _division_valid_over_image(intrinsics, start)):
-            skipped[match_id] = "existing distortion lies outside the conservative model bound"
+            skip("existing distortion lies outside the conservative model bound")
             continue
         low = max(-MAX_DIVISION_LAMBDA, start - MAX_DIVISION_LAMBDA_CHANGE)
         high = min(MAX_DIVISION_LAMBDA, start + MAX_DIVISION_LAMBDA_CHANGE)
         if low >= high:
-            skipped[match_id] = "existing distortion leaves no conservative search range"
+            skip("existing distortion leaves no conservative search range")
             continue
         samples = np.linspace(low, high, _GRID_SAMPLES)
         losses = []
         for value in samples:
             if cancel_check and cancel_check():
-                return DistortionRefineOutcome(dict(calibrations), [], skipped, cancelled=True)
+                return DistortionRefineOutcome(
+                    dict(calibrations), [], skipped, cancelled=True, diagnostics=diagnostics)
             losses.append(fit_loss(float(value)))
         best_index = int(np.argmin(losses))
         bracket_low = float(samples[max(best_index - 1, 0)])
         bracket_high = float(samples[min(best_index + 1, len(samples) - 1)])
         for _ in range(_REFINE_STEPS):
             if cancel_check and cancel_check():
-                return DistortionRefineOutcome(dict(calibrations), [], skipped, cancelled=True)
+                return DistortionRefineOutcome(
+                    dict(calibrations), [], skipped, cancelled=True, diagnostics=diagnostics)
             first = bracket_low + (bracket_high - bracket_low) / 3.0
             second = bracket_high - (bracket_high - bracket_low) / 3.0
             if fit_loss(first) <= fit_loss(second):
@@ -165,10 +203,12 @@ def refine_division_distortion(
             else:
                 bracket_low = first
         candidate = 0.5 * (bracket_low + bracket_high)
+        diagnostic.best_lambda = candidate
         if cancel_check and cancel_check():
-            return DistortionRefineOutcome(dict(calibrations), [], skipped, cancelled=True)
+            return DistortionRefineOutcome(
+                dict(calibrations), [], skipped, cancelled=True, diagnostics=diagnostics)
         if not _division_valid_over_image(intrinsics, candidate):
-            skipped[match_id] = "best correction is not invertible across the full image"
+            skip("best correction is not invertible across the full image")
             continue
         start_errors = errors_at(start)
         candidate_errors = errors_at(candidate)
@@ -180,6 +220,12 @@ def refine_division_distortion(
             candidate_errors[validation_mask], weights[validation_mask])
         start_full = _weighted_rmse(start_errors, weights)
         final_full = _weighted_rmse(candidate_errors, weights)
+        diagnostic.start_fit_rmse_px = start_fit
+        diagnostic.best_fit_rmse_px = final_fit
+        diagnostic.start_validation_rmse_px = start_validation
+        diagnostic.best_validation_rmse_px = final_validation
+        diagnostic.start_full_rmse_px = start_full
+        diagnostic.best_full_rmse_px = final_full
         absolute_gain = max(MIN_SIGMA_RMSE_GAIN * float(pick_sigma_px), 0.05)
 
         def supported(before: float, after: float) -> bool:
@@ -189,13 +235,14 @@ def refine_division_distortion(
         if not (supported(start_fit, final_fit) and
                 supported(start_validation, final_validation) and
                 supported(start_full, final_full)):
-            skipped[match_id] = "validation points do not support a distortion correction"
+            skip("validation points do not support a distortion correction")
             continue
         boundary_margin = (high - low) / max(_GRID_SAMPLES - 1, 1)
         if candidate <= low + boundary_margin or candidate >= high - boundary_margin:
-            skipped[match_id] = "best correction reaches the conservative distortion bound"
+            skip("best correction reaches the conservative distortion bound")
             continue
         output[match_id] = _calibration_at_lambda(calibration, candidate)
         accepted.append(match_id)
+        diagnostic.accepted = True
 
-    return DistortionRefineOutcome(output, accepted, skipped)
+    return DistortionRefineOutcome(output, accepted, skipped, diagnostics=diagnostics)

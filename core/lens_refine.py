@@ -9,6 +9,7 @@ pairs (and a global relative-scale probe).
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -721,6 +722,7 @@ def refine_lenses_from_landmarks(
                            initial_rmse=initial_rmse, candidate=outcome.candidate)
         distortion_ids: list[str] = []
         distortion_checked = False
+        distortion = None
         if estimate_distortion:
             distortion_checked = True
             if progress_callback:
@@ -785,9 +787,8 @@ def refine_lenses_from_landmarks(
                      (f" · focal-only 95% intervals at σ={pick_sigma_px:g}px"
                       if distortion_ids else
                       f" · 95% intervals at σ={pick_sigma_px:g}px") +
-                    ((" · distortion refined: " + ", ".join(sorted(distortion_ids)))
-                     if distortion_ids else
-                     (" · distortion unchanged" if distortion_checked else "")),
+                    ((" · " + _distortion_status_message(distortion, distortion_ids))
+                     if distortion_checked and distortion is not None else ""),
             improved=True, point_focal_mode=True,
             focal_intervals=outcome.intervals_px)
 
@@ -1281,3 +1282,19 @@ def refine_lenses_from_landmarks(
         message=message,
         improved=improved,
     )
+
+
+def _distortion_status_message(distortion, applied_ids: list[str]) -> str:
+    """Summarize why a requested distortion polish changed no calibration."""
+    if applied_ids:
+        return "distortion refined: " + ", ".join(sorted(applied_ids))
+    if distortion.accepted_match_ids:
+        return "distortion unchanged (combined fit score did not improve)"
+    reasons = Counter(distortion.skipped_reasons.values())
+    if not reasons:
+        return "distortion unchanged"
+    details = "; ".join(
+        f"{count} camera{'s' if count != 1 else ''}: {reason}"
+        for reason, count in sorted(reasons.items())
+    )
+    return f"distortion unchanged ({details})"

@@ -153,7 +153,13 @@ possible solution. Inspect features you did not pick, and add translated views
 or better-spread picks when the ranges remain broad.
 
 Joint fitting keeps the principal point and supplied distortion coefficients
-fixed. It preserves the focal aspect ratio when changing focal scale, including
+fixed. With **Refine Distortion** enabled, an accepted independent FOV fit
+then tries a conservative one-parameter radial correction for each camera while
+keeping focal length, pose and 3D geometry frozen. Each camera needs at least 16
+supported point picks spread across the image radius, and reserved validation
+picks must improve. Line strokes and From Points lines do not count as radial
+distortion evidence. The completion message says why unchanged cameras were
+skipped. It preserves the focal aspect ratio when changing focal scale, including
 imported nonsquare calibration. Known 3D points and lines, On Ground, camera
 roles and pose locks retain their Sync meanings. VP-derived calibrations can
 supply the starting camera orientation. These features are not discarded to
@@ -395,6 +401,17 @@ segment ends exactly at those points. No line strokes are needed. On the plate,
 the segment connects the endpoint picks using the usual line colors and a dashed
 stroke. It has no line handles and cannot be drawn or dragged; edit the endpoint
 point picks instead.
+
+From Points lines have no separate pixel-error measurement: their endpoint point
+errors carry the image evidence. A short segment can show a large angle mismatch
+from only a few pixels of endpoint displacement. Drawn lines instead measure the
+perpendicular distance from their stroke endpoints to the projected infinite line;
+short strokes likewise provide little angular leverage.
+
+The landmark table omits errors at or below 0.5 px and rounds larger errors to
+whole pixels. A blank can also mean no measurable geometry or a camera whose pose
+has drifted; it does not necessarily mean zero error. Select a point or drawn line
+to see its available error values with two decimal places.
 
 **Is Parallel To** and **Is in Plane** on a From Points line influence its
 endpoints during Solve Sync and Refine Lenses. For example, parallel to **X Axis**

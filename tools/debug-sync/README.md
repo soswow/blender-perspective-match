@@ -196,6 +196,16 @@ Known 3D camera pin polish (source-image residuals vs VP lines, rotation locked)
 - **Pairwise vs anchor** — `2d_rmse` ignores On Ground metric; `mixed_rmse` includes ground raycasts. A huge mixed error with a modest 2D error is that degeneracy, not “too few landmarks” and not mis-tagged ground.
 - **Residual vs radius** (`probe_graph.py`) — per-match inner (r<0.35) vs outer (r≥0.55) RMSE. Outer much larger than inner means a central cluster is winning and edge picks that pin camera distance are being ignored.
 
+`probe_lens_inputs.py` also audits the complete applied Sync endpoint without
+running a solve. Its `applied_endpoint` output records each camera's distortion
+eligibility and skip reason, plus the image length, projected angle and endpoint
+miss of drawn strokes and From Points endpoint chords. To measure how much the
+coefficient bounds could change the frozen endpoint even when radial coverage is
+ineligible, add `--force-distortion-probe`. That diagnostic bypasses only the
+coverage gates; it does not apply results or establish that the coefficient is
+supported. The training/validation split is a pick consistency check, not
+independent geometry, because the frozen 3D endpoint was fitted from those picks.
+
 ## Timing Sync and Refine Lenses
 
 `benchmark_solvers.py` runs either public numerical path from a disposable
