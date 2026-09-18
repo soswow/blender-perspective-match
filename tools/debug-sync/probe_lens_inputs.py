@@ -17,6 +17,7 @@ import bpy
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from probe_cameras import _load_extension
+from mirror_line_diagnostic import mirror_line_diagnostic
 
 
 def _stroke_diagnostic(item, source, segment, result, *, endpoint_point_errors=None):
@@ -217,7 +218,15 @@ def _applied_endpoint_report(prep, space, names, *, force_distortion=False):
 
     from match_perspective import scene
     from match_perspective.core.distortion_refine import refine_division_distortion
+    from match_perspective.core.focal_line_constraints import (
+        LINE_RELATION_DIRECTION_HARD_SINE,
+        LINE_RELATION_DIRECTION_RESIDUAL_PX,
+    )
     from match_perspective.core.joint_fit_score import JointFitScorer, supported_joint_request
+    from match_perspective.core.sync.constants import (
+        MIRROR_PAIR_HARD_GAP,
+        MIRROR_PAIR_RESIDUAL_PX,
+    )
     from match_perspective.core.sync.projection import _project_shared_points
     from match_perspective.core.sync.solve import solution_result_from_seed
     from match_perspective.core.sync.types import SyncLineObservation
@@ -298,13 +307,69 @@ def _applied_endpoint_report(prep, space, names, *, force_distortion=False):
         point_b=names.get(str(getattr(item, "line_point_b", "NONE")),
                           str(getattr(item, "line_point_b", "NONE"))),
     ) for item in space.landmarks if item.kind == "LINE"]
+    line_sources = {item.item_id: str(getattr(item, "line_source", "DRAWN") or "DRAWN")
+                    for item in space.landmarks if item.kind == "LINE"}
+    mirror_lines = []
+    effective_plane = None
+    if request.mirror_plane is not None:
+        plane_point = np.asarray(request.mirror_plane[0], dtype=float)
+        plane_normal = np.asarray(request.mirror_plane[1], dtype=float)
+        plane_normal /= max(float(np.linalg.norm(plane_normal)), 1.0e-12)
+        if request.mirror_landmark_id:
+            live_reference = result.landmarks.get(request.mirror_landmark_id)
+            if live_reference is not None:
+                plane_point = np.asarray(live_reference, dtype=float)
+        applied_offset = float(getattr(result, "joint_mirror_offset_m", 0.0))
+        plane_point = plane_point + applied_offset * plane_normal
+        effective_plane = dict(point=plane_point.tolist(), normal=plane_normal.tolist(),
+                               applied_offset=applied_offset)
+        anchor_calibration = result.calibrations.get(request.anchor_id)
+        anchor_similarity = result.similarities.get(request.anchor_id)
+        coordinate_origin = (
+            anchor_similarity.transform_point(anchor_calibration.camera_center)
+            if anchor_calibration is not None and anchor_similarity is not None else None
+        )
+        for left_id, right_id in request.mirror_pairs or ():
+            if left_id not in result.line_segments or right_id not in result.line_segments:
+                continue
+            record = mirror_line_diagnostic(
+                result.line_segments[left_id], result.line_segments[right_id],
+                plane_point, plane_normal, coordinate_origin=coordinate_origin,
+            )
+            record.update(
+                left_id=left_id, right_id=right_id,
+                left_name=names.get(left_id, left_id),
+                right_name=names.get(right_id, right_id),
+                left_source=line_sources.get(left_id),
+                right_source=line_sources.get(right_id),
+                position_residual_norm_px=(MIRROR_PAIR_RESIDUAL_PX *
+                                           record["scorer_position_gap"] /
+                                           MIRROR_PAIR_HARD_GAP),
+                direction_residual_norm_px=(LINE_RELATION_DIRECTION_RESIDUAL_PX *
+                                            record["infinite_direction_sine"]),
+                approximate_hard_transverse_bound_at_left_midpoint=(
+                    MIRROR_PAIR_HARD_GAP +
+                    record["scoring_witness_distance_from_left_midpoint"] *
+                    LINE_RELATION_DIRECTION_HARD_SINE
+                ),
+            )
+            mirror_lines.append(record)
+    diagnostics = seed.diagnostics
     return dict(
         available=True,
+        ownership=dict(
+            certified_current_geometry=True,
+            stored_evidence_sha256=seed.evidence_sha256,
+            current_evidence_sha256=request.evidence_sha256(),
+            evidence_matches=seed.evidence_sha256 == request.evidence_sha256(),
+            has_applied_diagnostics=diagnostics is not None,
+        ),
         coverage=coverage,
         score=dict(valid=score.valid, reason=score.reason,
                    point_rmse_px=score.point_rmse_px,
                    line_rmse_px=score.line_rmse_px,
-                   objective=score.objective),
+                   objective=score.objective,
+                   constraint_gaps=score.constraint_gaps),
         distortion=dict(
             accepted_match_ids=distortion.accepted_match_ids,
             skipped_reasons=distortion.skipped_reasons,
@@ -312,6 +377,21 @@ def _applied_endpoint_report(prep, space, names, *, force_distortion=False):
                      (distortion.diagnostics or {}).items()},
         ),
         forced_distortion=forced_distortion,
+        mirror=dict(
+            origin_mode=str(getattr(space, "mirror_origin", "OBJECT")),
+            plane_axis=str(getattr(space, "mirror_plane", "YZ")),
+            object_name=(space.mirror_object.name
+                         if getattr(space, "mirror_object", None) is not None else None),
+            reference_id=request.mirror_landmark_id,
+            reference_name=names.get(request.mirror_landmark_id, request.mirror_landmark_id),
+            slack=float(request.mirror_slack or 0.0),
+            effective_plane=effective_plane,
+            hard_position_limit=MIRROR_PAIR_HARD_GAP,
+            position_residual_px_at_limit=MIRROR_PAIR_RESIDUAL_PX,
+            hard_direction_sine_limit=LINE_RELATION_DIRECTION_HARD_SINE,
+            direction_residual_px_per_sine=LINE_RELATION_DIRECTION_RESIDUAL_PX,
+            line_pairs=mirror_lines,
+        ),
         line_settings=line_settings,
         strokes=strokes,
     )
@@ -338,7 +418,11 @@ def report(*, force_distortion=False):
             source_width=settings.source_image_width,
             principal_point=[settings.cx, settings.cy],
             undistorted=bool(settings.view_undistorted)))
+    unit_settings = bpy.context.scene.unit_settings
     result = dict(same_lens=prep.share_lens, point_focal=prep.estimate_focal_from_points,
+        scene_units=dict(system=unit_settings.system,
+                         scale_length=float(unit_settings.scale_length),
+                         length_unit=unit_settings.length_unit),
         images=images,
         cameras=[dict(name=m.match_id, picks=counts[m.match_id], focal=m.intrinsics.fx,
                       vp_lines=sum(len(v) for v in m.line_bundles.values())) for m in prep.lens_inputs],

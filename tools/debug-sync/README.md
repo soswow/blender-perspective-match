@@ -30,6 +30,14 @@ are retained in `report.json.inputs.json`, `report.json.startup.json` and
 before/after point error; capture alone never applies it. These can contain private scene evidence: keep them
 outside the repository. No mode saves the source blend.
 
+When a complete applied Sync endpoint is present, the same zero-solve report
+also audits mirrored line pairs. It separates the canonical-representative
+position and direction gaps used by the public scorer, the infinite lines'
+closest approach, and independently published finite helper extents. It
+decomposes endpoint and midpoint differences along and across the target line
+and records the anchor-camera reference used by the position term. This makes
+angular drift over a long camera-to-object lever arm visible.
+
 Reuse those sidecars with `probe_focal_startup.py` under the development Python
 environment with OpenCV. By default it compares a missing camera against the
 saved provisional cloud across nine focal candidates and checks raw image-pair
