@@ -956,7 +956,9 @@ def main() -> None:
                 diagnose_prep,
                 diagnose_result,
             )
-            assert diagnose_progress[-1][:2] == (6, 6), diagnose_progress[-1]
+            final_step, total_steps, final_label = diagnose_progress[-1]
+            assert final_step == total_steps > 0, diagnose_progress[-1]
+            assert final_label == "Complete", diagnose_progress[-1]
 
             # Landmark list filter keeps only picks defined in the active match.
             local_landmark = space.landmarks.add()

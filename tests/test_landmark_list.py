@@ -41,6 +41,9 @@ def _landmark(
     mirror_of: str = "NONE",
     parallel_to: str = "NONE",
     observations: tuple = (),
+    line_source: str = "DRAWN",
+    line_point_a: str = "NONE",
+    line_point_b: str = "NONE",
 ):
     return SimpleNamespace(
         item_id=item_id,
@@ -50,6 +53,9 @@ def _landmark(
         mirror_of=mirror_of,
         parallel_to=parallel_to,
         observations=observations,
+        line_source=line_source,
+        line_point_a=line_point_a,
+        line_point_b=line_point_b,
     )
 
 
@@ -143,6 +149,24 @@ class LandmarkListTests(unittest.TestCase):
             landmark_list.filter_flags(rows, filter_current=True, bitflag=BITFLAG),
             [0],
         )
+
+    def test_from_points_filter_uses_common_endpoint_picks(self) -> None:
+        root_a, root_b = object(), object()
+        first = _landmark(
+            item_id="a", name="A",
+            observations=(SimpleNamespace(match_root=root_a, is_set=True),
+                          SimpleNamespace(match_root=root_b, is_set=True)))
+        second = _landmark(
+            item_id="b", name="B",
+            observations=(SimpleNamespace(match_root=root_a, is_set=True),))
+        line = _landmark(
+            item_id="line", name="Line", kind="LINE",
+            line_source="FROM_POINTS", line_point_a="a", line_point_b="b")
+        row_a = landmark_list.collect_landmark_rows((first, second, line), root_a)[2]
+        row_b = landmark_list.collect_landmark_rows((first, second, line), root_b)[2]
+        self.assertEqual(row_a.observation_count, 1)
+        self.assertTrue(row_a.has_pick_in_active)
+        self.assertFalse(row_b.has_pick_in_active)
 
     def test_sort_creation_then_name(self) -> None:
         rows = landmark_list.collect_landmark_rows(

@@ -85,6 +85,16 @@ If **Perspective Match** still owns the camera but the Blender camera object has
 
 ## Solve and review
 
+To constrain an edge between existing point landmarks, add a **Line**, choose
+**Source → From Points**, and select **Point A** and **Point B**. Set the line's
+**Is in Plane** or **Is Parallel To** relation, then run **Solve Sync** or
+**Refine Lenses**. These relations adjust the endpoint positions together with
+their image picks and existing constraints. Each point keeps its own
+**Is in Plane** membership; assigning a plane to the line does not replace it.
+The plate shows a dashed segment in the usual line colors wherever both points
+have picks. It has no editable line handles: edit the point picks instead.
+See [Line landmarks](sync.md#line-landmarks) for support requirements.
+
 **Solve Sync** fits cameras and landmarks with the current lenses fixed.
 **Refine Lenses** also adjusts the permitted focal lengths. A successful lens
 fit applies its cameras, points, and lines together; another Solve is not

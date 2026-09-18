@@ -1019,6 +1019,42 @@ def _draw_landmarks(context: bpy.types.Context, fill_shader, settings) -> None:
     active_index = space.active_landmark_index
     opacity = settings.overlay_opacity
     for index, landmark in enumerate(space.landmarks):
+        if (
+            landmark.kind == "LINE"
+            and str(getattr(landmark, "line_source", "DRAWN")) == "FROM_POINTS"
+        ):
+            by_id = {item.item_id: item for item in space.landmarks if item.item_id}
+            endpoint_a = by_id.get(str(getattr(landmark, "line_point_a", "NONE")))
+            endpoint_b = by_id.get(str(getattr(landmark, "line_point_b", "NONE")))
+            observation_a = (
+                scene.observation_for_match(endpoint_a, root) if endpoint_a is not None else None
+            )
+            observation_b = (
+                scene.observation_for_match(endpoint_b, root) if endpoint_b is not None else None
+            )
+            if (
+                observation_a is None or not observation_a.is_set
+                or observation_b is None or not observation_b.is_set
+            ):
+                continue
+            point_a = scene.image_to_region(context, observation_a.x, observation_a.y)
+            point_b = scene.image_to_region(context, observation_b.x, observation_b.y)
+            if point_a is None or point_b is None:
+                continue
+            is_active = index == active_index
+            base = landmark_pick_base_color(
+                is_active=is_active,
+                has_known_object=False,
+                on_ground=False,
+            )
+            draw_opacity = opacity * (0.35 if not landmark.use_in_sync else 1.0)
+            color = _with_alpha(base, draw_opacity)
+            _draw_dashed_polyline(
+                [point_a, point_b],
+                thickness=3.0 if is_active else 2.0,
+                pattern=(color, None),
+            )
+            continue
         observation = scene.observation_for_match(landmark, root)
         if observation is None or not observation.is_set:
             continue
@@ -1059,6 +1095,29 @@ def _draw_landmark_labels(context: bpy.types.Context, settings) -> None:
         return
     opacity = settings.overlay_opacity
     for landmark in space.landmarks:
+        if (
+            landmark.kind == "LINE"
+            and str(getattr(landmark, "line_source", "DRAWN")) == "FROM_POINTS"
+        ):
+            by_id = {item.item_id: item for item in space.landmarks if item.item_id}
+            endpoint_a = by_id.get(str(getattr(landmark, "line_point_a", "NONE")))
+            endpoint_b = by_id.get(str(getattr(landmark, "line_point_b", "NONE")))
+            observation_a = scene.observation_for_match(endpoint_a, root) if endpoint_a else None
+            observation_b = scene.observation_for_match(endpoint_b, root) if endpoint_b else None
+            if not (observation_a and observation_a.is_set and observation_b and observation_b.is_set):
+                continue
+            point_a = scene.image_to_region(context, observation_a.x, observation_a.y)
+            point_b = scene.image_to_region(context, observation_b.x, observation_b.y)
+            if point_a is None or point_b is None:
+                continue
+            anchor = 0.5 * (point_a + point_b)
+            draw_opacity = opacity * (0.35 if not landmark.use_in_sync else 1.0)
+            _draw_overlay_label(
+                anchor + Vector((_s(_LANDMARK_LABEL_OFFSET_PX), _s(_LANDMARK_LABEL_OFFSET_PX))),
+                landmark.name or "Landmark", draw_opacity,
+                font_size=_LANDMARK_LABEL_FONT_SIZE, align="left",
+            )
+            continue
         observation = scene.observation_for_match(landmark, root)
         if observation is None or not observation.is_set:
             continue

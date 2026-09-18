@@ -304,10 +304,10 @@ The ground plane determines Z but has no preferred compass direction, so anchor 
 Each landmark keeps a stable `item_id` plus a `creation_index` (add order). UI helpers:
 
 - **A–Z** toggle: alphabetical by name vs original add order (display only).
-- **Filter** toggle: show only landmarks with a pick defined in the active match. List px and **Sort by Error** then use this still's overlay miss instead of the all-views RMSE. The selected landmark always shows both numbers when this still can be scored.
+- **Filter** toggle: show only landmarks with a pick defined in the active match, including From Points lines whose two endpoints both have picks there. List px and **Sort by Error** then use this still's overlay miss instead of the all-views RMSE. The selected landmark always shows both numbers when this still can be scored.
 - **Font** toggle: show landmark names next to picks on the plate.
 - Click a pick on the plate to select it in the list (while the **Perspective Match** sidebar tab is open). The selected pick draws in red. **On Ground** picks draw in magenta; Known 3D picks in cyan.
-- **Duplicate**: copies type / On Ground / Is in Plane / Use in Sync / Sync Weight, clears Known 3D links, parallel links, mirror links, picks, and solved positions. The new name flips a trailing left/right or top/bottom, or increments a trailing ` 3`-style number, when that name is free; otherwise it appends `copy`.
+- **Duplicate**: copies type / On Ground / Is in Plane / Use in Sync / Sync Weight, clears Known 3D links, parallel links, mirror links, picks, and solved positions. A From Points duplicate keeps its source mode but clears Point A/B for fresh selection. The new name flips a trailing left/right or top/bottom, or increments a trailing ` 3`-style number, when that name is free; otherwise it appends `copy`.
 - **Use in Sync**: exclude a landmark from solving and investigation without deleting picks. With **Landmark Empties** on, that also removes its helper from `PM_Sync_Landmarks`.
 - **Sync Weight**: how strongly this landmark pulls Solve Sync (default 1). Raise it on a couple of well-placed picks that sit far from the others so a cluster of easier landmarks cannot ignore them. Combines with per-still **Pick Confidence** (High ×4, Low ×0.25). Boosted landmarks also skip the usual “this pick looks like an outlier” downweight. Weight influences pose refinement and candidate ranking; camera acceptance and mismatched-pick diagnostics remain in raw image pixels.
 
@@ -387,11 +387,36 @@ Mirrored lines also retain a compatible **Is Parallel To** direction supplied by
 
 ### Line landmarks
 
-Add with the mesh icon next to +. Drag the same physical edge in each still — endpoints do **not** need to be the same 3D points, only the same infinite edge. Optional: assign two Empties as **Known 3D** / **Known 3D B** so the edge is metric. **Is Parallel To** can constrain the edge to shared-world **X Axis**, **Y Axis**, or **Z Axis**, or to another Line landmark that shares its 3D direction. **Is Mirror Of** pairs a line with its counterpart across the scene Mirror Empty, the same as for points. **Is in Plane** can keep a line in a wall, table, or other shared plane with point landmarks.
+Add with the mesh icon next to +. With **Source → Drawn**, drag the same physical edge in each still — endpoints do **not** need to be the same 3D points, only the same infinite edge. Optional: assign two Empties as **Known 3D** / **Known 3D B** so the edge is metric. **Is Parallel To** can constrain the edge to shared-world **X Axis**, **Y Axis**, or **Z Axis**, or to another Line landmark that shares its 3D direction. **Is Mirror Of** pairs a drawn line with its counterpart across the scene Mirror Empty, the same as for points. **Is in Plane** can keep a line in a wall, table, or other shared plane with point landmarks.
 
-Without Known 3D ends, a free line needs **three or more** stills — two views alone cannot constrain relative pose from lines. Ordinary point landmarks must be picked in **both** stills when Known 3D sit on one line. Expand **Pick Confidence** (collapsed by default, under **Pick in Active Match**) to set the next-pick default or per-still confidence; it multiplies the landmark **Sync Weight**.
+With **Source → From Points**, select two existing point landmarks as **Point A**
+and **Point B**. Their solved positions define the infinite line; the displayed
+segment ends exactly at those points. No line strokes are needed. On the plate,
+the segment connects the endpoint picks using the usual line colors and a dashed
+stroke. It has no line handles and cannot be drawn or dragged; edit the endpoint
+point picks instead.
 
-**What “px” means:** For **point** landmarks, RMSE is how far the projected 3D Empty lands from your 2D pick. For **line** landmarks, each drawn endpoint’s perpendicular distance to the projected infinite 3D line is measured. Those two distances combine offset (the stroke sitting beside the projected edge) and heading (angle miss scaled by half the stroke length): RMS = hypot(midpoint offset, ½ length × sin(angle)). A short stroke therefore reports a parallel miss more than a heading miss; a long stroke also punishes a twist. Pose accept still uses **point** RMSE, so a line that is not yet sitting on the overlay cannot skip a still that already fits the 3D cloud. After that still is placed, recovered-camera polish still uses the line (and spatially isolated picks) to rotate it — a dense cluster of well-fitting picks cannot Huber-ignore isolated landmarks that pin orientation.
+**Is Parallel To** and **Is in Plane** on a From Points line influence its
+endpoints during Solve Sync and Refine Lenses. For example, parallel to **X Axis**
+requires the points to share Y and Z, while leaving their X separation free.
+A line's plane membership acts alongside each endpoint's own plane membership,
+Ground and Known 3D settings. It does not overwrite them: endpoints can belong
+to different plane buckets while the line has another plane relation. Zero
+slack keeps the corresponding constraint hard; positive slack allows its usual
+movement. Incompatible hard constraints cannot produce an accepted fit.
+
+Both endpoints must be included point landmarks with enough evidence to locate
+them. Missing references, repeated endpoints and coincident 3D positions cannot
+define a usable line. A derived line adds no image picks or independent plane
+support; its endpoints retain their own pick weights and errors. A line plane
+still needs independently located support in its bucket: one member for X/Y/Z,
+or three non-collinear members for Free. Parallel targets may be world axes,
+drawn lines or other From Points lines. From Points lines do not support
+**Is Mirror Of** or separate Known 3D line endpoints.
+
+Without Known 3D ends, a **drawn** free line needs **three or more** stills — two views alone cannot constrain relative pose from lines. Ordinary point landmarks must be picked in **both** stills when Known 3D sit on one line. Expand **Pick Confidence** (collapsed by default, under **Pick in Active Match**) to set the next-pick default or per-still confidence; it multiplies the landmark **Sync Weight**.
+
+**What “px” means:** For **point** landmarks, RMSE is how far the projected 3D Empty lands from your 2D pick. For **drawn line** landmarks, each drawn endpoint’s perpendicular distance to the projected infinite 3D line is measured. Those two distances combine offset (the stroke sitting beside the projected edge) and heading (angle miss scaled by half the stroke length): RMS = hypot(midpoint offset, ½ length × sin(angle)). A short stroke therefore reports a parallel miss more than a heading miss; a long stroke also punishes a twist. Pose accept still uses **point** RMSE, so a line that is not yet sitting on the overlay cannot skip a still that already fits the 3D cloud. After that still is placed, recovered-camera polish still uses the line (and spatially isolated picks) to rotate it — a dense cluster of well-fitting picks cannot Huber-ignore isolated landmarks that pin orientation.
 
 For an undistorted still, sliding the 3D line helper along the same infinite edge does not change that edge's pixel error. A line that extends into the space in front of the camera can still be fitted when its helper midpoint is behind the camera. A line entirely behind the camera and parallel to the image plane has no visible projection.
 

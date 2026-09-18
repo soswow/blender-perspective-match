@@ -30,6 +30,7 @@ class LandmarkEnumCandidate:
     name: str
     item_id: str
     kind: str
+    line_source: str = "DRAWN"
 
 
 def collect_landmark_enum_candidates(landmarks) -> tuple[LandmarkEnumCandidate, ...]:
@@ -39,6 +40,7 @@ def collect_landmark_enum_candidates(landmarks) -> tuple[LandmarkEnumCandidate, 
             name=str(getattr(landmark, "name", "") or ""),
             item_id=str(getattr(landmark, "item_id", "") or ""),
             kind=str(getattr(landmark, "kind", "POINT") or "POINT"),
+            line_source=str(getattr(landmark, "line_source", "DRAWN") or "DRAWN"),
         )
         for landmark in landmarks
     )
@@ -60,6 +62,12 @@ def _has_pick_in_match(landmark, root) -> bool:
 
 def collect_landmark_rows(landmarks, active_root=None) -> tuple[LandmarkRowMeta, ...]:
     """One pass over ``landmarks``: pick counts and mirror/parallel link flags."""
+    by_id = {str(getattr(item, "item_id", "") or ""): item for item in landmarks}
+    derived_ids = {
+        item_id for item_id, item in by_id.items()
+        if str(getattr(item, "kind", "POINT")) == "LINE"
+        and str(getattr(item, "line_source", "DRAWN")) == "FROM_POINTS"
+    }
     infos: list[tuple[object, str, str, str, str, int, int, bool]] = []
     mirror_targets: set[str] = set()
     parallel_targets: set[str] = set()
@@ -67,12 +75,31 @@ def collect_landmark_rows(landmarks, active_root=None) -> tuple[LandmarkRowMeta,
         item_id = str(getattr(landmark, "item_id", "") or "")
         kind = str(getattr(landmark, "kind", "POINT") or "POINT")
         mirror_of = stored_mirror_id(landmark)
+        if item_id in derived_ids:
+            mirror_of = "NONE"
         parallel_to = str(getattr(landmark, "parallel_to", "NONE") or "NONE")
-        if kind in {"POINT", "LINE"} and mirror_of not in {"", "NONE"}:
+        if (kind in {"POINT", "LINE"} and mirror_of not in {"", "NONE"}
+                and mirror_of not in derived_ids):
             mirror_targets.add(mirror_of)
         if kind == "LINE" and parallel_to not in {"", "NONE"}:
             if not parallel_to.startswith("WORLD_AXIS"):
                 parallel_targets.add(parallel_to)
+        observation_count = _observation_count(landmark)
+        has_pick = _has_pick_in_match(landmark, active_root)
+        if (kind == "LINE" and
+                str(getattr(landmark, "line_source", "DRAWN") or "DRAWN") == "FROM_POINTS"):
+            endpoint_a = by_id.get(str(getattr(landmark, "line_point_a", "NONE") or "NONE"))
+            endpoint_b = by_id.get(str(getattr(landmark, "line_point_b", "NONE") or "NONE"))
+            if endpoint_a is not None and endpoint_b is not None:
+                matches_a = {id(item.match_root) for item in getattr(endpoint_a, "observations", ())
+                             if item.is_set and item.match_root is not None}
+                matches_b = {id(item.match_root) for item in getattr(endpoint_b, "observations", ())
+                             if item.is_set and item.match_root is not None}
+                observation_count = len(matches_a & matches_b)
+                has_pick = active_root is not None and id(active_root) in matches_a & matches_b
+            else:
+                observation_count = 0
+                has_pick = False
         infos.append(
             (
                 landmark,
@@ -81,8 +108,8 @@ def collect_landmark_rows(landmarks, active_root=None) -> tuple[LandmarkRowMeta,
                 mirror_of,
                 parallel_to,
                 int(getattr(landmark, "creation_index", -1)),
-                _observation_count(landmark),
-                _has_pick_in_match(landmark, active_root),
+                observation_count,
+                has_pick,
             )
         )
 
@@ -205,7 +232,9 @@ def mirror_of_enum_entries(
     """Same-kind landmarks other than ``current_item_id`` for Is Mirror Of."""
     entries: list[tuple[str, str, str]] = []
     for row in rows:
-        if row.kind != kind or not row.item_id or row.item_id == current_item_id:
+        if (row.kind != kind or not row.item_id or row.item_id == current_item_id
+                or (kind == "LINE" and
+                    getattr(row, "line_source", "DRAWN") == "FROM_POINTS")):
             continue
         entries.append(
             (

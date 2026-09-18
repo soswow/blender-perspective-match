@@ -49,14 +49,18 @@ class PM_UL_landmarks(bpy.types.UIList):
         meta.alignment = "RIGHT"
         for icon in landmark_list.link_icons(item.kind, row_meta):
             meta.label(text="", icon=icon)
-        if item.known_object is not None:
+        from_points = (
+            item.kind == "LINE"
+            and str(getattr(item, "line_source", "DRAWN")) == "FROM_POINTS"
+        )
+        if item.known_object is not None and not from_points:
             meta.label(text="", icon="PIVOT_CURSOR")
         elif item.on_ground:
             meta.label(text="", icon="ORIENTATION_VIEW")
         elif str(getattr(item, "plane_axis", "NONE") or "NONE") != "NONE":
             meta.label(text="", icon="MESH_PLANE")
         count = 0 if row_meta is None else row_meta.observation_count
-        weight = float(getattr(item, "sync_weight", 1.0))
+        weight = 1.0 if from_points else float(getattr(item, "sync_weight", 1.0))
         weight_mark = f" · ×{weight:g}" if abs(weight - 1.0) > 0.05 else ""
         hide_rmse = scene.matched_camera_has_drifted(
             properties.active_session(_context)
@@ -622,26 +626,37 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
 
         landmark = scene.active_landmark(context)
         if landmark is not None:
+            from_points = (
+                landmark.kind == "LINE"
+                and str(getattr(landmark, "line_source", "DRAWN")) == "FROM_POINTS"
+            )
             sync_body.prop(landmark, "use_in_sync")
             sync_body.prop(landmark, "kind")
             if landmark.kind == "POINT":
                 sync_body.prop(landmark, "on_ground")
-            known_row = sync_body.row(align=True)
-            known_row.prop(landmark, "known_object", text="Known 3D")
-            known_row.operator(
-                "perspective_match.landmark_use_selected",
-                text="",
-                icon="EYEDROPPER",
-            )
-            known_row.operator(
-                "perspective_match.landmark_clear_known",
-                text="",
-                icon="X",
-            )
+            if not from_points:
+                known_row = sync_body.row(align=True)
+                known_row.prop(landmark, "known_object", text="Known 3D")
+                known_row.operator(
+                    "perspective_match.landmark_use_selected",
+                    text="",
+                    icon="EYEDROPPER",
+                )
+                known_row.operator(
+                    "perspective_match.landmark_clear_known",
+                    text="",
+                    icon="X",
+                )
             if landmark.kind == "LINE":
-                sync_body.prop(landmark, "known_object_b", text="Known 3D B")
+                sync_body.prop(landmark, "line_source", text="Source")
+                if from_points:
+                    endpoints = sync_body.row(align=True)
+                    endpoints.prop(landmark, "line_point_a", text="Point A")
+                    endpoints.prop(landmark, "line_point_b", text="Point B")
+                else:
+                    sync_body.prop(landmark, "known_object_b", text="Known 3D B")
                 sync_body.prop(landmark, "parallel_to", text="Is Parallel To")
-            if landmark.kind in {"POINT", "LINE"}:
+            if landmark.kind in {"POINT", "LINE"} and not from_points:
                 mirror_of_row = sync_body.row(align=True)
                 mirror_of_row.prop(landmark, "mirror_of", text="Is Mirror Of")
                 mirror_of_row.operator(
@@ -649,12 +664,13 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
                     text="",
                     icon="SHADERFX",
                 )
+            if landmark.kind in {"POINT", "LINE"}:
                 plane_row = sync_body.row(align=True)
                 plane_row.prop(landmark, "plane_axis", text="Is in Plane")
                 plane_group = plane_row.row(align=True)
                 plane_group.enabled = str(landmark.plane_axis) != "NONE"
                 plane_group.prop(landmark, "plane_group", text="")
-            if landmark.known_object is not None:
+            if not from_points and landmark.known_object is not None:
                 location = landmark.known_object.matrix_world.to_translation()
                 sync_body.label(
                     text=(
@@ -662,15 +678,17 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
                     ),
                     icon="EMPTY_AXIS",
                 )
-            sync_body.prop(landmark, "sync_weight", slider=True)
+            if not from_points:
+                sync_body.prop(landmark, "sync_weight", slider=True)
             pick_row = sync_body.row(align=True)
             pick_row.operator_context = "INVOKE_REGION_WIN"
             pick_enabled = pick_row.row(align=True)
             pick_enabled.enabled = (
-                settings is not None and settings.image is not None
+                settings is not None and settings.image is not None and not from_points
             )
             pick_label = (
-                "Draw Line in Active Match"
+                "Defined by Point Landmarks"
+                if from_points else "Draw Line in Active Match"
                 if landmark.kind == "LINE"
                 else "Pick in Active Match"
             )
@@ -690,12 +708,9 @@ class VIEW3D_PT_perspective_match(bpy.types.Panel):
                 caps = opencv_support.cached_capabilities()
                 if caps is not None and caps.available:
                     sync_body.prop(workspace, "snap_landmark_to_apriltag")
-            _header, confidence_body = _section(
-                sync_body,
-                "PM_landmark_confidence",
-                "Pick Confidence",
-                default_closed=True,
-            )
+            _header, confidence_body = (None, None) if from_points else _section(
+                sync_body, "PM_landmark_confidence", "Pick Confidence",
+                default_closed=True)
             if confidence_body is not None:
                 confidence_body.prop(workspace, "landmark_pick_confidence")
 

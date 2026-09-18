@@ -64,11 +64,24 @@ class LineFocalConstraints:
     plane_spring: float
     baseline_world: float
     hard_plane: bool
+    derived_endpoints: dict[int, tuple[int, int]]
 
     @classmethod
     def from_inputs(cls, point_ids, line_ids, *, plane_groups, parallel_pairs,
                     anchor_rotation, plane_spring, baseline_world, hard_plane,
                     known_line_ids=(), known_line_positions=None):
+        return cls.from_inputs_with_derived(
+            point_ids, line_ids, plane_groups=plane_groups,
+            parallel_pairs=parallel_pairs, anchor_rotation=anchor_rotation,
+            plane_spring=plane_spring, baseline_world=baseline_world,
+            hard_plane=hard_plane, known_line_ids=known_line_ids,
+            known_line_positions=known_line_positions, derived_lines=())
+
+    @classmethod
+    def from_inputs_with_derived(cls, point_ids, line_ids, *, plane_groups,
+                    parallel_pairs, anchor_rotation, plane_spring,
+                    baseline_world, hard_plane, known_line_ids=(),
+                    known_line_positions=None, derived_lines=()):
         known = set(known_line_ids)
         groups, pairs = validate_line_relations(
             point_ids, line_ids, plane_groups, parallel_pairs,
@@ -76,16 +89,27 @@ class LineFocalConstraints:
         points = {key: i for i, key in enumerate(point_ids)}
         lines = {key: i for i, key in enumerate(line_ids)}
         axes = {axis: anchor_rotation @ np.eye(3)[i] for i, axis in enumerate("XYZ")}
+        derived = {line_id: (first, second)
+                   for line_id, first, second in derived_lines}
+        effective_edges = [
+            [key for key in edges
+             if (not hard_plane or key not in derived
+                 or not set(derived[key]) <= set(members))]
+            for _axis, members, edges in groups
+        ]
         return cls([
-            (axes.get(axis), [points[key] for key in members], [lines[key] for key in edges])
-            for axis, members, edges in groups],
-            [[lines[key] for key in edges if key in known]
-             for _axis, _members, edges in groups],
+            (axes.get(axis), [points[key] for key in members],
+             [lines[key] for key in filtered])
+            for (axis, members, _edges), filtered in zip(groups, effective_edges)],
+            [[lines[key] for key in filtered if key in known]
+             for filtered in effective_edges],
             {lines[key]: np.asarray(value, float) for key, value in
              (known_line_positions or {}).items() if key in lines},
             [(lines[left], lines[right] if right in lines else
               anchor_rotation @ WORLD_AXIS_DIRECTIONS[right]) for left, right in pairs],
-            plane_spring, baseline_world, hard_plane)
+            plane_spring, baseline_world, hard_plane,
+            {lines[line_id]: (points[first], points[second])
+             for line_id, first, second in derived_lines})
 
     @property
     def active(self):
@@ -93,7 +117,8 @@ class LineFocalConstraints:
 
     @property
     def point_indices(self):
-        return {i for _normal, members, _lines in self.groups for i in members}
+        return ({i for _normal, members, _lines in self.groups for i in members} |
+                {i for pair in self.derived_endpoints.values() for i in pair})
 
     def _plane(self, points, geometry, normal, members, support_lines):
         locations = [points[member] for member in members]
@@ -115,7 +140,7 @@ class LineFocalConstraints:
         for (normal, members, lines), support_lines in zip(self.groups, self.support_line_indices):
             _origin, normal = self._plane(points, geometry, normal, members, support_lines)
             for line in lines:
-                if line not in support_lines:
+                if line not in support_lines and line not in self.derived_endpoints:
                     normals[line] = normal
         return normals
 

@@ -1633,6 +1633,7 @@ def leave_one_out_landmark_report(
     known_world: dict[str, np.ndarray] | None = None,
     line_observations: list[SyncLineObservation] | None = None,
     known_lines: dict[str, tuple[np.ndarray, np.ndarray]] | None = None,
+    derived_lines: list[tuple[str, str, str]] | None = None,
     parallel_pairs: list[tuple[str, str]] | None = None,
     top_k: int = 5,
     baseline: SyncSolveResult | None = None,
@@ -1670,6 +1671,7 @@ def leave_one_out_landmark_report(
             known_world=known_world,
             line_observations=line_observations,
             known_lines=known_lines,
+            derived_lines=derived_lines,
             parallel_pairs=parallel_pairs,
             fixed_similarities=fixed_similarities,
             lock_rotation=lock_rotation,
@@ -1751,20 +1753,24 @@ def leave_one_out_landmark_report(
             for key, value in (known_lines or {}).items()
             if key != landmark_id
         }
+        filtered_derived_lines = [item for item in derived_lines or ()
+                                  if landmark_id not in item]
+        dependent_lines = {item[0] for item in derived_lines or ()
+                           if landmark_id in item[1:]}
         filtered_parallel = [
             pair
             for pair in (parallel_pairs or [])
-            if landmark_id not in pair
+            if landmark_id not in pair and not dependent_lines.intersection(pair)
         ]
         filtered_mirror = [
             pair
             for pair in (mirror_pairs or [])
-            if landmark_id not in pair
+            if landmark_id not in pair and not dependent_lines.intersection(pair)
         ]
         filtered_planes = [
             item
             for item in (plane_groups or [])
-            if item[0] != landmark_id
+            if item[0] != landmark_id and item[0] not in dependent_lines
         ]
         without = solve_landmark_sync(
             accepted_matches,
@@ -1773,6 +1779,7 @@ def leave_one_out_landmark_report(
             known_world=filtered_known,
             line_observations=filtered_lines,
             known_lines=filtered_known_lines,
+            derived_lines=filtered_derived_lines,
             parallel_pairs=filtered_parallel,
             initial_similarities=initial_similarities,
             fixed_similarities=accepted_fixed_similarities,

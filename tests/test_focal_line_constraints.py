@@ -5,6 +5,7 @@ from unittest import TestCase
 import numpy as np
 
 from match_perspective.core.focal_line_constraints import LineFocalConstraints, validate_line_relations
+from match_perspective.core.derived_lines import derived_line_geometry
 
 
 def compile_relations(groups=(), pairs=(), *, rotation=None, hard=True):
@@ -15,6 +16,88 @@ def compile_relations(groups=(), pairs=(), *, rotation=None, hard=True):
 
 
 class FocalLineConstraintTests(TestCase):
+    def test_derived_line_relations_depend_on_endpoint_points(self):
+        points = np.array((
+            (0.0, 0.0, 0.0),
+            (0.0, 0.0, 2.0),
+            (0.0, 1.0, 0.0),
+        ))
+        constraints = LineFocalConstraints.from_inputs_with_derived(
+            ["a", "b", "support"], ["edge"],
+            plane_groups=[("support", "X", 1), ("edge", "X", 1)],
+            parallel_pairs=[("edge", "WORLD_AXIS_Z")],
+            anchor_rotation=np.eye(3), plane_spring=100.0,
+            baseline_world=1.0, hard_plane=True,
+            derived_lines=[("edge", "a", "b")],
+        )
+
+        def geometry(values):
+            first, second = values[:2]
+            direction = second - first
+            direction /= np.linalg.norm(direction)
+            return [(0.5 * (first + second), direction)]
+
+        self.assertLess(np.linalg.norm(constraints.residual(points, geometry(points))), 1e-12)
+        moved = points.copy()
+        moved[1, 0] = 0.2
+        self.assertGreater(np.linalg.norm(constraints.residual(moved, geometry(moved))), 1.0)
+        self.assertEqual(constraints.point_indices, {0, 1, 2})
+
+        soft = LineFocalConstraints.from_inputs_with_derived(
+            ["a", "b", "support"], ["edge"],
+            plane_groups=[("a", "X", 1), ("b", "X", 1),
+                          ("support", "X", 1), ("edge", "X", 1)],
+            parallel_pairs=[], anchor_rotation=np.eye(3), plane_spring=10.0,
+            baseline_world=1.0, hard_plane=False,
+            derived_lines=[("edge", "a", "b")],
+        )
+        tilted = points.copy()
+        tilted[1, 0] = 0.2
+        self.assertGreater(np.linalg.norm(soft.residual(tilted, geometry(tilted))), 1.0)
+
+    def test_parallel_to_derived_or_drawn_line_keeps_endpoint_dependencies(self):
+        points = {"a": np.array((0., 0., 0.)), "b": np.array((0., 0., 2.)),
+                  "c": np.array((1., 0., 2.)), "d": np.array((1., 0., 0.))}
+        definitions = [("first", "a", "b"), ("second", "c", "d")]
+        model = LineFocalConstraints.from_inputs_with_derived(
+            list(points), ["first", "second", "drawn"], plane_groups=[],
+            parallel_pairs=[("first", "second"), ("first", "drawn")],
+            anchor_rotation=np.eye(3), plane_spring=100., baseline_world=1.,
+            hard_plane=True, derived_lines=definitions)
+
+        def residual(values):
+            _, geometry = derived_line_geometry(values, definitions)
+            return model.residual(np.asarray(list(values.values())), [
+                geometry["first"], geometry["second"],
+                (np.array((4., 5., 6.)), np.array((0., 0., 1.)))])
+
+        np.testing.assert_allclose(residual(points), 0., atol=1e-12)
+        self.assertEqual(model.point_indices, {0, 1, 2, 3})
+        for endpoint in points:
+            changed = {key: value.copy() for key, value in points.items()}
+            changed[endpoint][0] += .2
+            self.assertGreater(np.linalg.norm(residual(changed)), 1.)
+
+    def test_derived_free_plane_does_not_project_line_away_from_endpoints(self):
+        points = {"a": np.array((.2, .3, 1.)), "b": np.array((.8, .3, 1.)),
+                  "s0": np.array((0., 0., 1.)), "s1": np.array((1., 0., 1.)),
+                  "s2": np.array((0., 1., 1.))}
+        definitions = [("edge", "a", "b")]
+        model = LineFocalConstraints.from_inputs_with_derived(
+            list(points), ["edge"], parallel_pairs=[],
+            plane_groups=[(key, "FREE", 1) for key in ("s0", "s1", "s2", "edge")],
+            anchor_rotation=np.eye(3), plane_spring=100., baseline_world=1.,
+            hard_plane=True, derived_lines=definitions)
+        _, geometry = derived_line_geometry(points, definitions)
+        np.testing.assert_allclose(model.residual(np.asarray(list(points.values())),
+                                                 [geometry["edge"]]), 0., atol=1e-12)
+        points["b"][2] += .2
+        _, geometry = derived_line_geometry(points, definitions)
+        values = np.asarray(list(points.values()))
+        self.assertGreater(np.linalg.norm(model.residual(values, [geometry["edge"]])), 1.)
+        self.assertEqual(model.hard_direction_normals(values, [geometry["edge"]]), {})
+        self.assertGreater(model.world_gaps(values, [geometry["edge"]])[0], .09)
+
     def test_axis_plane_checks_position_and_direction_separately(self):
         model = compile_relations([('a', 'Z', 1), ('l', 'Z', 1)])
         points = np.zeros((3, 3))

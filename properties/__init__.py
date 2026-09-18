@@ -51,6 +51,11 @@ LANDMARK_KIND_ITEMS = (
     ("LINE", "Line", "Correspond the same 3D edge as a 2D segment in each still"),
 )
 
+LINE_SOURCE_ITEMS = (
+    ("DRAWN", "Drawn", "Draw this line independently in each still"),
+    ("FROM_POINTS", "From Points", "Use the exact 3D line through two point landmarks"),
+)
+
 WORLD_AXIS_PARALLEL_ITEMS = (
     ("WORLD_AXIS_X", "X Axis", "Parallel to the shared-world X axis"),
     ("WORLD_AXIS_Y", "Y Axis", "Parallel to the shared-world Y axis"),
@@ -111,8 +116,10 @@ _PARALLEL_TO_STATIC = (
     ("NONE", "None", "No parallel direction constraint"),
     *WORLD_AXIS_PARALLEL_ITEMS,
 )
+_LINE_POINT_NONE = (("NONE", "None", "Choose a point landmark", 0, 0),)
 _MIRROR_OF_ITEMS: dict[tuple, tuple] = {}
 _MIRROR_LANDMARK_ITEMS: dict[tuple, tuple] = {}
+_LINE_POINT_ITEMS: dict[tuple, tuple] = {}
 _PARALLEL_TO_ITEMS: dict[tuple, tuple] = {}
 _ACTIVE_MATCH_ITEMS: dict[tuple[tuple[str, str], ...], tuple] = {}
 _ANCHOR_MATCH_ITEMS: dict[tuple[tuple[str, str], ...], tuple] = {}
@@ -470,6 +477,65 @@ def _parallel_to_items(self, context):
     )
     _PARALLEL_TO_ITEMS[key] = packed
     return packed
+
+
+def _line_point_items(self, context):
+    """Stable point-landmark IDs for From Points endpoint selectors."""
+    if context is None:
+        return _LINE_POINT_NONE
+    space = workspace(context)
+    key = (_sync_ui_generation, space.as_pointer(), self.item_id)
+    cached = _LINE_POINT_ITEMS.get(key)
+    if cached is not None:
+        return cached
+    entries = [
+        (item.item_id, item.name or item.item_id[:8], "Line endpoint point")
+        for item in landmark_enum_candidates(space)
+        if item.kind == "POINT" and item.item_id
+    ]
+    present = {item[0] for item in entries}
+    for stored in (str(getattr(self, "line_point_a_id", "NONE") or "NONE"),
+                   str(getattr(self, "line_point_b_id", "NONE") or "NONE")):
+        if stored not in {"", "NONE"} and stored not in present:
+            entries.append((stored, f"Missing ({stored[:8]})",
+                            "Referenced point landmark is missing or is no longer a Point"))
+            present.add(stored)
+    packed = _LINE_POINT_NONE + _pack_mirror_enum_items(tuple(entries))
+    _LINE_POINT_ITEMS[key] = packed
+    return packed
+
+
+def _get_line_point(self, field: str) -> int:
+    stored = str(getattr(self, field, "NONE") or "NONE")
+    for item in _line_point_items(self, bpy.context):
+        if item[0] == stored:
+            return item[-1]
+    return _mirror_enum_number(stored)
+
+
+def _set_line_point(self, field: str, value: int) -> None:
+    identifier = "NONE"
+    for item in _line_point_items(self, bpy.context):
+        if item[-1] == value:
+            identifier = item[0]
+            break
+    setattr(self, field, identifier)
+
+
+def _get_line_point_a(self):
+    return _get_line_point(self, "line_point_a_id")
+
+
+def _set_line_point_a(self, value):
+    _set_line_point(self, "line_point_a_id", value)
+
+
+def _get_line_point_b(self):
+    return _get_line_point(self, "line_point_b_id")
+
+
+def _set_line_point_b(self, value):
+    _set_line_point(self, "line_point_b_id", value)
 
 
 def _get_mirror_of(self):
@@ -1011,6 +1077,31 @@ class PMLandmark(bpy.types.PropertyGroup):
         default="POINT",
         update=_update_landmark_kind,
     )
+    line_source: bpy.props.EnumProperty(
+        name="Source",
+        description="Draw the line in stills or derive it from two point landmarks",
+        items=LINE_SOURCE_ITEMS,
+        default="DRAWN",
+        update=_touch_sync_ui,
+    )
+    line_point_a: bpy.props.EnumProperty(
+        name="Point A",
+        description="First point landmark defining this line",
+        items=_line_point_items,
+        get=_get_line_point_a,
+        set=_set_line_point_a,
+    )
+    line_point_b: bpy.props.EnumProperty(
+        name="Point B",
+        description="Second point landmark defining this line",
+        items=_line_point_items,
+        get=_get_line_point_b,
+        set=_set_line_point_b,
+    )
+    line_point_a_id: bpy.props.StringProperty(
+        default="NONE", options={"HIDDEN"}, update=_touch_sync_ui)
+    line_point_b_id: bpy.props.StringProperty(
+        default="NONE", options={"HIDDEN"}, update=_touch_sync_ui)
     on_ground: bpy.props.BoolProperty(
         name="On Ground",
         description=(

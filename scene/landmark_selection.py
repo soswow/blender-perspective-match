@@ -30,6 +30,11 @@ def _landmark_index_for_single_object(space, obj: Any) -> int:
                 return index
         return -1
     for index, landmark in enumerate(space.landmarks):
+        if (
+            getattr(landmark, "kind", "POINT") == "LINE"
+            and getattr(landmark, "line_source", "DRAWN") == "FROM_POINTS"
+        ):
+            continue
         if landmark.known_object == obj or landmark.known_object_b == obj:
             return index
     return -1

@@ -51,21 +51,23 @@ class CommonLeaveOneOutOutcome:
 def _omit_landmark(request: SyncSolveRequest, landmark_id: str) -> tuple[SyncSolveRequest, list[str]]:
     """Remove one landmark and its direct model relations without mutating input."""
     removed: list[str] = []
+    dependent_lines = {item[0] for item in request.derived_lines or ()
+                       if landmark_id in item[1:]}
     mirror_pairs = []
     for left, right in request.mirror_pairs or ():
-        if landmark_id in (left, right):
+        if landmark_id in (left, right) or dependent_lines & {left, right}:
             removed.append(f"mirror:{left}:{right}")
         else:
             mirror_pairs.append((left, right))
     plane_groups = []
     for member, axis, group in request.plane_groups or ():
-        if member == landmark_id:
+        if member == landmark_id or member in dependent_lines:
             removed.append(f"plane:{axis}:{group}:{member}")
         else:
             plane_groups.append((member, axis, group))
     parallel_pairs = []
     for left, right in request.parallel_pairs or ():
-        if landmark_id in (left, right):
+        if landmark_id in (left, right) or dependent_lines & {left, right}:
             removed.append(f"parallel:{left}:{right}")
         else:
             parallel_pairs.append((left, right))
@@ -78,6 +80,8 @@ def _omit_landmark(request: SyncSolveRequest, landmark_id: str) -> tuple[SyncSol
                      if key != landmark_id},
         known_lines={key: value for key, value in (request.known_lines or {}).items()
                      if key != landmark_id},
+        derived_lines=[item for item in request.derived_lines or ()
+                       if landmark_id not in item],
         mirror_pairs=mirror_pairs,
         mirror_landmark_id=(request.mirror_landmark_id if mirror_pairs else None),
         plane_groups=plane_groups,
@@ -99,6 +103,7 @@ def _same_support(request: SyncSolveRequest, supported: SyncSolveRequest,
         and supported.mirror_landmark_id == request.mirror_landmark_id
         and supported.plane_groups == request.plane_groups
         and supported.parallel_pairs == request.parallel_pairs
+        and supported.derived_lines == request.derived_lines
         and not coverage.get("skipped_camera_ids")
         and not coverage.get("skipped_point_ids")
         and not coverage.get("skipped_line_ids")

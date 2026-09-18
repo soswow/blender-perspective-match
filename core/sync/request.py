@@ -22,6 +22,7 @@ class SyncSolveRequest:
     known_world: dict[str, np.ndarray] | None = None
     line_observations: list[SyncLineObservation] | None = None
     known_lines: dict[str, tuple[np.ndarray, np.ndarray]] | None = None
+    derived_lines: list[tuple[str, str, str]] | None = None
     parallel_pairs: list[tuple[str, str]] | None = None
     initial_similarities: dict[str, SimilarityTransform] | None = None
     fixed_similarities: dict[str, SimilarityTransform] | None = None
@@ -87,14 +88,14 @@ class SyncSolveRequest:
     def to_record(self) -> dict:
         """Copy inputs into JSON values, preserving order and explicit defaults."""
         inputs = self._inputs(include_seed=True)
-        return {"format": "perspective-match-sync-request", "version": 5,
+        return {"format": "perspective-match-sync-request", "version": 6,
                 "inputs": inputs, "sha256": request_fingerprint(inputs)}
 
     @classmethod
     def from_record(cls, record: dict) -> SyncSolveRequest:
         """Decode a complete snapshot; reject missing fields and unknown versions."""
         version = record.get("version")
-        if record.get("format") != "perspective-match-sync-request" or type(version) is not int or version not in {1, 2, 3, 4, 5}:
+        if record.get("format") != "perspective-match-sync-request" or type(version) is not int or version not in {1, 2, 3, 4, 5, 6}:
             raise ValueError("Unsupported Sync request format/version")
         inputs = record["inputs"]
         if record.get("sha256") != request_fingerprint(inputs):
@@ -117,6 +118,11 @@ class SyncSolveRequest:
             if "initial_solution" in values:
                 raise ValueError("Solution seed requires Sync request version 5")
             values["initial_solution"] = None
+        if version in {1, 2, 3, 4, 5}:
+            if values.get("derived_lines") is not None:
+                raise ValueError("From Points lines require Sync request version 6")
+            values.pop("derived_lines", None)
+            values["derived_lines"] = None
         _check_fields(values, SyncSolveRequest)
         if values["mirror_landmark_id"] is not None and (
             not isinstance(values["mirror_landmark_id"], str)
@@ -168,6 +174,10 @@ class SyncSolveRequest:
                 if any(len(pair) != 2 or not all(isinstance(value, str) for value in pair) for pair in inputs[key]):
                     raise ValueError(f"Invalid {key}")
                 values[key] = [tuple(pair) for pair in inputs[key]]
+        if values["derived_lines"] is not None:
+            from ..derived_lines import normalize_derived_lines
+
+            values["derived_lines"] = normalize_derived_lines(values["derived_lines"])
         if inputs["mirror_plane"] is not None:
             values["mirror_plane"] = tuple(_array(inputs["mirror_plane"], (2, 3)))
         if values["plane_groups"] is not None:

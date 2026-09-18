@@ -171,11 +171,14 @@ def main(argv: list[str]) -> int:
     build_t0 = time.perf_counter()
     prep = None
     if args.no_solve:
-        matches, observations, known_world, line_observations, known_lines, parallel = scene.build_sync_problem(bpy.context)
+        (matches, observations, known_world, line_observations, known_lines,
+         derived_lines, parallel) = scene.build_sync_problem(bpy.context)
     else:
         prep = scene.prepare_diagnose_sync(bpy.context)
         matches, observations, known_world = prep.matches, prep.observations, prep.known_world
-        line_observations, known_lines, parallel = prep.line_observations, prep.known_lines, prep.parallel_pairs
+        line_observations, known_lines, derived_lines, parallel = (
+            prep.line_observations, prep.known_lines, prep.derived_lines,
+            prep.parallel_pairs)
         log("prepared_request_sha256=" + prep.to_record()["sha256"])
         log(f"locks rotation={prep.lock_rotation} translation={prep.lock_translation} "
             f"fixed={sorted(prep.fixed_similarities or {})}")
@@ -193,7 +196,8 @@ def main(argv: list[str]) -> int:
     log(
         f"matches={len(matches)} observations={len(observations)} "
         f"known3d={len(known_world)} lines={len(line_observations)} "
-        f"known_lines={len(known_lines)} parallel={len(parallel)}"
+        f"known_lines={len(known_lines)} derived_lines={len(derived_lines)} "
+        f"parallel={len(parallel)}"
     )
 
     name_by_id = {landmark.item_id: landmark.name for landmark in space.landmarks}

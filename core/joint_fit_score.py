@@ -7,6 +7,7 @@ from dataclasses import dataclass, field, replace
 import numpy as np
 
 from . import geometry
+from .derived_lines import derived_line_geometry, validate_derived_lines
 from .focal_constraints import PointFocalConstraints
 from .focal_line_constraints import (LineFocalConstraints,
                                      LINE_RELATION_DIRECTION_HARD_SINE,
@@ -60,8 +61,13 @@ def supported_joint_request(request: SyncSolveRequest,
         included_cameras.add(request.anchor_id)
     included_points = {item.landmark_id for item in point_observations} | \
         set(request.known_world or {})
+    included_derived = [
+        tuple(item) for item in request.derived_lines or ()
+        if item[1] in included_points and item[2] in included_points
+    ]
     included_lines = {item.landmark_id for item in line_observations} | {
         key for key in request.known_lines or () if key in line_geometry}
+    included_lines.update(item[0] for item in included_derived)
     included_geometry = included_points | included_lines
     skipped_relations: list[str] = []
     plane_members: dict[tuple[str, int], list[tuple[str, str, int]]] = {}
@@ -102,8 +108,9 @@ def supported_joint_request(request: SyncSolveRequest,
                                      included_cameras),
         "skipped_point_ids": sorted({item.landmark_id for item in request.observations} -
                                     included_points),
-        "skipped_line_ids": sorted({item.landmark_id for item in request.line_observations or ()} -
-                                   included_lines),
+        "skipped_line_ids": sorted(
+            ({item.landmark_id for item in request.line_observations or ()} |
+             {item[0] for item in request.derived_lines or ()}) - included_lines),
         "skipped_relation_ids": sorted(set(skipped_relations)),
     }
     updates = dict(
@@ -114,6 +121,7 @@ def supported_joint_request(request: SyncSolveRequest,
                      if key in included_points},
         known_lines={key: value for key, value in (request.known_lines or {}).items()
                      if key in included_lines},
+        derived_lines=included_derived,
         plane_groups=plane_groups,
         mirror_pairs=mirror_pairs,
         mirror_landmark_id=mirror_reference,
@@ -281,8 +289,14 @@ class JointFitScorer:
             return JointFitScore(reason="One or more cameras have no supported image evidence")
         point_ids = sorted({item.landmark_id for item in self.point_observations} |
                            set(request.known_world or {}))
-        line_ids = sorted({item.landmark_id for item in request.line_observations or ()} |
+        drawn_line_ids = ({item.landmark_id for item in request.line_observations or ()} |
                           set(request.known_lines or {}))
+        try:
+            derived = validate_derived_lines(
+                request.derived_lines, point_ids, other_line_ids=drawn_line_ids)
+        except (ValueError, TypeError) as exc:
+            return JointFitScore(reason=str(exc))
+        line_ids = sorted(drawn_line_ids | {item[0] for item in derived})
         if set(point_ids) & set(line_ids):
             return JointFitScore(reason="A landmark is both a point and a line")
         try:
@@ -321,12 +335,17 @@ class JointFitScorer:
                                       for key in point_ids], float).reshape(-1, 3)
             lines_world = {}
             for key in line_ids:
+                if key in {item[0] for item in derived}:
+                    continue
                 if key not in result.line_segments:
                     return JointFitScore(reason=f"Line {key} has no fitted geometry")
                 first, second = [np.asarray(end, float) for end in result.line_segments[key]]
                 direction = second - first
                 direction /= np.linalg.norm(direction)
                 lines_world[key] = (0.5 * (first + second), direction)
+            _derived_segments, derived_world = derived_line_geometry(
+                result.landmarks, derived)
+            lines_world.update(derived_world)
             line_chart = [(anchor_r @ (lines_world[key][0] - anchor_c) / baseline,
                            anchor_r @ lines_world[key][1]) for key in line_ids]
             point_set, line_set = set(point_ids), set(line_ids)
@@ -358,12 +377,13 @@ class JointFitScorer:
                 mirror_slack=0.0 if request.mirror_slack is None else request.mirror_slack,
                 mirror_landmark_id=request.mirror_landmark_id,
                 extra_mirror_pairs=bool(line_pairs))
-            line_rel = LineFocalConstraints.from_inputs(
+            line_rel = LineFocalConstraints.from_inputs_with_derived(
                 point_ids, line_ids, plane_groups=plane_groups,
                 parallel_pairs=request.parallel_pairs, anchor_rotation=anchor_r,
                 plane_spring=point_rel.plane_spring, baseline_world=baseline,
                 hard_plane=point_rel.hard_plane,
                 known_line_ids=set(request.known_lines or {}),
+                derived_lines=derived,
                 known_line_positions={key: anchor_r @ (
                     0.5 * (np.asarray(segment[0]) + np.asarray(segment[1])) -
                     anchor_c) / baseline for key, segment in

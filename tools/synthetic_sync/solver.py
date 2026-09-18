@@ -55,10 +55,12 @@ def solver_arguments(request: dict) -> dict:
     )
     for key in ("anchor_id", "lock_rotation", "lock_translation", "ground_slack", "known_3d_slack",
                 "mirror_pairs", "mirror_plane", "mirror_slack", "mirror_landmark_id", "parallel_pairs", "plane_groups",
-                "plane_slack"):
+                "plane_slack", "derived_lines"):
         arguments[key] = deepcopy(request[key]) if key in request else (None if key != "plane_groups" else [])
     for key in ("mirror_pairs", "parallel_pairs"):
-        arguments[key] = [tuple(pair) for pair in arguments[key]]
+        arguments[key] = [tuple(pair) for pair in (arguments[key] or [])]
+    if arguments["derived_lines"] is not None:
+        arguments["derived_lines"] = [tuple(item) for item in arguments["derived_lines"]]
     if arguments["plane_groups"]:
         arguments["plane_groups"] = [tuple(item) for item in arguments["plane_groups"]]
     # Synthetic cameras default to the UI's Solve role. Forward the same explicit

@@ -2889,9 +2889,14 @@ def _bind_landmark_helper(obj: bpy.types.Object, landmark) -> None:
 
 def landmark_viewport_object(landmark) -> bpy.types.Object | None:
     """Known 3D object for a landmark, else its solved PM helper when present."""
-    known_object = landmark.known_object
-    if known_object is not None and known_object.name in bpy.data.objects:
-        return known_object
+    from_points = (
+        str(getattr(landmark, "kind", "POINT")) == "LINE"
+        and str(getattr(landmark, "line_source", "DRAWN")) == "FROM_POINTS"
+    )
+    if not from_points:
+        known_object = landmark.known_object
+        if known_object is not None and known_object.name in bpy.data.objects:
+            return known_object
     base_name = safe_identifier(landmark.name) or landmark.item_id[:8]
     helper = bpy.data.objects.get(f"PM_LM_{base_name}")
     if helper is not None and helper.name in bpy.data.objects:
@@ -3064,6 +3069,11 @@ def landmark_rmse_px_in_match(landmark, root: bpy.types.Object | None) -> float 
     """This still's overlay miss for a landmark, or None when it cannot be scored."""
     from ..core.sync.projection import observation_reprojection_rmse_px
 
+    if (
+        str(getattr(landmark, "kind", "POINT")) == "LINE"
+        and str(getattr(landmark, "line_source", "DRAWN")) == "FROM_POINTS"
+    ):
+        return None
     if root is None or not getattr(landmark, "has_position", False):
         return None
     observation = observation_for_match(landmark, root)
@@ -3112,6 +3122,11 @@ def project_known_object_into_match(landmark, root: bpy.types.Object) -> bool:
     """
     from ..core import sync as sync_module
 
+    if (
+        str(getattr(landmark, "kind", "POINT")) == "LINE"
+        and str(getattr(landmark, "line_source", "DRAWN")) == "FROM_POINTS"
+    ):
+        return False
     known_object = landmark.known_object
     if known_object is None or known_object.name not in bpy.data.objects:
         return False
@@ -3213,6 +3228,8 @@ def set_landmark_line_observation(
         raise ValueError("Select a landmark first")
     if landmark.kind != "LINE":
         raise ValueError("Active landmark is not a Line")
+    if str(getattr(landmark, "line_source", "DRAWN")) == "FROM_POINTS":
+        raise ValueError("From Points lines are edited through their point landmarks")
     if root is None:
         raise ValueError("Activate a match camera first")
     observation = observation_for_match(landmark, root)
@@ -3234,6 +3251,9 @@ def clear_landmark_observation_for_active(context: bpy.types.Context) -> bool:
     landmark = active_landmark(context)
     root = properties.active_root(context)
     if landmark is None or root is None:
+        return False
+    if (landmark.kind == "LINE" and
+            str(getattr(landmark, "line_source", "DRAWN")) == "FROM_POINTS"):
         return False
     for index, observation in enumerate(list(landmark.observations)):
         if observation.match_root == root:
@@ -3271,6 +3291,7 @@ def build_sync_problem(context: bpy.types.Context):
     line_observations = []
     known_world: dict[str, object] = {}
     known_lines: dict[str, tuple] = {}
+    derived_lines: list[tuple[str, str, str]] = []
     parallel_pairs: list[tuple[str, str]] = []
     seen_pairs: set[tuple[str, str]] = set()
     space = properties.workspace(context)
@@ -3281,6 +3302,22 @@ def build_sync_problem(context: bpy.types.Context):
         known_object = landmark.known_object
         known_object_b = getattr(landmark, "known_object_b", None)
         if landmark.kind == "LINE":
+            from_points = str(getattr(landmark, "line_source", "DRAWN") or "DRAWN") == "FROM_POINTS"
+            if from_points:
+                endpoint_a = str(getattr(landmark, "line_point_a", "NONE") or "NONE")
+                endpoint_b = str(getattr(landmark, "line_point_b", "NONE") or "NONE")
+                enabled_points = {
+                    item.item_id for item in space.landmarks
+                    if item.kind == "POINT" and item.item_id
+                    and getattr(item, "use_in_sync", True)
+                }
+                if endpoint_a == "NONE" or endpoint_b == "NONE":
+                    raise ValueError(f"From Points line '{landmark.name}' needs Point A and Point B")
+                if endpoint_a == endpoint_b:
+                    raise ValueError(f"From Points line '{landmark.name}' needs two different points")
+                if endpoint_a not in enabled_points or endpoint_b not in enabled_points:
+                    raise ValueError(f"From Points line '{landmark.name}' references a missing or disabled point")
+                derived_lines.append((landmark.item_id, endpoint_a, endpoint_b))
             other_id = getattr(landmark, "parallel_to", "NONE")
             if other_id and other_id != "NONE" and other_id != landmark.item_id:
                 pair = tuple(sorted((landmark.item_id, other_id)))
@@ -3300,7 +3337,7 @@ def build_sync_problem(context: bpy.types.Context):
                     if is_world_axis or target is not None:
                         seen_pairs.add(pair)
                         parallel_pairs.append(pair)
-            if (
+            if (not from_points and
                 known_object is not None
                 and known_object.name in bpy.data.objects
                 and known_object_b is not None
@@ -3321,6 +3358,9 @@ def build_sync_problem(context: bpy.types.Context):
                 float(location.z),
             )
         for observation in landmark.observations:
+            if (landmark.kind == "LINE" and
+                    str(getattr(landmark, "line_source", "DRAWN") or "DRAWN") == "FROM_POINTS"):
+                continue
             root = observation.match_root
             if (
                 not observation.is_set
@@ -3344,7 +3384,7 @@ def build_sync_problem(context: bpy.types.Context):
                         ),
                     )
                 )
-            else:
+            elif landmark.kind == "POINT":
                 observations.append(
                     sync_module.SyncObservation(
                         match_id=root.name,
@@ -3369,6 +3409,7 @@ def build_sync_problem(context: bpy.types.Context):
         known_world,
         line_observations,
         known_lines,
+        derived_lines,
         parallel_pairs,
     )
 
@@ -3381,6 +3422,8 @@ def collect_sync_mirror_pairs(context: bpy.types.Context) -> list[tuple[str, str
         for landmark in space.landmarks
         if getattr(landmark, "use_in_sync", True)
         and landmark.kind in {"POINT", "LINE"}
+        and not (landmark.kind == "LINE" and
+                 str(getattr(landmark, "line_source", "DRAWN")) == "FROM_POINTS")
         and landmark.item_id
     }
     seen: set[tuple[str, str]] = set()
@@ -3491,7 +3534,7 @@ def ensure_ground_frame_from_landmarks(
     if not _session_has_manual_k(anchor_session):
         return ""
 
-    matches, observations, _known, _line_obs, _known_lines, _parallel = (
+    matches, observations, _known, _line_obs, _known_lines, _derived, _parallel = (
         build_sync_problem(context)
     )
     root_by_name = {
@@ -3631,6 +3674,11 @@ def known_anchor_pick_warnings(context: bpy.types.Context) -> list[str]:
     warnings: list[str] = []
     for landmark in properties.workspace(context).landmarks:
         if not getattr(landmark, "use_in_sync", True):
+            continue
+        if (
+            str(getattr(landmark, "kind", "POINT")) == "LINE"
+            and str(getattr(landmark, "line_source", "DRAWN")) == "FROM_POINTS"
+        ):
             continue
         if landmark.known_object is None:
             continue
@@ -3790,10 +3838,11 @@ def collect_sync_request(context: bpy.types.Context) -> SyncSolveRequest:
     anchor = properties.anchor_root(context)
     if anchor is None:
         raise ValueError("Choose an anchor match first")
-    matches, observations, known_world, line_observations, known_lines, parallel_pairs = build_sync_problem(context)
+    matches, observations, known_world, line_observations, known_lines, derived_lines, parallel_pairs = build_sync_problem(context)
     request = SyncSolveRequest(
         matches=matches, observations=observations, known_world=known_world,
         line_observations=line_observations, known_lines=known_lines,
+        derived_lines=derived_lines,
         parallel_pairs=parallel_pairs, anchor_id=anchor.name,
         **collect_sync_solve_kwargs(context),
     )
@@ -4306,8 +4355,16 @@ def _free_mirror_origin_offset(context: bpy.types.Context, result, anchor):
         return None
     if any(
         bool(getattr(landmark, "on_ground", False))
-        or getattr(landmark, "known_object", None) is not None
-        or getattr(landmark, "known_object_b", None) is not None
+        or (
+            not (
+                str(getattr(landmark, "kind", "POINT")) == "LINE"
+                and str(getattr(landmark, "line_source", "DRAWN")) == "FROM_POINTS"
+            )
+            and (
+                getattr(landmark, "known_object", None) is not None
+                or getattr(landmark, "known_object_b", None) is not None
+            )
+        )
         for landmark in space.landmarks
     ):
         return None
@@ -4370,6 +4427,7 @@ class LensRefinePrep:
     known_world: dict
     line_observations: list
     known_lines: dict
+    derived_lines: list
     parallel_pairs: list
     anchor_id: str
     fx_span: float
@@ -4459,7 +4517,7 @@ def collect_lens_refine_inputs(context: bpy.types.Context) -> LensRefinePrep:
         if uses_adjusted_camera(root.pm_session)
     }
 
-    matches_pack, observations, known_world, line_observations, known_lines, parallel_pairs = (
+    matches_pack, observations, known_world, line_observations, known_lines, derived_lines, parallel_pairs = (
         build_sync_problem(context)
     )
     if adjusted_ids:
@@ -4546,6 +4604,7 @@ def collect_lens_refine_inputs(context: bpy.types.Context) -> LensRefinePrep:
         known_world=known_world,
         line_observations=line_observations,
         known_lines=known_lines,
+        derived_lines=derived_lines,
         parallel_pairs=parallel_pairs,
         anchor_id=anchor.name,
         fx_span=max(float(

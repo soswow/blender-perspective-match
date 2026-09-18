@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Estimate FOV from Points supports up to 32 cameras in one joint fit; Assumed Pick Error explains its role in noise checks and FOV uncertainty.
 
 ### Added
+- Line landmarks can use two existing points, with dashed, non-editable segments and plane or parallel constraints that adjust their endpoints.
 - Independent FOV fitting supports Known 3D points and lines, Ground, camera roles and locks, and existing distortion and pixel-aspect calibration.
 - Use Best Fit can apply improved independent FOV results as provisional cameras and landmarks when calibration cannot be validated.
 - Independent FOV fitting supports line Is in Plane with picked point members, and Is Parallel To another line or a world axis, including combinations with line mirrors.

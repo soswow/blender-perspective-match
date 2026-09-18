@@ -15,6 +15,8 @@ import time
 import numpy as np
 
 from . import geometry as core
+from .derived_lines import (MIN_DERIVED_LINE_SPAN, derived_line_geometry,
+                            validate_derived_lines)
 from .focal_constraints import PointFocalConstraints
 from .focal_lines import LineChart, canonical_line_point, endpoint_distances
 from .focal_line_constraints import LineFocalConstraints, LINE_RELATION_DIRECTION_HARD_SINE
@@ -97,12 +99,19 @@ def _estimated_dense_jacobian_bytes(parameter_count: int, point_picks: int,
 
 def _redundant_hard_line_columns(line_constraints: LineFocalConstraints,
                                  points: np.ndarray, line_charts: list[LineChart],
-                                 line_offset: int) -> set[int]:
+                                 line_offset: int,
+                                 chart_line_indices: list[int] | None = None) -> set[int]:
     """Remove one angular chart coordinate per fitted hard-plane line."""
-    geometry = [chart.decode(chart.initial) for chart in line_charts]
+    chart_line_indices = chart_line_indices or list(range(len(line_charts)))
+    geometry = [None] * (max(chart_line_indices, default=-1) + 1)
+    for chart, line in zip(line_charts, chart_line_indices):
+        geometry[line] = chart.decode(chart.initial)
+    chart_by_line = {line: chart for chart, line in enumerate(chart_line_indices)}
     return {
-        line_offset + 4 * line + int(np.argmax(np.abs(line_charts[line].seed_basis @ normal)))
+        line_offset + 4 * chart_by_line[line] + int(np.argmax(
+            np.abs(line_charts[chart_by_line[line]].seed_basis @ normal)))
         for line, normal in line_constraints.hard_direction_normals(points, geometry).items()
+        if line in chart_by_line
     }
 
 
@@ -157,7 +166,7 @@ def _line_image_fd_jacobian(
     line_offset: int, lci: np.ndarray, lli: np.ndarray, luv: np.ndarray,
     line_weights: np.ndarray, pp: np.ndarray, focal: np.ndarray,
     rotations: list[np.ndarray], centers: np.ndarray,
-    geometry: list[tuple[np.ndarray, np.ndarray]],
+    geometry: list[tuple[np.ndarray, np.ndarray]], chart_line_indices=None,
     line_distance=None, geometry_at=None,
 ) -> np.ndarray:
     """Differentiate each stroke only for its camera and line coordinates.
@@ -188,13 +197,14 @@ def _line_image_fd_jacobian(
                                   shifted_focal, camera, luv[stroke]))
                 rows = slice(2 * stroke, 2 * stroke + 2)
                 jac[rows, column] = (changed - baseline[rows]) / step
-    for line, chart in enumerate(line_charts):
+    chart_line_indices = chart_line_indices or list(range(len(line_charts)))
+    for chart_index, (line, chart) in enumerate(zip(chart_line_indices, line_charts)):
         strokes = line_strokes[line]
         for component in range(4):
-            column = line_offset + 4 * line + component
+            column = line_offset + 4 * chart_index + component
             step = 1e-6 * max(1.0, abs(params[column]))
             if geometry_at is None:
-                shifted = params[line_offset + 4 * line:line_offset + 4 * line + 4].copy()
+                shifted = params[line_offset + 4 * chart_index:line_offset + 4 * chart_index + 4].copy()
                 shifted[component] += step
                 point, direction = chart.decode(shifted)
             else:
@@ -526,6 +536,7 @@ def fit_independent_focals(
     known_3d_slack: float = 0.0,
     ground_slack: float = 0.0,
     known_lines: dict[str, tuple[np.ndarray, np.ndarray]] | None = None,
+    derived_lines: list[tuple[str, str, str]] | None = None,
     lock_rotation: bool = False,
     lock_translation: bool = False,
     share_lens: bool = False,
@@ -599,8 +610,16 @@ def fit_independent_focals(
         return refuse("Joint fit needs point picks or line strokes")
     if any(not isinstance(item, SyncLineObservation) for item in line_observations):
         return refuse("Line landmarks contain an invalid stroke")
-    line_ids = sorted({item.landmark_id for item in line_observations} |
+    drawn_line_ids = ({item.landmark_id for item in line_observations} |
                       set(known_lines or {}))
+    try:
+        derived_lines = validate_derived_lines(
+            derived_lines, point_ids, other_line_ids=drawn_line_ids)
+    except (ValueError, TypeError) as exc:
+        return refuse(str(exc))
+    derived_by_id = {line_id: (first, second)
+                     for line_id, first, second in derived_lines}
+    line_ids = sorted(drawn_line_ids | set(derived_by_id))
     if (len(line_ids) > MAX_LINES or len(line_observations) > MAX_LINE_STROKES) and not fixed_focals:
         return refuse(f"Line fit supports up to {MAX_LINES} lines and {MAX_LINE_STROKES} strokes (resource limit)")
     if set(line_ids) & set(point_ids):
@@ -729,6 +748,14 @@ def fit_independent_focals(
         return refuse("Plane relation contains an unsupported landmark")
     line_seeds = {}
     for line_id in line_ids:
+        if line_id in derived_by_id:
+            first, second = (points0[point_ids.index(key)]
+                             for key in derived_by_id[line_id])
+            seed = (0.5 * (first + second), second - first)
+            if np.linalg.norm(seed[1]) < MIN_DERIVED_LINE_SPAN:
+                return refuse("From Points line endpoints are coincident")
+            line_seeds[line_id] = seed
+            continue
         if line_id in (known_lines or {}):
             seed = tuple(np.asarray(end, dtype=float) for end in known_lines[line_id])
             seed = (0.5 * (seed[0] + seed[1]), seed[1] - seed[0])
@@ -768,7 +795,10 @@ def fit_independent_focals(
                                     householder @ direction)
     if set(line_seeds) != line_set:
         return refuse("Every free line needs two-view strokes or a reconstructed mirror partner")
-    line_charts = [LineChart(*line_seeds[key]) for key in line_ids]
+    chart_line_indices = [index for index, key in enumerate(line_ids)
+                          if key not in derived_by_id]
+    line_charts = [LineChart(*line_seeds[line_ids[index]])
+                   for index in chart_line_indices]
     try:
         reference_constraints = PointReferenceConstraints.from_inputs(
             point_ids, anchor_rotation=anchor_r, anchor_center=anchor_c,
@@ -786,11 +816,12 @@ def fit_independent_focals(
             mirror_slack=0.0 if mirror_slack is None else mirror_slack,
             mirror_landmark_id=mirror_landmark_id,
             extra_mirror_pairs=bool(line_mirrors))
-        line_constraints = LineFocalConstraints.from_inputs(
+        line_constraints = LineFocalConstraints.from_inputs_with_derived(
             point_ids, line_ids, plane_groups=plane_groups, parallel_pairs=parallel_pairs,
             anchor_rotation=anchor_r, plane_spring=constraints.plane_spring,
             baseline_world=baseline, hard_plane=constraints.hard_plane,
             known_line_ids=set(known_lines or {}),
+            derived_lines=derived_lines,
             known_line_positions={key: anchor_r @ (
                 0.5 * (np.asarray(segment[0]) + np.asarray(segment[1])) -
                 anchor_c) / baseline for key, segment in (known_lines or {}).items()})
@@ -813,12 +844,12 @@ def fit_independent_focals(
     point_offset = ncam + 5 + scale_columns + 6 * (ncam - 2)
     point_end = point_offset + 3 * npoint
     line_offset = point_end
-    line_end = line_offset + 4 * len(line_ids)
+    line_end = line_offset + 4 * len(line_charts)
     rotation_basis = ([] if (reference_constraints.active or known_lines or
                              fixed_similarities or lock_rotation or lock_translation)
                       else orientation_basis(
                           constraints, line_constraints, points0,
-                          [chart.decode(chart.initial) for chart in line_charts]))
+                          [line_seeds[key] for key in line_ids]))
     orientation_end = line_end + len(rotation_basis)
     mirror_offset_column = orientation_end if constraints.free_mirror_offset else None
     x = np.concatenate((np.zeros(ncam), _log_rodrigues(rotations0[1]),
@@ -913,10 +944,11 @@ def fit_independent_focals(
     for line_id in known_lines or {}:
         if line_id not in line_index:
             continue
-        start = line_offset + 4 * line_index[line_id]
+        start = line_offset + 4 * chart_line_indices.index(line_index[line_id])
         active[start:start + 4] = False
     for column in _redundant_hard_line_columns(
-            line_constraints, points0, line_charts, line_offset):
+            line_constraints, points0, line_charts, line_offset,
+            chart_line_indices):
         active[column] = False
     point_derivatives = [np.eye(3) for _ in point_ids]
     for point in reference_constraints.hard_xyz:
@@ -1053,8 +1085,11 @@ def fit_independent_focals(
         return None, None, params[offset + 3:offset + 6]
 
     def line_geometry(params: np.ndarray, points: np.ndarray):
-        geometry = [chart.decode(params[line_offset + 4*i:line_offset + 4*i + 4])
-                    for i, chart in enumerate(line_charts)]
+        geometry = [line_seeds[key] for key in line_ids]
+        for chart_index, (line_index_value, chart) in enumerate(
+                zip(chart_line_indices, line_charts)):
+            start = line_offset + 4 * chart_index
+            geometry[line_index_value] = chart.decode(params[start:start + 4])
         for key, segment in (known_lines or {}).items():
             index = line_index[key]
             first, second = [np.asarray(end, float) for end in segment]
@@ -1062,6 +1097,16 @@ def fit_independent_focals(
             geometry[index] = (
                 anchor_r @ (0.5 * (first + second) - anchor_c) / baseline,
                 direction / np.linalg.norm(direction))
+        for key, (first_id, second_id) in derived_by_id.items():
+            first = points[point_index[first_id]]
+            second = points[point_index[second_id]]
+            direction = second - first
+            span = float(np.linalg.norm(direction))
+            if span < MIN_DERIVED_LINE_SPAN:
+                # Keep projection finite; line_prior adds a prohibitive row.
+                direction = line_seeds[key][1]
+                span = max(float(np.linalg.norm(direction)), 1.0e-12)
+            geometry[line_index[key]] = (0.5 * (first + second), direction / span)
         if line_constraints.hard_plane and line_constraints.groups:
             rotation = frame_rotation(params)
             constrained = line_constraints.constrain_hard_directions(
@@ -1092,6 +1137,15 @@ def fit_independent_focals(
 
     def line_prior(params: np.ndarray, points: np.ndarray, geometry):
         relations = line_constraints.residual(points, geometry)
+        collapsed = any(
+            np.linalg.norm(points[point_index[second]] - points[point_index[first]])
+            < MIN_DERIVED_LINE_SPAN
+            for first, second in derived_by_id.values())
+        if derived_by_id:
+            # Trial objectives reject non-finite residuals. Keep projection
+            # evaluable above, but never let its fallback direction become a
+            # valid zero-span solution with a spuriously satisfied relation.
+            relations = np.append(relations, np.inf if collapsed else 0.0)
         if not line_mirrors:
             return relations
         normal = constraints.mirror_normal
@@ -1207,6 +1261,7 @@ def fit_independent_focals(
                 line_offset=line_offset, lci=lci, lli=lli, luv=luv,
                 line_weights=fit_line_weights, pp=pp, focal=focal,
                 rotations=rotations, centers=centers, geometry=geometry,
+                chart_line_indices=chart_line_indices,
                 line_distance=projected_line if general_projection else None,
                 geometry_at=(lambda shifted: line_geometry(shifted, points))
                 if line_constraints.hard_plane and line_constraints.groups else None)
@@ -1653,6 +1708,16 @@ def fit_independent_focals(
         geometry = line_geometry(x, points)
         match_inputs = {key: SyncMatchInput(key, result_cals[key]) for key in ids}
         for index, line_id in enumerate(line_ids):
+            if line_id in derived_by_id:
+                first_id, second_id = derived_by_id[line_id]
+                first = result_points[first_id].copy()
+                second = result_points[second_id].copy()
+                if np.linalg.norm(second - first) < MIN_DERIVED_LINE_SPAN:
+                    return refuse("From Points line endpoints became coincident",
+                                  fitted=fitted_rmse, allow_candidate=True)
+                result_lines[line_id] = (first, second)
+                result_points[line_id] = 0.5 * (first + second)
+                continue
             if line_id in (known_lines or {}):
                 result_lines[line_id] = tuple(np.asarray(end, float).copy()
                                               for end in known_lines[line_id])
@@ -1842,11 +1907,15 @@ def refine_fixed_focals(
     if request.anchor_id not in included_cameras or len(included_cameras) < 2:
         return FocalBundleOutcome(False, "Joint continuation needs an anchor and a second supported camera",
                                   support_coverage=coverage)
+    derived_ids = {item[0] for item in work_request.derived_lines or ()}
     seed_lines = {key: value for key, value in initial.line_segments.items()
                   if key in {item.landmark_id for item in work_request.line_observations or ()} |
-                  set(work_request.known_lines or {})}
+                  set(work_request.known_lines or {}) | derived_ids}
     for key, segment in (work_request.known_lines or {}).items():
         seed_lines.setdefault(key, segment)
+    derived_seed_lines, _geometry = derived_line_geometry(
+        initial.landmarks, work_request.derived_lines)
+    seed_lines.update(derived_seed_lines)
     seed_landmarks = {key: value for key, value in initial.landmarks.items()
                       if key in {item.landmark_id for item in work_request.observations} |
                       set(seed_lines) | set(work_request.known_world or {})}
@@ -1889,6 +1958,7 @@ def refine_fixed_focals(
         ground_slack=(GROUND_SLACK_DEFAULT if work_request.ground_slack is None
                       else work_request.ground_slack),
         known_lines=work_request.known_lines,
+        derived_lines=work_request.derived_lines,
         lock_rotation=work_request.lock_rotation,
         lock_translation=work_request.lock_translation,
     )

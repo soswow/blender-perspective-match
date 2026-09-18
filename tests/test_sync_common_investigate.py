@@ -9,7 +9,7 @@ from unittest import mock
 
 import numpy as np
 
-from match_perspective.core.sync.investigate import common_leave_one_out
+from match_perspective.core.sync.investigate import _omit_landmark, common_leave_one_out
 from match_perspective.core.sync.request import SyncSolveRequest
 from match_perspective.core.sync.types import (
     SimilarityTransform, SyncCancelled, SyncLineObservation,
@@ -84,6 +84,18 @@ class FakeScorer:
 
 
 class CommonInvestigationTests(unittest.TestCase):
+    def test_omitting_endpoint_removes_derived_line_relations(self):
+        request, _baseline = _case()
+        request.observations.append(SyncObservation("anchor", "endpoint_b", 16, 26))
+        request.derived_lines = [("derived", "point", "endpoint_b")]
+        request.plane_groups = [("derived", "X", 2), ("point", "Y", 3)]
+        request.parallel_pairs = [("derived", "WORLD_AXIS_Z")]
+        filtered, removed = _omit_landmark(request, "point")
+        self.assertFalse(filtered.derived_lines)
+        self.assertFalse(filtered.plane_groups)
+        self.assertFalse(filtered.parallel_pairs)
+        self.assertIn("parallel:derived:WORLD_AXIS_Z", removed)
+
     def setUp(self):
         FakeScorer.instances.clear()
 

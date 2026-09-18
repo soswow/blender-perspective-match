@@ -792,6 +792,9 @@ def _overlay_landmark_hit_index(context: bpy.types.Context, mouse: Vector) -> in
         tuple[int, str, tuple[float, float], tuple[float, float] | None]
     ] = []
     for index, landmark in enumerate(space.landmarks):
+        if (landmark.kind == "LINE" and
+                str(getattr(landmark, "line_source", "DRAWN")) == "FROM_POINTS"):
+            continue
         observation = scene.observation_for_match(landmark, root)
         if observation is None or not observation.is_set:
             continue
@@ -2303,6 +2306,8 @@ class PM_OT_interact(bpy.types.Operator):
             landmark = scene.active_landmark(bpy.context)
             name = landmark.name if landmark is not None else "(none)"
             if landmark is not None and landmark.kind == "LINE":
+                if str(getattr(landmark, "line_source", "DRAWN")) == "FROM_POINTS":
+                    return f"Edit Point A / Point B for line '{name}' · Esc exits"
                 return (
                     f"Drag line '{name}' · click another pick to select · Esc exits"
                 )
@@ -2400,6 +2405,8 @@ class PM_OT_interact(bpy.types.Operator):
         landmark = scene.active_landmark(context)
         root = properties.active_root(context)
         if landmark is None or landmark.kind != "LINE" or root is None:
+            return 0
+        if str(getattr(landmark, "line_source", "DRAWN")) == "FROM_POINTS":
             return 0
         observation = scene.observation_for_match(landmark, root)
         if observation is None or not observation.is_set:
@@ -2724,6 +2731,9 @@ class PM_OT_interact(bpy.types.Operator):
                         return {"RUNNING_MODAL"}
                     landmark = scene.active_landmark(context)
                     if landmark is not None and landmark.kind == "LINE":
+                        if str(getattr(landmark, "line_source", "DRAWN")) == "FROM_POINTS":
+                            settings.status = "From Points lines are edited through their point landmarks"
+                            return {"RUNNING_MODAL"}
                         self._begin_landmark_line_drag(
                             context, event, image_point, region
                         )
@@ -2785,7 +2795,11 @@ class PM_OT_pick_in_active_match(bpy.types.Operator):
         # match's camera view (not a free orbit or another camera).
         if not _perspective_match_sidebar_active(context):
             return False
-        if scene.active_landmark(context) is None:
+        landmark = scene.active_landmark(context)
+        if landmark is None:
+            return False
+        if (landmark.kind == "LINE" and
+                str(getattr(landmark, "line_source", "DRAWN")) == "FROM_POINTS"):
             return False
         return PM_OT_interact.poll(context) and scene.is_camera_view(context)
 
@@ -3287,6 +3301,10 @@ class PM_OT_landmark_use_selected(bpy.types.Operator):
         obj = context.active_object
         return (
             landmark is not None
+            and not (
+                landmark.kind == "LINE"
+                and str(getattr(landmark, "line_source", "DRAWN")) == "FROM_POINTS"
+            )
             and obj is not None
             and not properties.is_match_root(obj)
             and obj.type != "CAMERA"
@@ -3295,7 +3313,9 @@ class PM_OT_landmark_use_selected(bpy.types.Operator):
     def execute(self, context: bpy.types.Context) -> set[str]:
         landmark = scene.active_landmark(context)
         obj = context.active_object
-        if landmark is None or obj is None:
+        if (landmark is None or obj is None or
+                (landmark.kind == "LINE" and
+                 str(getattr(landmark, "line_source", "DRAWN")) == "FROM_POINTS")):
             return {"CANCELLED"}
         landmark.known_object = obj
         if not landmark.name or landmark.name.startswith("Landmark "):
@@ -3419,12 +3439,18 @@ class PM_OT_guess_mirror_partner(bpy.types.Operator):
         landmark = scene.active_landmark(context)
         if landmark is None or landmark.kind not in {"POINT", "LINE"}:
             return False
+        if (landmark.kind == "LINE" and
+                str(getattr(landmark, "line_source", "DRAWN")) == "FROM_POINTS"):
+            return False
         partner = _named_mirror_partner(context, landmark)
         return partner is not None and landmark.mirror_of_id != partner.item_id
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         landmark = scene.active_landmark(context)
         if landmark is None or landmark.kind not in {"POINT", "LINE"}:
+            return {"CANCELLED"}
+        if (landmark.kind == "LINE" and
+                str(getattr(landmark, "line_source", "DRAWN")) == "FROM_POINTS"):
             return {"CANCELLED"}
         partner = _named_mirror_partner(context, landmark)
         if partner is None:
@@ -3568,6 +3594,10 @@ class PM_OT_duplicate_landmark(bpy.types.Operator):
         duplicate.item_id = f"landmark-{uuid4().hex}"
         duplicate.name = duplicate_name
         duplicate.kind = source.kind
+        duplicate.line_source = str(getattr(source, "line_source", "DRAWN") or "DRAWN")
+        # A duplicate is a new relation; require deliberate endpoint selection.
+        duplicate.line_point_a = "NONE"
+        duplicate.line_point_b = "NONE"
         duplicate.on_ground = bool(source.on_ground)
         duplicate.plane_axis = str(getattr(source, "plane_axis", "NONE") or "NONE")
         duplicate.plane_group = str(getattr(source, "plane_group", "1") or "1")
@@ -3596,6 +3626,9 @@ class PM_OT_clear_landmark_observation(bpy.types.Operator):
         landmark = scene.active_landmark(context)
         root = properties.active_root(context)
         if landmark is None or root is None:
+            return False
+        if (landmark.kind == "LINE" and
+                str(getattr(landmark, "line_source", "DRAWN")) == "FROM_POINTS"):
             return False
         return scene.observation_for_match(landmark, root) is not None
 

@@ -65,6 +65,14 @@ class JointFitScoreTests(TestCase):
         self.assertFalse(missing.valid)
         self.assertIn("edge", missing.reason)
 
+    def test_malformed_from_points_definition_is_an_invalid_score(self):
+        request, initial, points, centers = _fixture()
+        request.derived_lines = [("edge", "p1", "missing")]
+        score = JointFitScorer(request, initial).score(
+            self._truth(request, initial, points, centers))
+        self.assertFalse(score.valid)
+        self.assertIn("missing point", score.reason)
+
     def test_known_line_and_aspect_distortion_are_scored(self):
         request, initial, points, centers = _fixture(
             distortion=True, known_line=True)

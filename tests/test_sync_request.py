@@ -49,7 +49,9 @@ class SyncRequestTests(unittest.TestCase):
                          set(inspect.signature(sync.leave_one_out_landmark_report).parameters) - report_runtime)
 
     def test_json_roundtrip_preserves_calibration_locks_slack_names_and_confidence(self):
-        record = self.request().to_record()
+        request = self.request()
+        request.derived_lines = [("derived", "p0", "p1")]
+        record = request.to_record()
         restored = SyncSolveRequest.from_record(json.loads(json.dumps(record, allow_nan=False)))
         self.assertEqual(record, restored.to_record())
         self.assertIsInstance(restored.matches[0].calibration.rotation_w2c, np.ndarray)
@@ -59,10 +61,18 @@ class SyncRequestTests(unittest.TestCase):
         self.assertEqual(restored.location_match_ids, {"view_0", "view_1"})
         self.assertEqual(restored.readonly_match_ids, {"view_2"})
         self.assertIsInstance(restored.location_match_ids, set)
-        self.assertEqual(restored.to_record()["version"], 5)
+        self.assertEqual(restored.to_record()["version"], 6)
         self.assertEqual(restored.mirror_landmark_id, "mirror_center")
         self.assertEqual(restored.plane_groups, [("p0", "Z", 2), ("edge", "FREE", 1)])
         self.assertEqual(restored.plane_slack, 0.07)
+        self.assertEqual(restored.derived_lines, [("derived", "p0", "p1")])
+
+    def test_endpoint_reference_changes_invalidate_evidence_hash(self):
+        request = self.request()
+        request.derived_lines = [("derived", "p0", "p1")]
+        original = request.evidence_sha256()
+        request.derived_lines = [("derived", "p0", "p2")]
+        self.assertNotEqual(original, request.evidence_sha256())
 
     def test_snapshot_and_decoded_arrays_do_not_alias_live_request(self):
         request = self.request()
@@ -122,7 +132,7 @@ class SyncRequestTests(unittest.TestCase):
         self.assertIsNone(restored.readonly_match_ids)
         self.assertIsNone(restored.plane_groups)
         self.assertIsNone(restored.plane_slack)
-        self.assertEqual(restored.to_record()["version"], 5)
+        self.assertEqual(restored.to_record()["version"], 6)
         self.assertIsNone(restored.mirror_landmark_id)
         legacy["inputs"]["lock_rotation"] = False
         with self.assertRaisesRegex(ValueError, "checksum"):
@@ -138,7 +148,7 @@ class SyncRequestTests(unittest.TestCase):
         self.assertEqual(restored.location_match_ids, {"view_0", "view_1"})
         self.assertIsNone(restored.plane_groups)
         self.assertIsNone(restored.plane_slack)
-        self.assertEqual(restored.to_record()["version"], 5)
+        self.assertEqual(restored.to_record()["version"], 6)
         self.assertIsNone(restored.mirror_landmark_id)
 
     def test_version_three_snapshot_injects_mirror_landmark_default(self) -> None:
@@ -149,7 +159,7 @@ class SyncRequestTests(unittest.TestCase):
         legacy["sha256"] = request_fingerprint(legacy["inputs"])
         restored = SyncSolveRequest.from_record(legacy)
         self.assertIsNone(restored.mirror_landmark_id)
-        self.assertEqual(restored.to_record()["version"], 5)
+        self.assertEqual(restored.to_record()["version"], 6)
         legacy["inputs"]["mirror_landmark_id"] = "point"
         legacy["sha256"] = request_fingerprint(legacy["inputs"])
         with self.assertRaisesRegex(ValueError, "version 4"):
@@ -233,6 +243,15 @@ class SyncRequestTests(unittest.TestCase):
         record["sha256"] = request_fingerprint(record["inputs"])
         with self.assertRaisesRegex(ValueError, "version 5"):
             SyncSolveRequest.from_record(record)
+
+    def test_version_five_request_injects_missing_derived_lines(self):
+        record = self.request().to_record()
+        record["version"] = 5
+        del record["inputs"]["derived_lines"]
+        record["sha256"] = request_fingerprint(record["inputs"])
+        restored = SyncSolveRequest.from_record(record)
+        self.assertIsNone(restored.derived_lines)
+        self.assertEqual(restored.to_record()["version"], 6)
 
     def test_diagnose_replays_reference_and_skips_removing_its_defining_point(self):
         request = self.request()

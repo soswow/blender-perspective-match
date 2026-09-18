@@ -407,6 +407,7 @@ def refine_lenses_from_landmarks(
     known_world: dict | None = None,
     line_observations: list[sync_module.SyncLineObservation] | None = None,
     known_lines: dict | None = None,
+    derived_lines: list | None = None,
     parallel_pairs: list | None = None,
     vp_weight: float = DEFAULT_VP_WEIGHT,
     max_vp_line_rms: float = DEFAULT_MAX_VP_LINE_RMS,
@@ -526,7 +527,15 @@ def refine_lenses_from_landmarks(
         if any(not isinstance(item, sync_module.SyncLineObservation)
                for item in (line_observations or ())):
             return refusal("Invalid line landmarks: expected line strokes")
-        line_ids = {item.landmark_id for item in (line_observations or ())} | set(known_lines or {})
+        from .derived_lines import validate_derived_lines
+
+        drawn_line_ids = {item.landmark_id for item in (line_observations or ())} | set(known_lines or {})
+        try:
+            derived_lines = validate_derived_lines(
+                derived_lines, point_ids, other_line_ids=drawn_line_ids)
+        except (ValueError, TypeError) as exc:
+            return refusal(str(exc))
+        line_ids = drawn_line_ids | {item[0] for item in derived_lines}
         if len(line_ids) > MAX_LINES or len(line_observations or ()) > MAX_LINE_STROKES:
             return refusal(f"Line fit supports up to {MAX_LINES} lines and {MAX_LINE_STROKES} strokes (resource limit)")
         try:
@@ -542,7 +551,9 @@ def refine_lenses_from_landmarks(
             return refusal("Plane or mirror relation contains an unrepresented landmark")
         line_views = {key: {item.match_id for item in (line_observations or ())
                             if item.landmark_id == key} for key in line_ids}
-        if any(key not in (known_lines or {}) and len(views) < 2 and not any(
+        derived_ids = {item[0] for item in derived_lines}
+        if any(key not in (known_lines or {}) and key not in derived_ids
+               and len(views) < 2 and not any(
                 key in pair and (
                     (partner := pair[0] if pair[1] == key else pair[1]) in (known_lines or {}) or
                     len(line_views.get(partner, ())) >= 2)
@@ -555,7 +566,8 @@ def refine_lenses_from_landmarks(
                      for key in match_ids],
             observations=observations, anchor_id=anchor_id,
             known_world=known_world, line_observations=line_observations,
-            known_lines=known_lines, parallel_pairs=parallel_pairs,
+            known_lines=known_lines, derived_lines=derived_lines,
+            parallel_pairs=parallel_pairs,
             fixed_similarities=fixed_similarities,
             lock_rotation=lock_rotation, lock_translation=lock_translation,
             ground_slack=ground_slack, known_3d_slack=known_3d_slack,
@@ -684,6 +696,7 @@ def refine_lenses_from_landmarks(
                                                       if known_3d_slack is None else known_3d_slack),
             ground_slack=(GROUND_SLACK_DEFAULT if ground_slack is None else ground_slack),
             known_lines=known_lines,
+            derived_lines=derived_lines,
             lock_rotation=lock_rotation, lock_translation=lock_translation,
             share_lens=share_lens,
             frozen_focal_ids=({item.match_id for item in matches if item.freeze_focal}

@@ -8,6 +8,8 @@ from typing import Callable
 
 import numpy as np
 
+from ..derived_lines import derived_line_geometry, validate_derived_lines
+
 from .ba import (
     _auto_downweight_outlier_observations,
     _balance_observation_weights,
@@ -534,6 +536,7 @@ class _SolveState:
     skipped_unregistered: list[str]
     failure_detail: str
     connected: set[str]
+    derived_lines: list[tuple[str, str, str]] = field(default_factory=list)
     location_match_ids: set[str] | None = None
     readonly_match_ids: set[str] = field(default_factory=set)
     mirror_offset: float = 0.0
@@ -1138,6 +1141,15 @@ def _rebuild_free_line_segments(state: _SolveState) -> None:
                 excluded_support_ids=getattr(state, "plane_seeded_ids", set()),
             ) if float(getattr(state, "plane_slack", 0.0) or 0.0) <= 1e-12 else None,
         )
+    try:
+        derived_segments, _geometry = derived_line_geometry(
+            state.landmarks, getattr(state, "derived_lines", ()))
+        segments.update(derived_segments)
+        for line_id, segment in derived_segments.items():
+            state.landmarks[line_id] = 0.5 * (segment[0] + segment[1])
+    except ValueError:
+        # Endpoint recovery can happen after this intermediate rebuild.
+        pass
     state.line_segments = segments
 
 
@@ -1543,6 +1555,7 @@ def solve_landmark_sync(
     known_world: dict[str, np.ndarray] | None = None,
     line_observations: list[SyncLineObservation] | None = None,
     known_lines: dict[str, tuple[np.ndarray, np.ndarray]] | None = None,
+    derived_lines: list[tuple[str, str, str]] | None = None,
     parallel_pairs: list[tuple[str, str]] | None = None,
     initial_similarities: dict[str, SimilarityTransform] | None = None,
     initial_solution: SyncSolutionSeed | None = None,
@@ -1706,6 +1719,11 @@ def solve_landmark_sync(
         landmark_id: list(items)
         for landmark_id, items in line_observations_by_landmark.items()
     }
+    derived_lines = validate_derived_lines(
+        derived_lines,
+        set(observations_by_landmark) | set(known_world),
+        other_line_ids=set(line_observations_by_landmark) | set(known_lines),
+    )
     if mirror_landmark_id is not None:
         if mirror_landmark_id in known_lines or mirror_landmark_id in line_observations_by_landmark:
             return _mirror_failure("select a point landmark, not a line")
@@ -1930,6 +1948,7 @@ def solve_landmark_sync(
         anchor_id=anchor_id,
         known_world=known_world,
         known_lines=known_lines,
+        derived_lines=derived_lines,
         parallel_pairs=parallel_pairs,
         mirror_pairs=mirror_pairs,
         mirror_plane=mirror_plane,
@@ -2913,6 +2932,22 @@ def solve_landmark_sync(
         weak_names = ", ".join(names.get(key,key) for key in weak_line_ids[:3])
         message += (f" · weak 3D line support ({weak_names}) — "
                     "small stroke edits may move these lines; add a distinct view or longer strokes")
+
+    try:
+        derived_segments, _geometry = derived_line_geometry(
+            landmarks, state.derived_lines)
+    except ValueError as exc:
+        return SyncSolveResult(
+            similarities=similarities, landmarks=landmarks,
+            mean_reprojection_px=mean_rmse,
+            per_match_rmse_px=per_match_rmse,
+            per_landmark_rmse_px=per_landmark_rmse,
+            message=str(exc), success=False,
+            line_segments=line_segments,
+        )
+    line_segments.update(derived_segments)
+    for line_id, segment in derived_segments.items():
+        landmarks[line_id] = 0.5 * (segment[0] + segment[1])
 
     return SyncSolveResult(
         similarities=similarities,
