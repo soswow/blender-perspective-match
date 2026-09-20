@@ -11,12 +11,12 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
     env:
       BLENDER_VERSION: "5.1.2"
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Version from tag
         id: version
@@ -35,7 +35,7 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.13"
 
@@ -46,7 +46,7 @@ jobs:
           ./scripts/run-unittests.sh
 
       - name: Cache OpenCV wheels
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: wheels/*.whl
           key: opencv-wheels-${{ hashFiles('scripts/fetch-wheels.sh', 'blender_manifest.toml') }}
@@ -54,27 +54,9 @@ jobs:
       - name: Fetch OpenCV wheels
         run: ./scripts/fetch-wheels.sh
 
-      - name: Cache Blender tarball
-        id: blender-tarball
-        uses: actions/cache@v4
+      - uses: ./.github/actions/setup-blender
         with:
-          path: ${{ runner.temp }}/blender.tar.xz
-          key: blender-${{ env.BLENDER_VERSION }}-linux-x64
-
-      - name: Download Blender
-        if: steps.blender-tarball.outputs.cache-hit != 'true'
-        run: |
-          curl -fL --retry 3 -o "${RUNNER_TEMP}/blender.tar.xz" \
-            "https://download.blender.org/release/Blender${BLENDER_VERSION%.*}/blender-${BLENDER_VERSION}-linux-x64.tar.xz"
-
-      - name: Install Blender
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libgl1 libglu1-mesa libxi6 libxrender1 libxkbcommon0 libsm6 libice6 libxxf86vm1
-          mkdir -p "${HOME}/blender"
-          tar -xJf "${RUNNER_TEMP}/blender.tar.xz" -C "${HOME}/blender" --strip-components=1
-          echo "${HOME}/blender" >> "$GITHUB_PATH"
+          version: ${{ env.BLENDER_VERSION }}
 
       - name: Validate and build extension zips
         run: |

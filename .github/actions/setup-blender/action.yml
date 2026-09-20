@@ -1,0 +1,80 @@
+name: Setup Blender
+description: Restore or download the Linux Blender tarball, then put blender on PATH.
+
+inputs:
+  version:
+    description: Full Blender version, e.g. 5.1.2
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Restore Blender tarball
+      id: blender-tarball
+      uses: actions/cache/restore@v5
+      with:
+        path: ${{ runner.temp }}/blender.tar.xz
+        key: blender-${{ inputs.version }}-linux-x64
+
+    - name: Download Blender
+      if: steps.blender-tarball.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        BLENDER_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        series="${BLENDER_VERSION%.*}"
+        archive="blender-${BLENDER_VERSION}-linux-x64.tar.xz"
+        dest="${RUNNER_TEMP}/blender.tar.xz"
+        urls=(
+          "https://download.blender.org/release/Blender${series}/${archive}"
+          "https://ftp.nluug.nl/pub/graphics/blender/release/Blender${series}/${archive}"
+          "https://ftp.halifax.rwth-aachen.de/blender/release/Blender${series}/${archive}"
+          "https://mirror.clarkson.edu/blender/release/Blender${series}/${archive}"
+        )
+        curl_download() {
+          local url="$1"
+          rm -f "${dest}"
+          curl -4 -fL --retry 8 --retry-all-errors --retry-delay 5 \
+            --retry-connrefused --connect-timeout 20 --max-time 900 \
+            -A "match-perspective-ci" \
+            -o "${dest}" "${url}"
+        }
+        for url in "${urls[@]}"; do
+          echo "Downloading Blender ${BLENDER_VERSION} from ${url}"
+          if curl_download "${url}" && tar -tJf "${dest}" >/dev/null; then
+            echo "Downloaded and verified ${archive}"
+            exit 0
+          fi
+          echo "Download failed or archive was truncated: ${url}" >&2
+          rm -f "${dest}"
+        done
+        echo "Could not download ${archive} from any mirror" >&2
+        exit 1
+
+    - name: Save Blender tarball
+      if: steps.blender-tarball.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v5
+      with:
+        path: ${{ runner.temp }}/blender.tar.xz
+        key: blender-${{ inputs.version }}-linux-x64
+
+    - name: Install Blender
+      shell: bash
+      run: |
+        set -euo pipefail
+        # ubuntu-latest already has the X11/GL stack; only fill gaps without apt-get update.
+        missing=()
+        for pkg in libglu1-mesa; do
+          if ! dpkg-query -W -f='${Status}' "${pkg}" 2>/dev/null | grep -q "install ok installed"; then
+            missing+=("${pkg}")
+          fi
+        done
+        if ((${#missing[@]})); then
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing[@]}"
+        fi
+        echo "Extracting $(du -h "${RUNNER_TEMP}/blender.tar.xz" | cut -f1) Blender archive"
+        mkdir -p "${RUNNER_TEMP}/blender"
+        tar -xJf "${RUNNER_TEMP}/blender.tar.xz" -C "${RUNNER_TEMP}/blender" --strip-components=1
+        echo "${RUNNER_TEMP}/blender" >> "$GITHUB_PATH"
+        "${RUNNER_TEMP}/blender/blender" --version

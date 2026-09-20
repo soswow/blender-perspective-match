@@ -18,8 +18,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
       - run: python3 -m pip install numpy
@@ -39,31 +39,15 @@ jobs:
     env:
       BLENDER_VERSION: "5.1.2"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
       - run: python3 -m pip install numpy
-      - name: Cache Blender tarball
-        id: blender-tarball
-        uses: actions/cache@v4
+      - uses: ./.github/actions/setup-blender
         with:
-          path: ${{ runner.temp }}/blender.tar.xz
-          key: blender-${{ env.BLENDER_VERSION }}-linux-x64
-      - name: Download Blender
-        if: steps.blender-tarball.outputs.cache-hit != 'true'
-        run: |
-          curl -fL --retry 3 -o "${RUNNER_TEMP}/blender.tar.xz" \
-            "https://download.blender.org/release/Blender${BLENDER_VERSION%.*}/blender-${BLENDER_VERSION}-linux-x64.tar.xz"
-      - name: Install Blender
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libgl1 libglu1-mesa libxi6 libxrender1 libxkbcommon0 libsm6 libice6 libxxf86vm1
-          mkdir -p "${RUNNER_TEMP}/blender"
-          tar -xJf "${RUNNER_TEMP}/blender.tar.xz" -C "${RUNNER_TEMP}/blender" --strip-components=1
-          echo "${RUNNER_TEMP}/blender" >> "$GITHUB_PATH"
-      - name: Existing Blender smoke test
+          version: ${{ env.BLENDER_VERSION }}
+      - name: Blender smoke test
         run: blender --factory-startup --disable-autoexec -b --python-exit-code 1 --python scripts/validate_addon.py
       - name: Generate cases, collect scene evidence, apply Sync and reopen
         run: |
