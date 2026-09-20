@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-20
+
 ### Changed
 - Landmark-reference selectors can be filtered by typing a name in Blender's native search popup.
 - Landmark constraint fields use the full sidebar width, and From Points endpoints appear on separate rows.
